@@ -27,7 +27,7 @@ Host github.com-capveg
 
 
 # now add the remote with the 'github.com-netdebug' hostname
-$ git remote add origin git@github.com-netdebug/netdebug-com/netdebug.git
+$ git remote add origin git@github.com-netdebug:netdebug-com/netdebug.git
 ```
 
 
