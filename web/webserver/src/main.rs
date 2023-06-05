@@ -1,7 +1,11 @@
-use log::info;
-use warp::Filter;
+use std::sync::Arc;
+
+use libwebserver::context::{Context, WebServerContext};
 
 use clap::Parser;
+use log::info;
+use tokio::sync::Mutex;
+use warp::Filter;
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -18,10 +22,17 @@ async fn main() {
     if let Err(_) = std::env::var("RUST_LOG") {
         std::env::set_var("RUST_LOG", "info");
     }
+    // if RUST_BACKTRACE isn't set explicitly, set RUST_BACKTRACE=1 as a default
+    if let Err(_) = std::env::var("RUST_BACKTRACE") {
+        std::env::set_var("RUST_BACKTRACE", "1");
+    }
     pretty_env_logger::init();
 
+    // init webserver state
+    let context = Arc::new(Mutex::new(WebServerContext::new()));
+
     let args = Args::parse();
-    let routes = warp::any().map(|| "Hello, World!");
+    let routes = warp::any().and(with_context(context)).and_then(hello);
 
     let listen_addr = if args.production {
         info!("Running in production mode");
@@ -32,4 +43,14 @@ async fn main() {
     };
 
     warp::serve(routes).run(listen_addr).await;
+}
+
+fn with_context(
+    context: Context,
+) -> impl Filter<Extract = (Context,), Error = std::convert::Infallible> + Clone {
+    warp::any().map(move || context.clone())
+}
+
+async fn hello(_context: Context) -> Result<impl warp::Reply, warp::Rejection> {
+    Ok("hello world!".to_string())
 }

@@ -2,13 +2,31 @@
 name = "webserver"
 version = "0.1.0"
 edition = "2021"
+default-run = "webserver"  # needed as we have multiple binaries
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+# main webserver binary, but just the wrapper around the libwebserver
+name = "webserver"
+path = "src/main.rs"
+
+[lib]
+# almost all code lives here, eases testing to have in a library
+name = "libwebserver"
+path = "src/lib.rs"
+
+[[bin]]
+# CLI utility for mananging passwords
+name = "webserver_passwd"
+path = "src/webserver_passwd_cli.rs"
 
 [dependencies]
 # pls keep in alpha order
 clap = { version = "4.2.7", features = ["derive"] }
 log = "0.4.18"
 pretty_env_logger = "0.5.0"
+pwhash = "1.0.0"
+rand = "0.8.5"
 tokio = { version="1.28.2", features = ["full"] }
 warp = "0.3.5"
