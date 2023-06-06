@@ -49,6 +49,15 @@ impl UserDb {
         }
     }
 
+    /**
+     * Only used for testing
+     */
+    pub fn testing_demo(hash: String) -> UserDb {
+        UserDb {
+            demo_password_hash: hash,
+        }
+    }
+
     pub fn new_password(passwd: &String) -> Result<String, pwhash::error::Error> {
         // generate a random salt
         let salt: String = rand::thread_rng()
