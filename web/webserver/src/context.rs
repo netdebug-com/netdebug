@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use pwhash::{sha512_crypt, HashSetup};
 use rand::{distributions::Alphanumeric, Rng};
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 // All of the web server state that's maintained across
@@ -22,6 +23,14 @@ impl WebServerContext {
 }
 
 pub type Context = Arc<Mutex<WebServerContext>>;
+
+pub const COOKIE_LOGIN_NAME: &str = "DEMO_COOKIE";
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct LoginInfo {
+    pub user: String,
+    pub passwd: String,
+}
 
 // for now, just use a password to block people from accessing
 // the demo
@@ -55,8 +64,20 @@ impl UserDb {
         sha512_crypt::hash_with(hash_params, passwd)
     }
 
-    pub fn validate_password(self, _user: String, passwd: String) -> bool {
+    pub fn validate_password(&self, _user: &String, passwd: &String) -> bool {
         // no 'users' yet - just test password
         sha512_crypt::verify(passwd, self.demo_password_hash.as_str())
+    }
+
+    pub fn generate_auth_cooke(&self, _user: &String) -> String {
+        // TODO - fix when we need real auth
+        "SUCCESS".to_string()
+    }
+
+    /**
+     * Did the user provide a correctly authorized cookie?
+     */
+    pub fn validate_cookie(&self, cookie: String) -> bool {
+        cookie == "SUCCESS"
     }
 }
