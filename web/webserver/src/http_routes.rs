@@ -1,3 +1,5 @@
+use std::fs;
+
 use crate::context::{Context, LoginInfo, COOKIE_LOGIN_NAME};
 use warp::http::StatusCode;
 use warp::{cookie::cookie, Filter, Reply};
@@ -10,7 +12,7 @@ pub fn make_http_routes(
     let login = make_login_route(&context).with(log);
 
     // can only access if there's an auth cookie
-    let root = make_root_route(&context).with(log);
+    let root = make_root_route(&context, &html_root).with(log);
 
     // default where we direct people with no auth cookie to get one
     let login_form = make_login_form_route(&context, &html_root).with(log);
@@ -32,11 +34,13 @@ fn make_login_route(
 
 fn make_root_route(
     context: &Context,
+    html_root: &String,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::any()
         .and(with_context(&context))
         .and(cookie(COOKIE_LOGIN_NAME))
-        .and_then(hello)
+        .and(with_string(&html_root))
+        .and_then(root)
 }
 
 fn make_login_form_route(
@@ -55,12 +59,38 @@ fn with_context(
     warp::any().map(move || context.clone())
 }
 
-async fn hello(context: Context, cookie: String) -> Result<impl warp::Reply, warp::Rejection> {
+fn with_string(
+    s: &String,
+) -> impl Filter<Extract = (String,), Error = std::convert::Infallible> + Clone {
+    let s = s.clone();
+    warp::any().map(move || s.clone())
+}
+
+async fn root(
+    context: Context,
+    cookie: String,
+    html_root: String,
+) -> Result<impl warp::Reply, warp::Rejection> {
     let ctx = context.lock().await;
     if ctx.user_db.validate_cookie(cookie) {
-        Ok("hello world!".into_response())
+        // this is fugly - can;t figure out how to return warp::fs::file(..) after cookie check
+        // seems related to https://github.com/seanmonstar/warp/issues/1038
+        // so I'm hacking around
+        let html = fs::read_to_string(format!("{}/index.html", html_root)).unwrap();
+        let resp = warp::http::Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "text/html")
+            .body(html)
+            .unwrap();
+        Ok(resp)
     } else {
-        Ok(StatusCode::UNAUTHORIZED.into_response())
+        let html = fs::read_to_string(format!("{}/errs/403.html", html_root)).unwrap();
+        let resp = warp::http::Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header("content-type", "text/html")
+            .body(html)
+            .unwrap();
+        Ok(resp)
     }
 }
 
@@ -169,5 +199,35 @@ mod test {
         let cookie = resp.headers().get("set-cookie").unwrap();
         let cookie_values = cookie.to_str().unwrap().to_string();
         assert!(cookie_values.contains(&format!("{}=SUCCESS", COOKIE_LOGIN_NAME)));
+    }
+
+    #[tokio::test]
+    async fn test_postauth_badcookie() {
+        let context = make_test_context();
+        let all_routes = make_http_routes(context.clone(), &"html".to_string());
+
+        // now verify that a bad cookie gets a 403
+        let resp = warp::test::request()
+            .path("/anything")
+            .header("cookie", format!("{}=GARBAGE", COOKIE_LOGIN_NAME))
+            .method("GET")
+            .reply(&all_routes)
+            .await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_postauth_goodcookie() {
+        let context = make_test_context();
+        let all_routes = make_http_routes(context.clone(), &"html".to_string());
+
+        // now verify that a good cookie gets a 200
+        let resp = warp::test::request()
+            .path("/anything")
+            .header("cookie", format!("{}=SUCCESS", COOKIE_LOGIN_NAME))
+            .method("GET")
+            .reply(&all_routes)
+            .await;
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
