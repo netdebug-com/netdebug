@@ -45,12 +45,16 @@
 				if (xhr.readyState === 4 && xhr.status === 200) {
 					// Print received data from server
 					result.innerHTML = this.responseText;
+					location.reload()  // reload the page once cookie is cached
+				} else {
+					// we would do better error handling if this code wasn't going away after launch
+					result.innerHTML = `<b>Error Code=${xhr.status}</b> Maybe wrong password?`
 				}
 			};
 
 			// Don't really care about username just yet
 			var data = JSON.stringify({ "user": "ignore", "passwd": passwd.value });
-
+ 
 			// Sending data with the request
 			xhr.send(data);
 		}
