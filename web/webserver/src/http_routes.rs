@@ -4,18 +4,19 @@ use crate::context::{Context, LoginInfo, COOKIE_LOGIN_NAME};
 use warp::http::StatusCode;
 use warp::{cookie::cookie, Filter, Reply};
 
-pub fn make_http_routes(
+pub async fn make_http_routes(
     context: Context,
-    html_root: &String,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     let log = warp::log("http");
     let login = make_login_route(&context).with(log);
-    let webtest = make_webtest_route(&context, &html_root).with(log);
+    let webtest = make_webtest_route(&context).with(log);
 
     // can only access if there's an auth cookie
-    let root = make_root_route(&context, &html_root).with(log);
+    let root = make_root_route(&context).with(log);
 
     // default where we direct people with no auth cookie to get one
+    //let html_root = context.lock().await.html_root.clone();
+    let html_root = "html".to_string();
     let login_form = make_login_form_route(&context, &html_root).with(log);
 
     let routes = webtest.or(root).or(login).or(login_form);
@@ -35,23 +36,19 @@ fn make_login_route(
 
 fn make_root_route(
     context: &Context,
-    html_root: &String,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::any()
         .and(with_context(&context))
         .and(cookie(COOKIE_LOGIN_NAME))
-        .and(with_string(&html_root))
         .and_then(root)
 }
 
 fn make_webtest_route(
     context: &Context,
-    html_root: &String,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::any()
         .and(with_context(&context))
         .and(cookie(COOKIE_LOGIN_NAME))
-        .and(with_string(&html_root))
         .and_then(webtest)
 }
 
@@ -71,17 +68,21 @@ fn with_context(
     warp::any().map(move || context.clone())
 }
 
-fn with_string(
+fn _with_string(
     s: &String,
 ) -> impl Filter<Extract = (String,), Error = std::convert::Infallible> + Clone {
     let s = s.clone();
     warp::any().map(move || s.clone())
 }
 
+/**
+ * Check cookie and if good, serve the file
+ *
+ * TODO: cache the 'html_root' upstream to remove the lock for perf
+ */
 async fn serve_file_if_cookie_ok(
     context: Context,
     cookie: String,
-    html_root: String,
     file: &str,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let ctx = context.lock().await;
@@ -89,7 +90,7 @@ async fn serve_file_if_cookie_ok(
         // this is fugly - can;t figure out how to return warp::fs::file(..) after cookie check
         // seems related to https://github.com/seanmonstar/warp/issues/1038
         // so I'm hacking around
-        let html = fs::read_to_string(format!("{}/{}", html_root, file)).unwrap();
+        let html = fs::read_to_string(format!("{}/{}", ctx.html_root, file)).unwrap();
         let resp = warp::http::Response::builder()
             .status(StatusCode::OK)
             .header("content-type", "text/html")
@@ -97,7 +98,7 @@ async fn serve_file_if_cookie_ok(
             .unwrap();
         Ok(resp)
     } else {
-        let html = fs::read_to_string(format!("{}/errs/403.html", html_root)).unwrap();
+        let html = fs::read_to_string(format!("{}/errs/403.html", ctx.html_root)).unwrap();
         let resp = warp::http::Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .header("content-type", "text/html")
@@ -107,20 +108,12 @@ async fn serve_file_if_cookie_ok(
     }
 }
 
-async fn root(
-    context: Context,
-    cookie: String,
-    html_root: String,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    serve_file_if_cookie_ok(context, cookie, html_root, "index.html").await
+async fn root(context: Context, cookie: String) -> Result<impl warp::Reply, warp::Rejection> {
+    serve_file_if_cookie_ok(context, cookie, "index.html").await
 }
 
-async fn webtest(
-    context: Context,
-    cookie: String,
-    html_root: String,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    serve_file_if_cookie_ok(context, cookie, html_root, "webtest.html").await
+async fn webtest(context: Context, cookie: String) -> Result<impl warp::Reply, warp::Rejection> {
+    serve_file_if_cookie_ok(context, cookie, "webtest.html").await
 }
 
 async fn login_handler(
@@ -159,6 +152,8 @@ mod test {
         let test_hash = UserDb::new_password(&test_pass.to_string()).unwrap();
         Arc::new(Mutex::new(WebServerContext {
             user_db: UserDb::testing_demo(test_hash),
+            html_root: "html".to_string(),
+            wasm_root: "web-client/pkg".to_string(),
         }))
     }
 
@@ -168,11 +163,11 @@ mod test {
     #[tokio::test]
     async fn test_no_cookies() {
         let context = make_test_context();
-        let all_routes = make_http_routes(context, &"html".to_string());
+        let all_routes = make_http_routes(context);
 
         let resp = warp::test::request()
             .path("/garbage")
-            .reply(&all_routes)
+            .reply(&all_routes.await)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = resp.body().escape_ascii().to_string();
@@ -183,7 +178,7 @@ mod test {
     #[tokio::test]
     async fn test_passwords() {
         let context = make_test_context();
-        let all_routes = make_http_routes(context.clone(), &"html".to_string());
+        let all_routes = make_http_routes(context.clone()).await;
 
         // now verify that a bad passwd gets a 403
         let resp = warp::test::request()
@@ -233,7 +228,7 @@ mod test {
     #[tokio::test]
     async fn test_postauth_badcookie() {
         let context = make_test_context();
-        let all_routes = make_http_routes(context.clone(), &"html".to_string());
+        let all_routes = make_http_routes(context.clone()).await;
 
         // now verify that a bad cookie gets a 403
         let resp = warp::test::request()
@@ -248,14 +243,14 @@ mod test {
     #[tokio::test]
     async fn test_postauth_goodcookie() {
         let context = make_test_context();
-        let all_routes = make_http_routes(context.clone(), &"html".to_string());
+        let all_routes = make_http_routes(context.clone());
 
         // now verify that a good cookie gets a 200
         let resp = warp::test::request()
             .path("/anything")
             .header("cookie", format!("{}=SUCCESS", COOKIE_LOGIN_NAME))
             .method("GET")
-            .reply(&all_routes)
+            .reply(&all_routes.await)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
     }

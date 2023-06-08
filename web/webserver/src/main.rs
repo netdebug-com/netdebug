@@ -1,23 +1,11 @@
 use std::sync::Arc;
 
-use libwebserver::context::WebServerContext;
+use libwebserver::context::{Args, WebServerContext};
 
 use clap::Parser;
 use libwebserver::http_routes::make_http_routes;
 use log::info;
 use tokio::sync::Mutex;
-
-/// Simple program to greet a person
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// Used to enable production flags vs. (default) dev mode
-    #[arg(long)]
-    production: bool,
-
-    #[arg(long, default_value = "html")]
-    html_root: String,
-}
 
 #[tokio::main]
 async fn main() {
@@ -31,10 +19,10 @@ async fn main() {
     }
     pretty_env_logger::init();
 
-    // init webserver state
-    let context = Arc::new(Mutex::new(WebServerContext::new()));
-
     let args = Args::parse();
+
+    // init webserver state
+    let context = Arc::new(Mutex::new(WebServerContext::new(&args)));
 
     let listen_addr = if args.production {
         info!("Running in production mode");
@@ -44,7 +32,7 @@ async fn main() {
         ([127, 0, 0, 1], 3030)
     };
 
-    warp::serve(make_http_routes(context, &args.html_root))
+    warp::serve(make_http_routes(context).await)
         .run(listen_addr)
         .await;
 }

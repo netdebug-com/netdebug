@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use clap::Parser;
 use pwhash::{sha512_crypt, HashSetup};
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
@@ -12,14 +13,35 @@ use tokio::sync::Mutex;
 #[derive(Debug, Clone)]
 pub struct WebServerContext {
     pub user_db: UserDb,
+    pub html_root: String,
+    pub wasm_root: String,
 }
 
 impl WebServerContext {
-    pub fn new() -> WebServerContext {
+    pub fn new(args: &Args) -> WebServerContext {
         WebServerContext {
             user_db: UserDb::new(),
+            html_root: args.html_root.clone(),
+            wasm_root: args.wasm_root.clone(),
         }
     }
+}
+
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+pub struct Args {
+    /// Used to enable production flags vs. (default) dev mode
+    #[arg(long)]
+    pub production: bool,
+
+    /// the base of the HTML directory, e.g., where index.html lives
+    #[arg(long, default_value = "html")]
+    pub html_root: String,
+
+    /// the base of the WASM build directory, where web-client{.js,_bs.wasm} live
+    #[arg(long, default_value = "web-client/pkg")]
+    pub wasm_root: String,
 }
 
 pub type Context = Arc<Mutex<WebServerContext>>;
