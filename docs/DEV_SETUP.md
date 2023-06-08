@@ -6,7 +6,12 @@
     1. Recommended that you install the vscode rpm repo so you get auto 6.1updates!
     2. Recommended packages include : 
 5. Setup a new ssh-key only for the new github account (github requires this)
-6. You can manage multiple ssh-keys into github ala a special ssh config
+6. 
+```
+for p in wasm-pack fmt clippy; do
+    cargo install $p
+done
+7. You can manage multiple ssh-keys into github ala a special ssh config
     and then add the actual repo as:
 
 ```

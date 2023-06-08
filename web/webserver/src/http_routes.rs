@@ -10,6 +10,7 @@ pub fn make_http_routes(
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     let log = warp::log("http");
     let login = make_login_route(&context).with(log);
+    let webtest = make_webtest_route(&context, &html_root).with(log);
 
     // can only access if there's an auth cookie
     let root = make_root_route(&context, &html_root).with(log);
@@ -17,7 +18,7 @@ pub fn make_http_routes(
     // default where we direct people with no auth cookie to get one
     let login_form = make_login_form_route(&context, &html_root).with(log);
 
-    let routes = root.or(login).or(login_form);
+    let routes = webtest.or(root).or(login).or(login_form);
     routes
 }
 
@@ -43,6 +44,17 @@ fn make_root_route(
         .and_then(root)
 }
 
+fn make_webtest_route(
+    context: &Context,
+    html_root: &String,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    warp::any()
+        .and(with_context(&context))
+        .and(cookie(COOKIE_LOGIN_NAME))
+        .and(with_string(&html_root))
+        .and_then(webtest)
+}
+
 fn make_login_form_route(
     _context: &Context,
     html_root: &String,
@@ -66,17 +78,18 @@ fn with_string(
     warp::any().map(move || s.clone())
 }
 
-async fn root(
+async fn serve_file_if_cookie_ok(
     context: Context,
     cookie: String,
     html_root: String,
+    file: &str,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let ctx = context.lock().await;
     if ctx.user_db.validate_cookie(cookie) {
         // this is fugly - can;t figure out how to return warp::fs::file(..) after cookie check
         // seems related to https://github.com/seanmonstar/warp/issues/1038
         // so I'm hacking around
-        let html = fs::read_to_string(format!("{}/index.html", html_root)).unwrap();
+        let html = fs::read_to_string(format!("{}/{}", html_root, file)).unwrap();
         let resp = warp::http::Response::builder()
             .status(StatusCode::OK)
             .header("content-type", "text/html")
@@ -92,6 +105,22 @@ async fn root(
             .unwrap();
         Ok(resp)
     }
+}
+
+async fn root(
+    context: Context,
+    cookie: String,
+    html_root: String,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    serve_file_if_cookie_ok(context, cookie, html_root, "index.html").await
+}
+
+async fn webtest(
+    context: Context,
+    cookie: String,
+    html_root: String,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    serve_file_if_cookie_ok(context, cookie, html_root, "webtest.html").await
 }
 
 async fn login_handler(
