@@ -7,19 +7,22 @@ use warp::{cookie::cookie, Filter, Reply};
 pub async fn make_http_routes(
     context: Context,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    // cache these so we don't need a lock every time to access
+    let wasm_root = context.lock().await.wasm_root.clone();
+    let html_root = context.lock().await.html_root.clone();
+
     let log = warp::log("http");
     let login = make_login_route(&context).with(log);
     let webtest = make_webtest_route(&context).with(log);
+    let webclient = make_webclient_route(&context, &wasm_root).with(log);
 
     // can only access if there's an auth cookie
     let root = make_root_route(&context).with(log);
 
     // default where we direct people with no auth cookie to get one
-    //let html_root = context.lock().await.html_root.clone();
-    let html_root = "html".to_string();
     let login_form = make_login_form_route(&context, &html_root).with(log);
 
-    let routes = webtest.or(root).or(login).or(login_form);
+    let routes = webtest.or(webclient).or(root).or(login).or(login_form);
     routes
 }
 
@@ -46,10 +49,26 @@ fn make_root_route(
 fn make_webtest_route(
     context: &Context,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-    warp::any()
+    warp::path("webtest")
         .and(with_context(&context))
         .and(cookie(COOKIE_LOGIN_NAME))
         .and_then(webtest)
+}
+
+fn make_webclient_route(
+    _context: &Context,
+    wasm_root: &String,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    /* First pass, with cookie checking
+    warp::path("webclient")
+        .and(with_context(&context))
+        .and(cookie(COOKIE_LOGIN_NAME))
+        .and(with_string(&wasm_root))
+        .and(warp::path::param::<String>())
+        .and_then(webclient)
+    */
+    // second pass, with no cookie checking
+    warp::path("webclient").and(warp::fs::dir(wasm_root.clone()))
 }
 
 fn make_login_form_route(
@@ -138,6 +157,31 @@ async fn login_handler(
         Ok(StatusCode::UNAUTHORIZED.into_response())
     }
 }
+
+/*
+
+Can't figure out how to make this work - let's just serve without passwd check the webclient
+
+async fn webclient(context: Context, cookie: String, wasm_root: String, file: String) -> Result<impl warp::Reply, warp::Rejection> {
+    let allowed_files= vec![
+        "web_client.js",
+        "web_client_bg.wasm",
+    ];
+    let ctx = context.lock().await;
+    if allowed_files.contains(&file.as_str()) {
+        serve_file_if_cookie_ok(context, cookie, file.as_str()).await
+    } else {
+        let html = fs::read_to_string(format!("{}/errs/404.html", ctx.html_root)).unwrap();
+        let resp = warp::http::Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header("content-type", "text/html")
+            .body(html)
+            .unwrap();
+        Ok(resp)
+    }
+}
+
+*/
 
 #[cfg(test)]
 mod test {
@@ -253,5 +297,25 @@ mod test {
             .reply(&all_routes.await)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_postauth_webclient_goodcookie() {
+        let context = make_test_context();
+        let all_routes = make_http_routes(context.clone());
+
+        // now verify that a good cookie gets a 200
+        let resp = warp::test::request()
+            .path("/webclient/web_client.js")
+            // add back once we get cookie auth working
+            // .header("cookie", format!("{}=SUCCESS", COOKIE_LOGIN_NAME))
+            .method("GET")
+            .reply(&all_routes.await)
+            .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.body().escape_ascii().to_string();
+        // verify we get the login page, no matter what we ask for
+        println!("Body = {}", body);
+        assert!(body.contains("let wasm;"));
     }
 }

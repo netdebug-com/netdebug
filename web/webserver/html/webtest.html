@@ -6,6 +6,13 @@
     </title>
     </head>
     <body>
-        <div name="root_class"></div>
+        <script type="module">
+            import init from '/webclient/web_client.js'
+            await init()
+        </script>
+        <noscript>
+            Everything about this test requires javascript and WASM support
+        </noscript>
+        <div id="root_div"></div>
     </body>
 </html>
