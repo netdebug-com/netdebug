@@ -1,6 +1,8 @@
 use std::fs;
+use std::net::SocketAddr;
 
 use crate::context::{Context, LoginInfo, COOKIE_LOGIN_NAME};
+use crate::webtest;
 use warp::http::StatusCode;
 use warp::{cookie::cookie, Filter, Reply};
 
@@ -15,6 +17,7 @@ pub async fn make_http_routes(
     let login = make_login_route(&context).with(log);
     let webtest = make_webtest_route(&context).with(log);
     let webclient = make_webclient_route(&context, &wasm_root).with(log);
+    let ws = make_ws_route(&context).with(log);
 
     // can only access if there's an auth cookie
     let root = make_root_route(&context).with(log);
@@ -22,8 +25,25 @@ pub async fn make_http_routes(
     // default where we direct people with no auth cookie to get one
     let login_form = make_login_form_route(&context, &html_root).with(log);
 
-    let routes = webtest.or(webclient).or(root).or(login).or(login_form);
+    // this is the order that the filters try to match; it's important that
+    // it's in this order to make sure the cookie auth works right
+    let routes = webtest
+        .or(ws)
+        .or(webclient)
+        .or(root)
+        .or(login)
+        .or(login_form);
     routes
+}
+
+fn make_ws_route(
+    context: &Context,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    warp::path("ws")
+        .and(with_context(&context))
+        .and(warp::ws())
+        .and(warp::filters::addr::remote())
+        .and_then(websocket)
 }
 
 fn make_login_route(
@@ -156,6 +176,14 @@ async fn login_handler(
     } else {
         Ok(StatusCode::UNAUTHORIZED.into_response())
     }
+}
+
+pub async fn websocket(
+    context: Context,
+    ws: warp::ws::Ws,
+    addr: Option<SocketAddr>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    Ok(ws.on_upgrade(move |websocket| webtest::handle_websocket(context, websocket, addr)))
 }
 
 /*

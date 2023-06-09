@@ -834,6 +834,7 @@ dependencies = [
  "plotters",
  "plotters-canvas",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
  "wee_alloc",

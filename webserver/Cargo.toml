@@ -23,7 +23,9 @@ path = "src/webserver_passwd_cli.rs"
 
 [dependencies]
 # pls keep in alpha order
+chrono = "0.4.26"
 clap = { version = "4.2.7", features = ["derive"] }
+futures-util = "0.3.28"
 log = "0.4.18"
 pretty_env_logger = "0.5.0"
 pwhash = "1.0.0"

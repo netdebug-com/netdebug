@@ -7,8 +7,9 @@
     </head>
     <body>
         <script type="module">
-            import init from '/webclient/web_client.js'
+            import init, {run_webtest} from '/webclient/web_client.js'
             await init()
+            await run_webtest()
         </script>
         <noscript>
             Everything about this test requires javascript and WASM support
