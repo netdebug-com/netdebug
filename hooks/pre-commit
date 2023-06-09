@@ -3,7 +3,7 @@
 
 # this needs to be updated for each new directory
 
-diff=$(cd web/webserver && cargo fmt -- --check)
+diff=$(cd webserver && cargo fmt -- --check)
 result=$?
 
 if [[ ${result} -ne 0 ]] ; then
