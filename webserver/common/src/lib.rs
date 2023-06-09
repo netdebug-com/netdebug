@@ -18,16 +18,16 @@ pub enum Message {
     },
     // Initial message from server
     Ping1FromServer {
-        server_timestamp_ns: f64,
+        server_timestamp_us: f64,
     },
     // Client replies, copying server_timestamp_ns back and attaching its own ts
     Ping2FromClient {
-        server_timestamp_ns: f64,
-        client_timestamp_ns: f64,
+        server_timestamp_us: f64,
+        client_timestamp_us: f64,
     },
     // Final reply from server, echoing client's ts back to it
     Ping3FromServer {
-        client_timestamp_ns: f64,
+        client_timestamp_us: f64,
     },
 }
 

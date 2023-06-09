@@ -886,6 +886,7 @@ dependencies = [
  "js-sys",
  "plotters",
  "plotters-canvas",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",

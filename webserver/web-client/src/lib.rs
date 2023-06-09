@@ -85,13 +85,42 @@ fn lookup_by_id(id: &str) -> Option<Element> {
     web_sys::window()?.document()?.get_element_by_id(id)
 }
 
-fn handle_ws_message(e: MessageEvent, _ws: WebSocket) -> Result<(), JsValue> {
+fn handle_ws_message(e: MessageEvent, ws: WebSocket) -> Result<(), JsValue> {
     let document = web_sys::window().unwrap().document().unwrap();
     let list = document.get_element_by_id(TIME_LOG).unwrap();
     let li = document.create_element("li")?;
 
-    li.set_inner_html(e.data().as_string().unwrap().as_str());
+    let raw_msg = e.data().as_string().unwrap();
+    let msg: common::Message = serde_json::from_str(raw_msg.as_str()).unwrap();
+    use common::Message::*;
+    match msg {
+        VersionCheck { git_hash } => handle_version_check(git_hash, &ws),
+        Ping1FromServer {
+            server_timestamp_us: t,
+        } => handle_ping1(&t, &ws),
+        // shouldn't ever get this from the server: TODO - how to handle
+        Ping2FromClient {
+            server_timestamp_us: _,
+            client_timestamp_us: _,
+        } => todo!(),
+        Ping3FromServer {
+            client_timestamp_us: t,
+        } => handle_ping3(&t, &ws),
+    }
+    li.set_inner_html(&raw_msg);
     list.append_child(&li)?;
 
     Ok(())
+}
+
+fn handle_ping3(_t: &f64, _ws: &WebSocket) {
+    todo!()
+}
+
+fn handle_ping1(_t: &f64, _ws: &WebSocket) {
+    todo!()
+}
+
+fn handle_version_check(_git_hash: String, _ws: &WebSocket) {
+    todo!()
 }

@@ -1,6 +1,6 @@
 use chrono::Utc;
 use std::{net::SocketAddr, time::Duration};
-use warp::ws::{Message, WebSocket};
+use warp::ws::{self, WebSocket};
 
 use crate::context::Context;
 use futures_util::{stream::SplitStream, SinkExt, StreamExt, TryFutureExt};
@@ -27,10 +27,15 @@ pub async fn handle_websocket(
 
     tokio::spawn(async move { handle_ws_message(context, ws_rx) });
 
-    for _i in 0..10 {
-        let msg = format!("Hello {} : the UTC time is {}", addr_str, Utc::now());
+    // send 10 rounds of pings to the client
+    for _i in 1..10 {
+        let t = Utc::now().timestamp_millis() as f64;
+        let msg = common::Message::Ping1FromServer {
+            server_timestamp_us: t,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
         ws_tx
-            .send(Message::text(msg))
+            .send(ws::Message::text(json))
             .unwrap_or_else(|e| {
                 warn!(
                     "Closing connection: Failed to send message to {}: {}",
@@ -42,17 +47,27 @@ pub async fn handle_websocket(
     }
 }
 
+/*
+ * A ws::Message wraps our common::Message; unpack it from JSON and pass
+ * on to the real handle_message() handler
+ */
 async fn handle_ws_message(context: Context, mut rx: SplitStream<WebSocket>) {
     while let Some(msg) = rx.next().await {
         match msg {
-            Ok(msg) => handle_message(&context, msg).await,
+            Ok(msg) => {
+                // TODO: figure out if this unwrap is bad!
+                if let Ok(msg) = serde_json::from_str(msg.to_str().unwrap()) {
+                    handle_message(&context, msg).await;
+                }
+            }
             Err(e) => {
+                // TODO: break the connection after some number of errors
                 warn!("Error reading ws message: {}", e);
             }
         }
     }
 }
 
-async fn handle_message(_context: &Context, _msg: Message) {
+async fn handle_message(_context: &Context, _msg: common::Message) {
     todo!()
 }
