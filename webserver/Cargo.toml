@@ -23,6 +23,7 @@ path = "src/webserver_passwd_cli.rs"
 
 [dependencies]
 # pls keep in alpha order
+common = { path = "./common" }
 chrono = "0.4.26"
 clap = { version = "4.2.7", features = ["derive"] }
 futures-util = "0.3.28"

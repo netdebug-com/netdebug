@@ -2,14 +2,13 @@ mod utils;
 
 use utils::set_panic_hook;
 use wasm_bindgen::prelude::*;
-use web_sys::{WebSocket, MessageEvent, Element};
+use web_sys::{Element, MessageEvent, WebSocket};
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
 // allocator.
 #[cfg(feature = "wee_alloc")]
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
-
 
 macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
@@ -47,7 +46,6 @@ pub fn main() -> Result<(), JsValue> {
         body.append_child(&list)?;
     }
 
-
     // canvas example - https://rustwasm.github.io/docs/wasm-bindgen/examples/2d-canvas.html
 
     Ok(())
@@ -56,44 +54,44 @@ pub fn main() -> Result<(), JsValue> {
 #[wasm_bindgen]
 pub fn run_webtest() -> Result<(), JsValue> {
     let location = web_sys::window().unwrap().location();
+    // connect back to server with same host + port and select wss vs. ws
     let proto = match location.protocol()?.as_str() {
         "https:" => "wss",
         "http:" => "ws",
         _ => {
-            console_log!("Weird location.protocol(): - {} - default to wss://",
+            console_log!(
+                "Weird location.protocol(): - {} - default to wss://",
                 location.protocol().unwrap()
-            ); 
+            );
             "wss"
-        },     // default to more secure wss
+        } // default to more secure wss
     };
     let url = format!("{}://{}/ws", proto, location.host()?);
     let ws = WebSocket::new(url.as_str())?;
 
-    let onmessage_callback = Closure::<dyn FnMut(_)>::new(
-        move |e: MessageEvent| {
-            handle_ws_message(e).unwrap();
-        }
-    );
+    let ws_clone = ws.clone();
+    let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
+        // double clone needed to match function prototypes - apparently(!?)
+        handle_ws_message(e, ws_clone.clone()).unwrap();
+    });
 
     ws.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
-    onmessage_callback.forget();  // MAGIC: tell rust not to deallocate this!
+    onmessage_callback.forget(); // MAGIC: tell rust not to deallocate this!
 
     Ok(())
 }
 
 fn lookup_by_id(id: &str) -> Option<Element> {
     web_sys::window()?.document()?.get_element_by_id(id)
-
 }
 
-
-fn handle_ws_message(e: MessageEvent) -> Result<(), JsValue> {
+fn handle_ws_message(e: MessageEvent, _ws: WebSocket) -> Result<(), JsValue> {
     let document = web_sys::window().unwrap().document().unwrap();
     let list = document.get_element_by_id(TIME_LOG).unwrap();
     let li = document.create_element("li")?;
 
     li.set_inner_html(e.data().as_string().unwrap().as_str());
     list.append_child(&li)?;
-    
+
     Ok(())
 }

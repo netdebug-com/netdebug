@@ -1,13 +1,13 @@
 use chrono::Utc;
 use std::{net::SocketAddr, time::Duration};
-use warp::ws::Message;
+use warp::ws::{Message, WebSocket};
 
 use crate::context::Context;
-use futures_util::{SinkExt, StreamExt, TryFutureExt};
+use futures_util::{stream::SplitStream, SinkExt, StreamExt, TryFutureExt};
 use log::{info, warn};
 
 pub async fn handle_websocket(
-    _context: Context,
+    context: Context,
     websocket: warp::ws::WebSocket,
     addr: Option<SocketAddr>,
 ) {
@@ -23,7 +23,9 @@ pub async fn handle_websocket(
         Some(a) => a.to_string(),
     };
     info!("New websocket connection from {}", addr_str);
-    let (mut ws_tx, mut _ws_rx) = websocket.split();
+    let (mut ws_tx, ws_rx) = websocket.split();
+
+    tokio::spawn(async move { handle_ws_message(context, ws_rx) });
 
     for _i in 0..10 {
         let msg = format!("Hello {} : the UTC time is {}", addr_str, Utc::now());
@@ -38,4 +40,19 @@ pub async fn handle_websocket(
             .await;
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
+}
+
+async fn handle_ws_message(context: Context, mut rx: SplitStream<WebSocket>) {
+    while let Some(msg) = rx.next().await {
+        match msg {
+            Ok(msg) => handle_message(&context, msg).await,
+            Err(e) => {
+                warn!("Error reading ws message: {}", e);
+            }
+        }
+    }
+}
+
+async fn handle_message(_context: &Context, _msg: Message) {
+    todo!()
 }

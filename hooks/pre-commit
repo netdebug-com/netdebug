@@ -3,14 +3,18 @@
 
 # this needs to be updated for each new directory
 
-diff=$(cd webserver && cargo fmt -- --check)
-result=$?
+dirs="webserver webserver/common webserver/web-client"
 
-if [[ ${result} -ne 0 ]] ; then
-    cat <<\EOF
-There are some code style issues, run `cargo fmt` first.
-EOF
-    exit 1
-fi
+for d in $dirs; do
+	diff=$(cd $d && cargo fmt -- --check)
+	result=$?
+
+	if [[ ${result} -ne 0 ]] ; then
+	    echo ' There are some code style issues, run `cargo fmt` first.'
+	    echo $diff
+	    echo ' There are some code style issues, run `cargo fmt` first.'
+	    exit 1
+	fi
+done
 
 exit 0
