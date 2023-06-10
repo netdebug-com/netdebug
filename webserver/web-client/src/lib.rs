@@ -93,18 +93,18 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket) -> Result<(), JsValue> {
     match msg {
         VersionCheck { git_hash } => handle_version_check(git_hash, &ws),
         Ping1FromServer {
-            server_timestamp_us: t,
+            server_timestamp_ms: t,
         } => handle_ping1(&t, &ws),
         Ping2FromClient {
-            server_timestamp_us: _,
-            client_timestamp_us: _,
+            server_timestamp_ms: _,
+            client_timestamp_ms: _,
         } => {
             console_log!("Ignoring client msg from server: {:?}", msg);
             Ok(())
         }
         Ping3FromServer {
             server_rtt: rtt,
-            client_timestamp_us: t,
+            client_timestamp_ms: t,
         } => handle_ping3(&rtt, &t, &ws),
     }
 }
@@ -119,7 +119,7 @@ fn handle_ping3(rtt: &f64, t: &f64, _ws: &WebSocket) -> Result<(), JsValue> {
     let document = web_sys::window().unwrap().document().unwrap();
     let list = document.get_element_by_id(TIME_LOG).unwrap();
     let li = document.create_element("li")?;
-    let msg = format!("Server rtt {} us client rtt {} us", rtt, local_rtt);
+    let msg = format!("Server rtt {} ms client rtt {} ms", rtt, local_rtt);
     li.set_inner_html(&msg);
     list.append_child(&li)?;
     Ok(())
@@ -133,8 +133,8 @@ fn handle_ping1(t: &f64, ws: &WebSocket) -> Result<(), JsValue> {
         .expect("performance should be available");
     let client_ts = performance.now();
     let reply = Message::Ping2FromClient {
-        server_timestamp_us: *t,
-        client_timestamp_us: client_ts,
+        server_timestamp_ms: *t,
+        client_timestamp_ms: client_ts,
     };
     ws.send_with_str(serde_json::to_string(&reply).unwrap().as_str())
 }

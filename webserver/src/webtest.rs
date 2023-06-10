@@ -49,9 +49,9 @@ pub async fn handle_websocket(
 
     // send 10 rounds of pings to the client
     for _i in 1..10 {
-        let t = Utc::now().timestamp_millis() as f64;
+        let t = make_time_ms();
         let msg = common::Message::Ping1FromServer {
-            server_timestamp_us: t,
+            server_timestamp_ms: t,
         };
         tx.send(msg).unwrap_or_else(|e| {
             warn!(
@@ -94,31 +94,35 @@ async fn handle_message(_context: &Context, msg: Message, tx: &mpsc::UnboundedSe
     match msg {
         VersionCheck { git_hash } => handle_version_check(git_hash, tx),
         Ping1FromServer {
-            server_timestamp_us: _,
+            server_timestamp_ms: _,
         }
         | Ping3FromServer {
             server_rtt: _,
-            client_timestamp_us: _,
+            client_timestamp_ms: _,
         } => {
             warn!("Got Server messages from the client: ignoing {:?}", msg);
         }
         Ping2FromClient {
-            server_timestamp_us,
-            client_timestamp_us,
-        } => handle_ping2(server_timestamp_us, client_timestamp_us, tx),
+            server_timestamp_ms,
+            client_timestamp_ms,
+        } => handle_ping2(server_timestamp_ms, client_timestamp_ms, tx),
     }
 }
 
+fn make_time_ms() -> f64 {
+    Utc::now().timestamp_micros() as f64 / 1000.0
+}
+
 fn handle_ping2(
-    server_timestamp_us: f64,
-    client_timestamp_us: f64,
+    server_timestamp_ms: f64,
+    client_timestamp_ms: f64,
     tx: &mpsc::UnboundedSender<Message>,
 ) {
     debug!("Got ping2 from client");
-    let rtt = Utc::now().timestamp_millis() as f64 - server_timestamp_us;
+    let rtt = make_time_ms() - server_timestamp_ms;
     let reply = Message::Ping3FromServer {
         server_rtt: rtt,
-        client_timestamp_us: client_timestamp_us,
+        client_timestamp_ms: client_timestamp_ms,
     };
     if let Err(e) = tx.send(reply) {
         warn!("Websocket write failed: {}", e);
