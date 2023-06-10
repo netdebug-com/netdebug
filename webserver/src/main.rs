@@ -26,10 +26,10 @@ async fn main() {
 
     let listen_addr = if args.production {
         info!("Running in production mode");
-        ([0, 0, 0, 0], 0)
+        ([0, 0, 0, 0], args.listen_port)
     } else {
         info!("Running in development mode");
-        ([127, 0, 0, 1], 3030)
+        ([127, 0, 0, 1], args.listen_port)
     };
 
     warp::serve(make_http_routes(context).await)

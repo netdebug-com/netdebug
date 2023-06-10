@@ -42,6 +42,10 @@ pub struct Args {
     /// the base of the WASM build directory, where web-client{.js,_bs.wasm} live
     #[arg(long, default_value = "web-client/pkg")]
     pub wasm_root: String,
+
+    /// which TCP port to listen on
+    #[arg(long, default_value_t = 3030)]
+    pub listen_port: u16,
 }
 
 pub type Context = Arc<Mutex<WebServerContext>>;
