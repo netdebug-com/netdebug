@@ -167,7 +167,8 @@ async fn login_handler(
             StatusCode::OK.into_response(),
             "set-cookie",
             format!(
-                "{}={}; Path=/; HttpOnly; Secure; Max-Age=1209600",
+                // TODO: add back 'Secure;' when TLS is enabled!
+                "{}={}; Path=/; HttpOnly; Max-Age=1209600",
                 COOKIE_LOGIN_NAME, cookie
             ),
         )
