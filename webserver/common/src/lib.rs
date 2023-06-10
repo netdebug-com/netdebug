@@ -26,7 +26,9 @@ pub enum Message {
         client_timestamp_us: f64,
     },
     // Final reply from server, echoing client's ts back to it
+    // and server_rtt = server recv - server_timestamp_us
     Ping3FromServer {
+        server_rtt: f64,
         client_timestamp_us: f64,
     },
 }
@@ -38,7 +40,7 @@ impl Message {
         }
     }
 
-    pub fn check_version(git_hash: String) -> bool {
+    pub fn check_version(git_hash: &String) -> bool {
         // Note that the webserver, the webclient, and this library
         // should all use the same GIT_HASH and this is created
         // at compile time by build.rs

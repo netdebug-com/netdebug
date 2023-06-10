@@ -1,5 +1,6 @@
 mod utils;
 
+use common::Message;
 use utils::set_panic_hook;
 use wasm_bindgen::prelude::*;
 use web_sys::{Element, MessageEvent, WebSocket};
@@ -86,10 +87,6 @@ fn lookup_by_id(id: &str) -> Option<Element> {
 }
 
 fn handle_ws_message(e: MessageEvent, ws: WebSocket) -> Result<(), JsValue> {
-    let document = web_sys::window().unwrap().document().unwrap();
-    let list = document.get_element_by_id(TIME_LOG).unwrap();
-    let li = document.create_element("li")?;
-
     let raw_msg = e.data().as_string().unwrap();
     let msg: common::Message = serde_json::from_str(raw_msg.as_str()).unwrap();
     use common::Message::*;
@@ -98,29 +95,62 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket) -> Result<(), JsValue> {
         Ping1FromServer {
             server_timestamp_us: t,
         } => handle_ping1(&t, &ws),
-        // shouldn't ever get this from the server: TODO - how to handle
         Ping2FromClient {
             server_timestamp_us: _,
             client_timestamp_us: _,
-        } => todo!(),
+        } => {
+            console_log!("Ignoring client msg from server: {:?}", msg);
+            Ok(())
+        }
         Ping3FromServer {
+            server_rtt: rtt,
             client_timestamp_us: t,
-        } => handle_ping3(&t, &ws),
+        } => handle_ping3(&rtt, &t, &ws),
     }
-    li.set_inner_html(&raw_msg);
-    list.append_child(&li)?;
+}
 
+fn handle_ping3(rtt: &f64, t: &f64, _ws: &WebSocket) -> Result<(), JsValue> {
+    // console_log!("Got Ping3 from server");
+    let window = web_sys::window().expect("window should be available");
+    let performance = window
+        .performance()
+        .expect("performance should be available");
+    let local_rtt = performance.now() - t;
+    let document = web_sys::window().unwrap().document().unwrap();
+    let list = document.get_element_by_id(TIME_LOG).unwrap();
+    let li = document.create_element("li")?;
+    let msg = format!("Server rtt {} us client rtt {} us", rtt, local_rtt);
+    li.set_inner_html(&msg);
+    list.append_child(&li)?;
     Ok(())
 }
 
-fn handle_ping3(_t: &f64, _ws: &WebSocket) {
-    todo!()
+fn handle_ping1(t: &f64, ws: &WebSocket) -> Result<(), JsValue> {
+    // console_log!("Got Ping1 from server");
+    let window = web_sys::window().expect("window should be available");
+    let performance = window
+        .performance()
+        .expect("performance should be available");
+    let client_ts = performance.now();
+    let reply = Message::Ping2FromClient {
+        server_timestamp_us: *t,
+        client_timestamp_us: client_ts,
+    };
+    ws.send_with_str(serde_json::to_string(&reply).unwrap().as_str())
 }
 
-fn handle_ping1(_t: &f64, _ws: &WebSocket) {
-    todo!()
-}
-
-fn handle_version_check(_git_hash: String, _ws: &WebSocket) {
-    todo!()
+fn handle_version_check(git_hash: String, ws: &WebSocket) -> Result<(), JsValue> {
+    if common::Message::check_version(&git_hash) {
+        let reply = common::Message::make_version_check();
+        ws.send_with_str(serde_json::to_string(&reply).unwrap().as_str())
+    } else {
+        console_log!(
+            "Server has version {} != client version {}",
+            &git_hash,
+            env!("GIT_HASH")
+        );
+        Err(JsValue::from_str(
+            format!("need reload for new version").as_str(),
+        ))
+    }
 }
