@@ -74,7 +74,6 @@ async fn handle_ws_message(
 ) {
     debug!("In handle_ws_message()");
     while let Some(msg) = rx.next().await {
-        debug!("Got some message from websocket");
         match msg {
             Ok(msg) => {
                 // TODO: figure out if this unwrap is bad!
