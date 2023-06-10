@@ -77,6 +77,13 @@ async fn handle_ws_message(
         match msg {
             Ok(msg) => {
                 // TODO: figure out if this unwrap is bad!
+                // IT IS BAD!!
+                /*
+                                 * thread 'tokio-runtime-worker' panicked at 'called `Result::unwrap()` on an `Err` value: ()', /backups/Rob/netdebug/webserver/src/webtest.rs:80:68
+                stack backtrace:
+                   0: rust_begin_unwind
+                                 * perhaps on hang up?
+                                 */
                 if let Ok(msg) = serde_json::from_str(msg.to_str().unwrap()) {
                     handle_message(&context, msg, &tx).await;
                 }
