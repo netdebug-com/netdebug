@@ -47,8 +47,8 @@ pub async fn handle_websocket(
 
     tokio::spawn(async move { handle_ws_message(context, ws_rx, tx_clone).await });
 
-    // send 10 rounds of pings to the client
-    for _i in 1..10 {
+    // send 100 rounds of pings to the client
+    for _i in 1..100 {
         let t = make_time_ms();
         let msg = common::Message::Ping1FromServer {
             server_timestamp_ms: t,
@@ -59,7 +59,7 @@ pub async fn handle_websocket(
                 addr_str, e
             );
         });
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
