@@ -1,6 +1,6 @@
 mod utils;
 
-use std::collections::VecDeque;
+use std::{collections::VecDeque, error::Error};
 
 use common::Message;
 use js_sys::Date;
@@ -63,7 +63,60 @@ pub fn main() -> Result<(), JsValue> {
     canvas.set_attribute("height", format!("{}", height).as_str())?;
     body.append_child(&canvas).unwrap();
 
+    // test_graph().map_err(|e| JsValue::from_str(&*e.to_string().as_str()))?;
+
     // canvas example - https://rustwasm.github.io/docs/wasm-bindgen/examples/2d-canvas.html
+
+    Ok(())
+}
+
+/**
+ * Useful for verifying the graphing library works properly
+ */
+fn _test_graph() -> Result<(), Box<dyn Error>> {
+    let window = web_sys::window().expect("no global 'window' exists!?");
+    let document = window.document().expect("should have a document on window");
+    let body = document.body().expect("document should have a body");
+    let canvas = document.create_element("canvas").unwrap();
+    canvas.set_id("canvas2"); // come back if we need manual double buffering
+    let (width, height) = calc_height(&document, &body);
+    let width = 4 * width / 5;
+    let height = 4 * height / 5;
+    console_log!("Setting height to {}, width to {}", height, width);
+    canvas
+        .set_attribute("width", format!("{}", width).as_str())
+        .unwrap();
+    canvas
+        .set_attribute("height", format!("{}", height).as_str())
+        .unwrap();
+    body.append_child(&canvas).unwrap();
+    let backend = CanvasBackend::new("canvas2").expect("cannot find canvas");
+    let root = backend.into_drawing_area();
+    root.fill(&WHITE)?;
+    let mut chart = ChartBuilder::on(&root)
+        .caption("y=x^2", ("sans-serif", 50).into_font())
+        .margin(5)
+        .x_label_area_size(30)
+        .y_label_area_size(30)
+        .build_cartesian_2d(-1f32..1f32, -0.1f32..1f32)?;
+
+    chart.configure_mesh().draw()?;
+
+    chart
+        .draw_series(LineSeries::new(
+            (-50..=50).map(|x| x as f32 / 50.0).map(|x| (x, x * x)),
+            &RED,
+        ))?
+        .label("y = x^2")
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
+
+    chart
+        .configure_series_labels()
+        .background_style(&WHITE.mix(0.8))
+        .border_style(&BLACK)
+        .draw()?;
+
+    root.present()?;
 
     Ok(())
 }
@@ -124,7 +177,7 @@ impl Graph {
     fn add_data(&mut self, rtt: f64) {
         self.buffered_data.push(rtt);
         // did we get enough data for a new line in the graph?
-        if self.buffered_data.len() >= self.data_points_per_epoch {
+        if self.buffered_data.len() % self.data_points_per_epoch == 0 {
             self.draw();
         }
     }
@@ -150,9 +203,9 @@ impl Graph {
         }
 
         console_log!("New data: {:?}", &new_row);
-        self.data.push_back(new_row);
-        self.buffered_data.clear(); // reset the buffered data for the next epoch
-                                    // only track self.max_epochs number of lines
+        // self.data.push_back(new_row);
+        // self.buffered_data.clear(); // reset the buffered data for the next epoch
+        // only track self.max_epochs number of lines
         if self.data.len() > self.max_epochs {
             self.data.pop_front();
         }
@@ -173,16 +226,16 @@ impl Graph {
             .build_cartesian_2d(0f64..1.0, self.autoscale_min..self.autoscale_max)
             .unwrap();
 
-        for epoch in &self.data {
-            chart
-                .draw_series(LineSeries::new(
-                    epoch.iter().map(|v| (v.percent, v.rtt)),
-                    &BLACK,
-                ))
-                .unwrap()
-                .label("Client<-->Server RTT cdf")
-                .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLACK));
-        }
+        chart
+            .draw_series(LineSeries::new(
+                new_row.iter().map(|v| (v.percent, v.rtt)),
+                &BLACK,
+            ))
+            .unwrap()
+            .label("Client<-->Server RTT cdf")
+            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLACK));
+
+        chart.configure_mesh().draw().unwrap();
 
         chart
             .configure_series_labels()
