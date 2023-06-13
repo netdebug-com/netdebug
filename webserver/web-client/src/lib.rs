@@ -174,7 +174,7 @@ impl Graph {
             )
             .x_label_area_size(60)
             .y_label_area_size(60)
-            .build_cartesian_2d(0f64..100.0, self.autoscale_min..self.autoscale_max)
+            .build_cartesian_2d(0f64..100.0, 0.0..self.autoscale_max)
             .unwrap();
 
         chart
