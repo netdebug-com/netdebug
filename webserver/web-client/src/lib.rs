@@ -1,12 +1,11 @@
 mod utils;
 
-use std::{collections::VecDeque, error::Error};
-
 use common::Message;
 use js_sys::Date;
 use plotters::coord::Shift;
 use plotters::prelude::*;
 use plotters_canvas::CanvasBackend;
+use sorted_vec::SortedVec;
 use utils::set_panic_hook;
 use wasm_bindgen::prelude::*;
 use web_sys::{Document, Element, HtmlElement, MessageEvent, WebSocket};
@@ -27,7 +26,7 @@ extern "C" {
     fn log(s: &str);
 }
 
-const TIME_LOG: &str = "time_log";
+const _TIME_LOG: &str = "time_log";
 
 #[wasm_bindgen(start)]
 pub fn main() -> Result<(), JsValue> {
@@ -40,6 +39,7 @@ pub fn main() -> Result<(), JsValue> {
     let body = document.body().expect("document should have a body");
 
     // Manufacture the element we're gonna append
+    /*
     let list = document.create_element("ol")?;
     list.set_id(TIME_LOG);
     let list_item = document.create_element("li")?;
@@ -52,6 +52,7 @@ pub fn main() -> Result<(), JsValue> {
     } else {
         body.append_child(&list)?;
     }
+    */
 
     let canvas = document.create_element("canvas").unwrap();
     canvas.set_id("canvas"); // come back if we need manual double buffering
@@ -63,60 +64,7 @@ pub fn main() -> Result<(), JsValue> {
     canvas.set_attribute("height", format!("{}", height).as_str())?;
     body.append_child(&canvas).unwrap();
 
-    // test_graph().map_err(|e| JsValue::from_str(&*e.to_string().as_str()))?;
-
     // canvas example - https://rustwasm.github.io/docs/wasm-bindgen/examples/2d-canvas.html
-
-    Ok(())
-}
-
-/**
- * Useful for verifying the graphing library works properly
- */
-fn _test_graph() -> Result<(), Box<dyn Error>> {
-    let window = web_sys::window().expect("no global 'window' exists!?");
-    let document = window.document().expect("should have a document on window");
-    let body = document.body().expect("document should have a body");
-    let canvas = document.create_element("canvas").unwrap();
-    canvas.set_id("canvas2"); // come back if we need manual double buffering
-    let (width, height) = calc_height(&document, &body);
-    let width = 4 * width / 5;
-    let height = 4 * height / 5;
-    console_log!("Setting height to {}, width to {}", height, width);
-    canvas
-        .set_attribute("width", format!("{}", width).as_str())
-        .unwrap();
-    canvas
-        .set_attribute("height", format!("{}", height).as_str())
-        .unwrap();
-    body.append_child(&canvas).unwrap();
-    let backend = CanvasBackend::new("canvas2").expect("cannot find canvas");
-    let root = backend.into_drawing_area();
-    root.fill(&WHITE)?;
-    let mut chart = ChartBuilder::on(&root)
-        .caption("y=x^2", ("sans-serif", 50).into_font())
-        .margin(5)
-        .x_label_area_size(30)
-        .y_label_area_size(30)
-        .build_cartesian_2d(-1f32..1f32, -0.1f32..1f32)?;
-
-    chart.configure_mesh().draw()?;
-
-    chart
-        .draw_series(LineSeries::new(
-            (-50..=50).map(|x| x as f32 / 50.0).map(|x| (x, x * x)),
-            &RED,
-        ))?
-        .label("y = x^2")
-        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
-
-    chart
-        .configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
-        .draw()?;
-
-    root.present()?;
 
     Ok(())
 }
@@ -142,74 +90,74 @@ fn calc_height(document: &Document, body: &HtmlElement) -> (i32, i32) {
         *possible_heights.iter().max().unwrap(),
     )
 }
-#[derive(Debug)]
-struct Coordinate {
+#[derive(Debug, PartialEq, PartialOrd)]
+struct PingData {
     pub rtt: f64,
-    pub percent: f64,
+    pub time_stamp: f64,
+}
+
+// b/c we're based on f64 and float semantics are crazy,
+// we have to implement our own Eq and Ord implementations
+// these are technically Wrong (e.g., NaN is technically != NaN)
+// but good enough for our purposes
+impl Eq for PingData {}
+
+impl Ord for PingData {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.rtt.total_cmp(&other.rtt)
+    }
 }
 
 struct Graph {
-    data: VecDeque<Vec<Coordinate>>,
-    buffered_data: Vec<f64>,
-    data_points_per_epoch: usize,
-    max_epochs: usize,
+    data: SortedVec<PingData>,
+    data_points_per_draw: usize,
     root: DrawingArea<CanvasBackend, Shift>,
     autoscale_min: f64,
     autoscale_max: f64,
 }
 
 impl Graph {
-    fn new(data_points_per_epoch: usize, max_epochs: usize) -> Graph {
+    fn new(data_points_per_draw: usize) -> Graph {
         let backend = CanvasBackend::new("canvas").expect("cannot find canvas");
         let root = backend.into_drawing_area();
 
         Graph {
-            data: VecDeque::new(),
-            buffered_data: Vec::new(),
-            data_points_per_epoch,
-            max_epochs,
+            data: SortedVec::new(),
+            data_points_per_draw,
             root,
             autoscale_min: f64::MAX,
             autoscale_max: f64::MIN,
         }
     }
 
-    fn add_data(&mut self, rtt: f64) {
-        self.buffered_data.push(rtt);
-        // did we get enough data for a new line in the graph?
-        if self.buffered_data.len() % self.data_points_per_epoch == 0 {
+    fn add_data(&mut self, rtt: f64, time_stamp: f64) {
+        if self.autoscale_min > rtt {
+            self.autoscale_min = rtt;
+        }
+        if self.autoscale_max < rtt {
+            self.autoscale_max = rtt;
+        }
+        self.data.push(PingData { rtt, time_stamp });
+        // did we get enough data to be worth redrawing the graph?
+        if self.data.len() % self.data_points_per_draw == 0 {
             self.draw();
         }
     }
 
     fn draw(&mut self) {
-        // first, in-place sort the data, smallest to largest
-        let mut new_row = Vec::new();
-        self.buffered_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        // adjust autoscale
-        if self.autoscale_min > self.buffered_data[0] {
-            self.autoscale_min = self.buffered_data[0];
-        }
-        let last = self.buffered_data.last().unwrap();
-        if &self.autoscale_max < last {
-            self.autoscale_max = *last;
-        }
         // put into a commulative distribution function
-        for (idx, rtt) in self.buffered_data.iter().enumerate() {
-            new_row.push(Coordinate {
-                rtt: *rtt,
-                percent: (idx as f64 + 1.0) / (self.data_points_per_epoch as f64),
-            });
-        }
-
-        console_log!("New data: {:?}", &new_row);
-        // self.data.push_back(new_row);
-        // self.buffered_data.clear(); // reset the buffered data for the next epoch
-        // only track self.max_epochs number of lines
-        if self.data.len() > self.max_epochs {
-            self.data.pop_front();
-        }
-
+        let plot: Vec<(f64, f64)> = self
+            .data
+            .iter()
+            .enumerate()
+            .map(|(idx, ping)| {
+                (
+                    ping.rtt,
+                    100.0 * (idx as f64 + 1.0) / (self.data.len() as f64),
+                )
+            })
+            .collect();
+        console_log!("data: {:?}", plot);
         let font: FontDesc = ("sans-serif", 20.0).into();
 
         self.root.fill(&WHITE).unwrap();
@@ -218,27 +166,34 @@ impl Graph {
         let mut chart = ChartBuilder::on(&self.root)
             .margin(20)
             .caption(
-                format!("Client-Server RTT: {:?}", Date::new_0().to_time_string()),
+                format!(
+                    "CDF (% < Y) of Client-Server Application RTT: {:?}",
+                    Date::new_0().to_time_string()
+                ),
                 font,
             )
             .x_label_area_size(60)
             .y_label_area_size(60)
-            .build_cartesian_2d(0f64..1.0, self.autoscale_min..self.autoscale_max)
+            .build_cartesian_2d(0f64..100.0, self.autoscale_min..self.autoscale_max)
             .unwrap();
 
         chart
-            .draw_series(LineSeries::new(
-                new_row.iter().map(|v| (v.percent, v.rtt)),
-                &BLACK,
-            ))
+            .draw_series(LineSeries::new(plot.iter().map(|v| (v.1, v.0)), &BLACK))
             .unwrap()
-            .label("Client<-->Server RTT cdf")
-            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLACK));
+            .label("Application RTT CDF(% < Y)")
+            // .legend(move |(x, y)| PathElement::new(vec![(x - 200, y), (x - 70, y + 20)], &BLACK))
+            ;
 
-        chart.configure_mesh().draw().unwrap();
+        chart
+            .configure_mesh()
+            .y_desc("RTT (milliseconds)")
+            .x_desc("% < Y (CDF)")
+            .draw()
+            .unwrap();
 
         chart
             .configure_series_labels()
+            .position(SeriesLabelPosition::UpperLeft)
             .border_style(&BLACK)
             .background_style(&WHITE.mix(0.8))
             .draw()
@@ -267,7 +222,7 @@ pub fn run_webtest() -> Result<(), JsValue> {
     let ws = WebSocket::new(url.as_str())?;
 
     let ws_clone = ws.clone();
-    let mut graph = Graph::new(10, 1); // this gets moved into the closure
+    let mut graph = Graph::new(10); // this gets moved into the closure
     let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
         // double clone needed to match function prototypes - apparently(!?)
         handle_ws_message(e, ws_clone.clone(), &mut graph).unwrap();
@@ -279,6 +234,7 @@ pub fn run_webtest() -> Result<(), JsValue> {
     Ok(())
 }
 
+#[allow(dead_code)] // this will eventually be useful
 fn lookup_by_id(id: &str) -> Option<Element> {
     web_sys::window()?.document()?.get_element_by_id(id)
 }
@@ -312,14 +268,15 @@ fn handle_ping3(rtt: &f64, t: &f64, _ws: &WebSocket, graph: &mut Graph) -> Resul
     let performance = window
         .performance()
         .expect("performance should be available");
-    let local_rtt = performance.now() - t;
+    let now = performance.now();
+    let local_rtt = now - t;
     // old code to add directly to html
     // let document = web_sys::window().unwrap().document().unwrap();
     // let list = document.get_element_by_id(TIME_LOG).unwrap();
     // let li = document.create_element("li")?;
     // let msg = format!("Server rtt {} ms client rtt {} ms", rtt, local_rtt);
-    graph.add_data(*rtt);
-    graph.add_data(local_rtt);
+    graph.add_data(*rtt, now);
+    graph.add_data(local_rtt, now);
     // li.set_inner_html(&msg);
     // list.append_child(&li)?;
     Ok(())
