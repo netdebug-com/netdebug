@@ -109,10 +109,10 @@ impl Ord for PingData {
 }
 
 struct Graph {
-    data: SortedVec<PingData>,
+    data_server: SortedVec<PingData>,
+    data_client: SortedVec<PingData>,
     data_points_per_draw: usize,
     root: DrawingArea<CanvasBackend, Shift>,
-    autoscale_min: f64,
     autoscale_max: f64,
 }
 
@@ -122,42 +122,60 @@ impl Graph {
         let root = backend.into_drawing_area();
 
         Graph {
-            data: SortedVec::new(),
+            data_server: SortedVec::new(),
+            data_client: SortedVec::new(),
             data_points_per_draw,
             root,
-            autoscale_min: f64::MAX,
             autoscale_max: f64::MIN,
         }
     }
 
-    fn add_data(&mut self, rtt: f64, time_stamp: f64) {
-        if self.autoscale_min > rtt {
-            self.autoscale_min = rtt;
+    fn add_data(&mut self, server_rtt: f64, client_rtt: f64, time_stamp: f64) {
+        if self.autoscale_max < server_rtt {
+            self.autoscale_max = server_rtt;
         }
-        if self.autoscale_max < rtt {
-            self.autoscale_max = rtt;
+        if self.autoscale_max < client_rtt {
+            self.autoscale_max = client_rtt;
         }
-        self.data.push(PingData { rtt, time_stamp });
+        self.data_server.push(PingData {
+            rtt: server_rtt,
+            time_stamp,
+        });
+        self.data_client.push(PingData {
+            rtt: client_rtt,
+            time_stamp,
+        });
         // did we get enough data to be worth redrawing the graph?
-        if self.data.len() % self.data_points_per_draw == 0 {
+        if self.data_server.len() % self.data_points_per_draw == 0 {
             self.draw();
         }
     }
 
     fn draw(&mut self) {
         // put into a commulative distribution function
-        let plot: Vec<(f64, f64)> = self
-            .data
+        let plot_server: Vec<(f64, f64)> = self
+            .data_server
             .iter()
             .enumerate()
             .map(|(idx, ping)| {
                 (
                     ping.rtt,
-                    100.0 * (idx as f64 + 1.0) / (self.data.len() as f64),
+                    100.0 * (idx as f64 + 1.0) / (self.data_server.len() as f64),
                 )
             })
             .collect();
-        console_log!("data: {:?}", plot);
+        let plot_client: Vec<(f64, f64)> = self
+            .data_client
+            .iter()
+            .enumerate()
+            .map(|(idx, ping)| {
+                (
+                    ping.rtt,
+                    100.0 * (idx as f64 + 1.0) / (self.data_client.len() as f64),
+                )
+            })
+            .collect();
+        console_log!("data: {:?}", plot_server);
         let font: FontDesc = ("sans-serif", 20.0).into();
 
         self.root.fill(&WHITE).unwrap();
@@ -178,11 +196,26 @@ impl Graph {
             .unwrap();
 
         chart
-            .draw_series(LineSeries::new(plot.iter().map(|v| (v.1, v.0)), &BLACK))
+            .draw_series(LineSeries::new(plot_server.iter().map(|v| (v.1, v.0)), &BLACK))
             .unwrap()
-            .label("Application RTT CDF(% < Y)")
+            .label("Application S->C->S RTT CDF(% < Y)")
             // .legend(move |(x, y)| PathElement::new(vec![(x - 200, y), (x - 70, y + 20)], &BLACK))
             ;
+        chart
+            .draw_series(LineSeries::new(plot_client.iter().map(|v| (v.1, v.0)), &RED))
+            .unwrap()
+            .label("Application C->S->C RTT CDF(% < Y)")
+            // .legend(move |(x, y)| PathElement::new(vec![(x - 200, y), (x - 70, y + 20)], &BLACK))
+            ;
+
+        // quick sanity check
+        if plot_client.len() != plot_server.len() {
+            console_log!(
+                "Weird: client data points {} != server {}",
+                plot_client.len(),
+                plot_server.len()
+            );
+        }
 
         chart
             .configure_mesh()
@@ -275,8 +308,7 @@ fn handle_ping3(rtt: &f64, t: &f64, _ws: &WebSocket, graph: &mut Graph) -> Resul
     // let list = document.get_element_by_id(TIME_LOG).unwrap();
     // let li = document.create_element("li")?;
     // let msg = format!("Server rtt {} ms client rtt {} ms", rtt, local_rtt);
-    graph.add_data(*rtt, now);
-    graph.add_data(local_rtt, now);
+    graph.add_data(*rtt, local_rtt, now);
     // li.set_inner_html(&msg);
     // list.append_child(&li)?;
     Ok(())
