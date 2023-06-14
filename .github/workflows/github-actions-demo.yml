@@ -18,7 +18,7 @@ jobs:
                 # Optional version of wasm-pack to install(eg. 'v0.9.1', 'latest')
                 version: 'latest'
       - name: Install libpcap
-        run: sudo apt-get install libpcap
+        run: sudo apt-get install libpcap-dev
       - name: Build
         run: |
           cd  ${{ github.workspace }}/webserver && cargo build --verbose
