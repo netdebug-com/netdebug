@@ -36,11 +36,11 @@ pub struct Args {
     pub production: bool,
 
     /// the base of the HTML directory, e.g., where index.html lives
-    #[arg(long, default_value = "html")]
+    #[arg(long, default_value = "webserver/html")]
     pub html_root: String,
 
     /// the base of the WASM build directory, where web-client{.js,_bs.wasm} live
-    #[arg(long, default_value = "web-client/pkg")]
+    #[arg(long, default_value = "webserver/web-client/pkg")]
     pub wasm_root: String,
 
     /// which TCP port to listen on
