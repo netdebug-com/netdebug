@@ -1,2 +1,4 @@
 [workspace]
 members = [ "webserver", "webserver/common", "webserver/web-client"]
+
+authors = ["Rob Sherwood <rob.sherwood@gmail.com>"]
