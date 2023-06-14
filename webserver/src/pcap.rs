@@ -102,7 +102,7 @@ pub async fn start_pcap_stream(_context: Context) -> Result<(), Box<dyn Error>> 
 fn lookup_egress_device() -> Result<pcap::Device, Box<dyn Error>> {
     let udp_sock = std::net::UdpSocket::bind(("0.0.0.0", 0))?;
     udp_sock.connect(("8.8.8.8", 53))?;
-    let addr = udp_sock.peer_addr()?.ip();
+    let addr = udp_sock.local_addr()?.ip();
     for d in &pcap::Device::list()? {
         if d.addresses.iter().find(|&a| a.addr == addr).is_some() {
             return Ok(d.clone());
