@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use libwebserver::context::{Args, WebServerContext};
+use libwebserver::pcap::start_pcap_stream;
 
 use clap::Parser;
 use libwebserver::http_routes::make_http_routes;
@@ -23,7 +24,15 @@ async fn main() {
 
     // init webserver state
     let context = Arc::new(Mutex::new(WebServerContext::new(&args)));
-
+    let context_clone = context.clone();
+    tokio::spawn(async move {
+        // unwrap() should be fine here as we should panic if this fails
+        if let Err(e) = start_pcap_stream(context_clone).await {
+            log::error!("start_pcap_stream() returned {} -- exiting", e);
+            // this is fatal, just exit
+            std::process::exit(1);
+        }
+    });
     let listen_addr = if args.production {
         info!("Running in production mode");
         ([0, 0, 0, 0], args.listen_port)

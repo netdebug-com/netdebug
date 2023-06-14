@@ -26,8 +26,11 @@ path = "src/webserver_passwd_cli.rs"
 common = { path = "./common" }
 chrono = "0.4.26"
 clap = { version = "4.2.7", features = ["derive"] }
+etherparse = "0.13.0"
+futures = "0.3.28"
 futures-util = "0.3.28"
 log = "0.4.18"
+pcap = { version = "1.1.0", features = ["capture-stream"]}
 pretty_env_logger = "0.5.0"
 pwhash = "1.0.0"
 rand = "0.8.5"
