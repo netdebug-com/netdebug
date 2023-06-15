@@ -6,7 +6,7 @@ use libwebserver::pcap::start_pcap_stream;
 use clap::Parser;
 use libwebserver::http_routes::make_http_routes;
 use log::info;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 #[tokio::main]
 async fn main() {
@@ -23,7 +23,7 @@ async fn main() {
     let args = Args::parse();
 
     // init webserver state
-    let context = Arc::new(Mutex::new(WebServerContext::new(&args)));
+    let context = Arc::new(RwLock::new(WebServerContext::new(&args)));
     let context_clone = context.clone();
     tokio::spawn(async move {
         // unwrap() should be fine here as we should panic if this fails

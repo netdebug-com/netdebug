@@ -10,8 +10,8 @@ pub async fn make_http_routes(
     context: Context,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     // cache these so we don't need a lock every time to access
-    let wasm_root = context.lock().await.wasm_root.clone();
-    let html_root = context.lock().await.html_root.clone();
+    let wasm_root = context.read().await.wasm_root.clone();
+    let html_root = context.read().await.html_root.clone();
 
     let log = warp::log("http");
     let login = make_login_route(&context).with(log);
@@ -124,7 +124,7 @@ async fn serve_file_if_cookie_ok(
     cookie: String,
     file: &str,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let ctx = context.lock().await;
+    let ctx = context.read().await;
     if ctx.user_db.validate_cookie(cookie) {
         // this is fugly - can;t figure out how to return warp::fs::file(..) after cookie check
         // seems related to https://github.com/seanmonstar/warp/issues/1038
@@ -159,7 +159,7 @@ async fn login_handler(
     context: Context,
     login: LoginInfo,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let ctx = context.lock().await;
+    let ctx = context.read().await;
     // TODO: figure out if we need to validate lenghts/input - don't think so, but...
     if ctx.user_db.validate_password(&login.user, &login.passwd) {
         let cookie = ctx.user_db.generate_auth_cooke(&login.user);
@@ -217,13 +217,13 @@ mod test {
     use super::*;
     use crate::context::{UserDb, WebServerContext};
     use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use tokio::sync::RwLock;
 
     const TEST_PASSWD: &str = "test";
     fn make_test_context() -> Context {
         let test_pass = TEST_PASSWD;
         let test_hash = UserDb::new_password(&test_pass.to_string()).unwrap();
-        Arc::new(Mutex::new(WebServerContext {
+        Arc::new(RwLock::new(WebServerContext {
             user_db: UserDb::testing_demo(test_hash),
             html_root: "html".to_string(),
             wasm_root: "web-client/pkg".to_string(),

@@ -4,7 +4,7 @@ use clap::Parser;
 use pwhash::{sha512_crypt, HashSetup};
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 // All of the web server state that's maintained across
 // parallel threads.  This will be wrapped in an
@@ -48,7 +48,7 @@ pub struct Args {
     pub listen_port: u16,
 }
 
-pub type Context = Arc<Mutex<WebServerContext>>;
+pub type Context = Arc<RwLock<WebServerContext>>;
 
 pub const COOKIE_LOGIN_NAME: &str = "DEMO_COOKIE";
 
