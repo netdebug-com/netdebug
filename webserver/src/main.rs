@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::sync::Arc;
 
 use libwebserver::context::{Args, WebServerContext};
@@ -9,7 +10,7 @@ use log::info;
 use tokio::sync::RwLock;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn Error>> {
     // if RUST_LOG isn't set explicitly, set RUST_LOG=info as a default
     if let Err(_) = std::env::var("RUST_LOG") {
         std::env::set_var("RUST_LOG", "info");
@@ -23,7 +24,7 @@ async fn main() {
     let args = Args::parse();
 
     // init webserver state
-    let context = Arc::new(RwLock::new(WebServerContext::new(&args)));
+    let context = Arc::new(RwLock::new(WebServerContext::new(&args)?));
     let context_clone = context.clone();
     tokio::spawn(async move {
         // unwrap() should be fine here as we should panic if this fails
@@ -44,4 +45,5 @@ async fn main() {
     warp::serve(make_http_routes(context).await)
         .run(listen_addr)
         .await;
+    Ok(())
 }

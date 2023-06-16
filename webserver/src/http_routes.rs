@@ -227,6 +227,7 @@ mod test {
             user_db: UserDb::testing_demo(test_hash),
             html_root: "html".to_string(),
             wasm_root: "web-client/pkg".to_string(),
+            pcap_device: crate::pcap::lookup_egress_device().unwrap(),
         }))
     }
 

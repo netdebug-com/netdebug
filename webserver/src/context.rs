@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{error::Error, sync::Arc};
 
 use clap::Parser;
 use pwhash::{sha512_crypt, HashSetup};
@@ -15,15 +15,21 @@ pub struct WebServerContext {
     pub user_db: UserDb,
     pub html_root: String,
     pub wasm_root: String,
+    pub pcap_device: pcap::Device,
 }
 
 impl WebServerContext {
-    pub fn new(args: &Args) -> WebServerContext {
-        WebServerContext {
+    pub fn new(args: &Args) -> Result<WebServerContext, Box<dyn Error>> {
+        let pcap_device = match &args.pcap_device {
+            Some(d) => crate::pcap::lookup_pcap_device_by_name(&d)?,
+            None => crate::pcap::lookup_egress_device()?,
+        };
+        Ok(WebServerContext {
             user_db: UserDb::new(),
             html_root: args.html_root.clone(),
             wasm_root: args.wasm_root.clone(),
-        }
+            pcap_device,
+        })
     }
 }
 
@@ -46,6 +52,10 @@ pub struct Args {
     /// which TCP port to listen on
     #[arg(long, default_value_t = 3030)]
     pub listen_port: u16,
+
+    /// which pcap device to listen on; default is autodetect
+    #[arg(long, default_value = None)]
+    pub pcap_device: Option<String>,
 }
 
 pub type Context = Arc<RwLock<WebServerContext>>;

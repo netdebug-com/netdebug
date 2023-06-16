@@ -4,7 +4,8 @@ use std::{
     net::IpAddr,
 };
 
-use etherparse::{IpHeader, IpNumber};
+use crate::in_band_probe::tcp_inband_probe;
+use etherparse::{IpHeader, IpNumber, TcpHeader, TransportHeader};
 use futures_util::StreamExt;
 use log::{info, warn};
 use pcap::Capture;
@@ -23,7 +24,8 @@ use crate::context::Context;
  * all of this with, e.g., AF_XDP anyway
  */
 #[derive(Clone, Debug)]
-struct OwnedParsedPacket {
+#[allow(dead_code)]
+pub struct OwnedParsedPacket {
     // timestamp and other capture info
     pub pcap_header: pcap::PacketHeader,
     /// Ethernet II header if present.
@@ -39,6 +41,9 @@ struct OwnedParsedPacket {
 }
 
 impl OwnedParsedPacket {
+    /**
+     * Create a new OwnedParsedPacket from a pcap capture
+     */
     pub fn new(
         headers: etherparse::PacketHeaders,
         pcap_header: pcap::PacketHeader,
@@ -169,7 +174,7 @@ impl OwnedParsedPacket {
                 })
             }
             Some(Udp(udp)) => {
-                let (local_l4_port, remote_l4_port) = if source_is_local {
+                let (local_l4_port, remote_l4_port): (u16, u16) = if source_is_local {
                     (udp.source_port, udp.destination_port)
                 } else {
                     (udp.destination_port, udp.source_port)
@@ -208,7 +213,7 @@ impl OwnedParsedPacket {
         }
     }
 
-    fn to_icmp6_connection_key(&self, icmp6: &etherparse::Icmpv6Header) -> Option<ConnectionKey> {
+    fn to_icmp6_connection_key(&self, _icmp6: &etherparse::Icmpv6Header) -> Option<ConnectionKey> {
         todo!()
     }
 }
@@ -236,15 +241,15 @@ impl pcap::PacketCodec for PacketParserCodec {
     }
 }
 
-pub async fn start_pcap_stream(_context: Context) -> Result<(), Box<dyn Error>> {
-    let device = lookup_egress_device()?;
+pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
+    let device = context.read().await.pcap_device.clone();
 
     let mut local_addrs = HashSet::new();
     for a in &device.addresses {
         local_addrs.insert(a.addr);
     }
 
-    let mut connection_tracker = ConnectionTracker::new(local_addrs);
+    let mut connection_tracker = ConnectionTracker::new(context, local_addrs);
     info!("Starting pcap capture on {}", &device.name);
     let capture = Capture::from_device(device)?
         .immediate_mode(true)
@@ -254,6 +259,8 @@ pub async fn start_pcap_stream(_context: Context) -> Result<(), Box<dyn Error>> 
     stream
         .for_each(|pkt| {
             if let Ok(pkt) = pkt {
+                let _hash = pkt.sloppy_hash();
+                // TODO: use this hash to map to 256 parallel ConnectionTrackers for parallelism
                 connection_tracker.add(pkt);
             }
             futures::future::ready(())
@@ -264,48 +271,131 @@ pub async fn start_pcap_stream(_context: Context) -> Result<(), Box<dyn Error>> 
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd)]
-struct ConnectionKey {
-    local_ip: IpAddr,
-    remote_ip: IpAddr,
-    local_l4_port: u16,
-    remote_l4_port: u16,
-    ip_proto: u8,
+pub struct ConnectionKey {
+    pub local_ip: IpAddr,
+    pub remote_ip: IpAddr,
+    pub local_l4_port: u16,
+    pub remote_l4_port: u16,
+    pub ip_proto: u8,
 }
 
 struct ConnectionTracker {
+    context: Context,
     connections: HashMap<ConnectionKey, Connection>,
     local_addrs: HashSet<IpAddr>,
 }
 impl ConnectionTracker {
-    fn new(local_addrs: HashSet<IpAddr>) -> ConnectionTracker {
+    fn new(context: Context, local_addrs: HashSet<IpAddr>) -> ConnectionTracker {
         ConnectionTracker {
+            context,
             connections: HashMap::new(),
             local_addrs,
         }
     }
 
-    fn add(&mut self, packet: OwnedParsedPacket) -> Result<(), Box<dyn Error>> {
+    fn add(&mut self, packet: OwnedParsedPacket) {
         if let Some(key) = packet.to_connection_key(&self.local_addrs) {
-            if let Some(connection) = self.connections.get(&key) {
-                connection.update(packet)
+            if let Some(connection) = self.connections.get_mut(&key) {
+                connection.update(&self.context, packet, &key)
             } else {
                 self.new_connection(packet, key)
             }
         }
         // if we got here, the packet didn't have enough info to be called a 'connection'
-        // just return OK and move on for now
-        Ok(())
+        // just return and move on for now
     }
 
-    fn new_connection(&self, pkt: OwnedParsedPacket, key: ConnectionKey) {
-        todo!()
+    fn new_connection(&mut self, packet: OwnedParsedPacket, key: ConnectionKey) {
+        let mut connection = Connection {
+            local_syn: None,
+            remote_syn: None,
+            local_seq: None,
+            local_ack: None,
+            local_data: None,
+        };
+
+        connection.update(&self.context, packet, &key);
+        self.connections.insert(key, connection);
     }
 }
 
-struct Connection {}
+#[derive(Clone, Debug)]
+pub struct Connection {
+    pub local_syn: Option<OwnedParsedPacket>,
+    pub remote_syn: Option<OwnedParsedPacket>,
+    pub local_seq: Option<u32>,
+    pub local_ack: Option<u32>,
+    pub local_data: Option<Vec<u8>>, // data sent for retransmits
+}
 impl Connection {
-    fn update(&self, packet: OwnedParsedPacket) {
-        todo!()
+    fn update(&mut self, context: &Context, packet: OwnedParsedPacket, key: &ConnectionKey) {
+        let src_is_local = Connection::src_is_local(&packet, key);
+        match &packet.transport {
+            Some(TransportHeader::Tcp(tcp)) => {
+                if src_is_local {
+                    self.update_tcp_local(context, &packet, tcp);
+                } else {
+                    self.update_tcp_remote(&packet, tcp);
+                }
+            }
+            _ => warn!("Got Connection::update() for non-TCP packet - ignoring for now"),
+        }
+    }
+
+    /**
+     * Should be able to cache this somehow - TODO: rethink
+     */
+    fn src_is_local(packet: &OwnedParsedPacket, key: &ConnectionKey) -> bool {
+        match &packet.ip {
+            Some(IpHeader::Version4(ip4, _)) => IpAddr::from(ip4.source) == key.local_ip,
+            Some(IpHeader::Version6(ip6, _)) => IpAddr::from(ip6.source) == key.local_ip,
+            None => false,
+        }
+    }
+
+    fn update_tcp_local(&mut self, context: &Context, packet: &OwnedParsedPacket, tcp: &TcpHeader) {
+        // record the SYN to see which TCP options are negotiated
+        if tcp.syn {
+            self.local_syn = Some(packet.clone()); // memcpy() but doesn't happen that much or with much data
+        }
+
+        // record how far the local side has acknowledged
+        if tcp.ack {
+            self.local_ack = Some(tcp.acknowledgment_number);
+        }
+
+        // did we send some payload?
+        if !packet.payload.is_empty() {
+            let mut first_time = false;
+            if self.local_data.is_none() {
+                // this is the first time in the connection lifetime we sent some payload
+                // spawn an inband probe
+                first_time = true;
+            }
+            self.local_data = Some(packet.payload.clone());
+            if first_time {
+                let connection_clone = self.clone();
+                let packet_clone = packet.clone();
+                let context_clone = context.clone();
+                tokio::spawn(async move {
+                    tcp_inband_probe(context_clone, connection_clone, packet_clone)
+                        .await
+                        .unwrap();
+                    // https://rust-lang.github.io/async-book/07_workarounds/02_err_in_async_blocks.html
+                    // Except that 'dyn Error' isn't Send so it can't go between threads - just unwrap for now
+                    // Ok::<(), Box<dyn Error>>(()) // this magic hints return type to compiler
+                });
+            }
+        }
+
+        // TODO: look for outgoing selective acks (indicates packet loss)
+    }
+
+    fn update_tcp_remote(&mut self, packet: &OwnedParsedPacket, tcp: &TcpHeader) {
+        if tcp.syn {
+            self.remote_syn = Some(packet.clone()); // memcpy() but doesn't happen that much or with much data
+        }
+        // TODO: look for incoming selective acks (indicates packet loss)
     }
 }
 
@@ -316,7 +406,7 @@ impl Connection {
  * NOTE: this technique actually sends no traffic; it's purely local
  */
 
-fn lookup_egress_device() -> Result<pcap::Device, Box<dyn Error>> {
+pub fn lookup_egress_device() -> Result<pcap::Device, Box<dyn Error>> {
     let udp_sock = std::net::UdpSocket::bind(("0.0.0.0", 0))?;
     udp_sock.connect(("8.8.8.8", 53))?;
     let addr = udp_sock.local_addr()?.ip();
@@ -335,4 +425,16 @@ fn lookup_egress_device() -> Result<pcap::Device, Box<dyn Error>> {
             "Failed to find any default pcap device".to_string(),
         )))
     }
+}
+
+pub fn lookup_pcap_device_by_name(name: &String) -> Result<pcap::Device, Box<dyn Error>> {
+    for d in &pcap::Device::list()? {
+        if d.name == *name {
+            return Ok(d.clone());
+        }
+    }
+    Err(Box::new(pcap::Error::PcapError(format!(
+        "Failed to find any pcap device with name '{}'",
+        name
+    ))))
 }
