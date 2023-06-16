@@ -21,6 +21,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
             toolchain: nightly
+            override: true
       - name: Install libpcap
         run: sudo apt-get install libpcap-dev
       - name: Build
