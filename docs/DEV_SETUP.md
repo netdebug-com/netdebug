@@ -6,11 +6,12 @@
     1. Recommended that you install the vscode rpm repo so you get auto 6.1updates!
     2. Recommended packages include : 
 5. Setup a new ssh-key only for the new github account (github requires this)
-6. 
+6. Install required rust tools
 ```
 for p in wasm-pack fmt clippy; do
     cargo install $p
 done
+```
 7. You can manage multiple ssh-keys into github ala a special ssh config
     and then add the actual repo as:
 
@@ -34,8 +35,10 @@ Host github.com-capveg
 # now add the remote with the 'github.com-netdebug' hostname
 $ git remote add origin git@github.com-netdebug:netdebug-com/netdebug.git
 ```
-
-
+8. We need the 'per-project-target' feature which only exists in cargo nightly, so run:
+```
+rustup override set nightly
+```
 
 # NOTES:
 
