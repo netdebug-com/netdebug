@@ -158,7 +158,7 @@ impl OwnedParsedPacket {
         };
         use etherparse::TransportHeader::*;
         match &self.transport {
-            None => None,
+            None => None, // no l4 protocol --> don't track this flow
             Some(Tcp(tcp)) => {
                 let (local_l4_port, remote_l4_port) = if source_is_local {
                     (tcp.source_port, tcp.destination_port)
@@ -201,9 +201,7 @@ impl OwnedParsedPacket {
                 bytes5to8: _,
             } => None,
             EchoReply(_) => None,
-            DestinationUnreachable(_d) => {
-                todo!()
-            }
+            DestinationUnreachable(_d) => self.to_icmp_payload_connection_key(),
             Redirect(_) => todo!(),
             EchoRequest(_) => None,
             TimeExceeded(_) => todo!(),
@@ -213,8 +211,22 @@ impl OwnedParsedPacket {
         }
     }
 
+    fn to_icmp_payload_connection_key(&self) -> Option<ConnectionKey> {
+        match etherparse::PacketHeaders::from_ip_slice(&self.payload) {
+            Err(e) => {
+                warn!("Unparsed inner ICMP packet - skipping - {}", e);
+                None
+            }
+            Ok(_embedded) => {
+                // TODO : properly extract this and map to a key
+                // for now, just punt and come back later
+                None
+            }
+        }
+    }
+
     fn to_icmp6_connection_key(&self, _icmp6: &etherparse::Icmpv6Header) -> Option<ConnectionKey> {
-        todo!()
+        None
     }
 }
 
@@ -279,6 +291,25 @@ pub struct ConnectionKey {
     pub ip_proto: u8,
 }
 
+/*
+TODO!
+impl std::fmt::Display for ConnectionKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let proto_desc = match self.ip_proto {
+            IpNumber::Tcp as u8 =>"Tcp",
+            IpNumber::Udp as u8 => "Udp",
+            IpNumber::Icmp as u8 => "Icmpv4",
+            _ : other => format!("ip_proto={}", other).as_str(),
+        };
+
+        write!(f, "{} [{}]::{} --> [{}]::{} ",
+            proto_desc,
+        )
+    }
+}
+
+*/
+
 struct ConnectionTracker {
     context: Context,
     connections: HashMap<ConnectionKey, Connection>,
@@ -313,6 +344,7 @@ impl ConnectionTracker {
             local_ack: None,
             local_data: None,
         };
+        info!("Tracking new connection: {}", &key);
 
         connection.update(&self.context, packet, &key);
         self.connections.insert(key, connection);

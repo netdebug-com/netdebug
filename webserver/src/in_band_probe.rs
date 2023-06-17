@@ -1,7 +1,7 @@
 use std::error::Error;
 
-use etherparse::TransportHeader;
-use log::warn;
+use etherparse::{PacketHeaders, TransportHeader};
+use log::{info, warn};
 use pcap::Capture;
 
 use crate::{
@@ -44,6 +44,7 @@ pub async fn tcp_inband_probe(
                 ),
                 _ => panic!("Called tcp_band_probe on non-TCP connection: {:?}", packet),
             };
+
             // try to encode the TTL into the payload; this solves a bunch of problems for us
             let payload_len = std::cmp::min(ttl as usize, packet.payload.len());
             let payload = packet.payload[0..payload_len].to_vec();
@@ -52,6 +53,14 @@ pub async fn tcp_inband_probe(
             probe
         })
         .collect();
+    if let Some(first_probe) = probes.first() {
+        // only log the first probe
+        // we are reparsing from the bytes rather than starting with the inputs to log what we're sending
+        // not what we think we're sending.
+        // unwrap() here should be ok because if this doesn't parse, we should die obviously
+        let parsed_probe = PacketHeaders::from_ethernet_slice(first_probe).unwrap();
+        info!("Sending tcp_inband_probes() :: {:?}", parsed_probe);
+    }
     for probe in probes {
         if let Err(e) = capture.sendpacket(probe) {
             warn!("Error sending tcp_band_probe() : {} -- {:?}", e, packet);

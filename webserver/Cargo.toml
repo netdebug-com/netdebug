@@ -20,6 +20,10 @@ path = "src/lib.rs"
 # CLI utility for mananging passwords
 name = "webserver_passwd"
 path = "src/webserver_passwd_cli.rs"
+required-features = ["cli"]
+
+[features]
+cli = []
 
 [dependencies]
 # pls keep in alpha order
