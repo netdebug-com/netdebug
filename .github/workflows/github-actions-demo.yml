@@ -26,7 +26,7 @@ jobs:
         run: sudo apt-get install libpcap-dev
       - name: Build
         run: |
-          cd  ${{ github.workspace }}/webserver && cargo build --verbose
+          cd  ${{ github.workspace }}/webserver && cargo build --all-features --verbose
       - name: Test
         run: |
           cd  ${{ github.workspace }}/webserver && cargo test --verbose
