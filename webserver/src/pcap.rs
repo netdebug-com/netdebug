@@ -291,24 +291,16 @@ pub struct ConnectionKey {
     pub ip_proto: u8,
 }
 
-/*
-TODO!
 impl std::fmt::Display for ConnectionKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let proto_desc = match self.ip_proto {
-            IpNumber::Tcp as u8 =>"Tcp",
-            IpNumber::Udp as u8 => "Udp",
-            IpNumber::Icmp as u8 => "Icmpv4",
-            _ : other => format!("ip_proto={}", other).as_str(),
-        };
-
-        write!(f, "{} [{}]::{} --> [{}]::{} ",
-            proto_desc,
+        let proto_desc = format!("ip_proto={}", self.ip_proto);
+        write!(
+            f,
+            "{} [{}]::{} --> [{}]::{} ",
+            proto_desc, self.local_ip, self.local_l4_port, self.remote_ip, self.remote_l4_port,
         )
     }
 }
-
-*/
 
 struct ConnectionTracker {
     context: Context,
