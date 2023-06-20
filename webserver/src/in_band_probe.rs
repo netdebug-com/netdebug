@@ -2,11 +2,10 @@ use std::error::Error;
 
 use etherparse::{PacketHeaders, TransportHeader};
 use log::{info, warn};
-use pcap::Capture;
 
 use crate::{
     context::Context,
-    pcap::{Connection, OwnedParsedPacket},
+    pcap::{Connection, OwnedParsedPacket, RawSocketWriter},
 };
 
 /**
@@ -14,13 +13,15 @@ use crate::{
  * that look like retransmited data but are in fact probe packets
  *
  * pipe them out of a pcap live capture with send_packet()
+ *
+ * take the 'raw_sock' param explicitly to facilitate testing
 */
-pub async fn tcp_inband_probe(
-    context: Context,
-    _connection: Connection,
+pub fn tcp_inband_probe(
+    _context: Context,
+    _connection: Connection, // do we really need this?
     packet: OwnedParsedPacket,
+    raw_sock: &mut dyn RawSocketWriter, // used with testing
 ) -> Result<(), Box<dyn Error>> {
-    let mut capture = bind_writable_pcap(&context).await?;
     let l2 = packet.link.as_ref().unwrap();
     // build up probes
     let probes: Vec<Vec<u8>> = (1..16)
@@ -62,25 +63,10 @@ pub async fn tcp_inband_probe(
         info!("Sending tcp_inband_probes() :: {:?}", parsed_probe);
     }
     for probe in probes {
-        if let Err(e) = capture.sendpacket(probe) {
+        if let Err(e) = raw_sock.sendpacket(&probe) {
             warn!("Error sending tcp_band_probe() : {} -- {:?}", e, packet);
         }
     }
 
     Ok(())
-}
-
-/**
- * Bind a pcap capture instance so we can raw write packets out of it.
- *
- * NOTE: funky implementation issue in Linux: if you pcap::sendpacket() out a pcap instance,
- * that same instance does NOT actually see the outgoing packet.  We get around this by
- * binding a different instance for reading vs. writing packets.
- */
-pub async fn bind_writable_pcap(
-    context: &Context,
-) -> Result<pcap::Capture<pcap::Active>, Box<dyn Error>> {
-    let device = context.read().await.pcap_device.clone();
-    let cap = Capture::from_device(device)?.open()?;
-    Ok(cap)
 }

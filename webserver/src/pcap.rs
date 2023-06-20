@@ -261,7 +261,8 @@ pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
         local_addrs.insert(a.addr);
     }
 
-    let mut connection_tracker = ConnectionTracker::new(context, local_addrs);
+    let raw_sock = bind_writable_pcap(&context).await?;
+    let mut connection_tracker = ConnectionTracker::new(context, local_addrs, raw_sock);
     info!("Starting pcap capture on {}", &device.name);
     let capture = Capture::from_device(device)?
         .immediate_mode(true)
@@ -302,24 +303,32 @@ impl std::fmt::Display for ConnectionKey {
     }
 }
 
-struct ConnectionTracker {
+struct ConnectionTracker<R>
+where
+    R: RawSocketWriter,
+{
     context: Context,
     connections: HashMap<ConnectionKey, Connection>,
     local_addrs: HashSet<IpAddr>,
+    raw_sock: R,
 }
-impl ConnectionTracker {
-    fn new(context: Context, local_addrs: HashSet<IpAddr>) -> ConnectionTracker {
+impl<R> ConnectionTracker<R>
+where
+    R: RawSocketWriter,
+{
+    fn new(context: Context, local_addrs: HashSet<IpAddr>, raw_sock: R) -> ConnectionTracker<R> {
         ConnectionTracker {
             context,
             connections: HashMap::new(),
             local_addrs,
+            raw_sock,
         }
     }
 
     fn add(&mut self, packet: OwnedParsedPacket) {
         if let Some(key) = packet.to_connection_key(&self.local_addrs) {
             if let Some(connection) = self.connections.get_mut(&key) {
-                connection.update(&self.context, packet, &key)
+                connection.update(&self.context, packet, &mut self.raw_sock, &key)
             } else {
                 self.new_connection(packet, key)
             }
@@ -338,7 +347,7 @@ impl ConnectionTracker {
         };
         info!("Tracking new connection: {}", &key);
 
-        connection.update(&self.context, packet, &key);
+        connection.update(&self.context, packet, &mut self.raw_sock, &key);
         self.connections.insert(key, connection);
     }
 }
@@ -352,12 +361,20 @@ pub struct Connection {
     pub local_data: Option<Vec<u8>>, // data sent for retransmits
 }
 impl Connection {
-    fn update(&mut self, context: &Context, packet: OwnedParsedPacket, key: &ConnectionKey) {
+    fn update<R>(
+        &mut self,
+        context: &Context,
+        packet: OwnedParsedPacket,
+        raw_sock: &mut R,
+        key: &ConnectionKey,
+    ) where
+        R: RawSocketWriter,
+    {
         let src_is_local = Connection::src_is_local(&packet, key);
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
                 if src_is_local {
-                    self.update_tcp_local(context, &packet, tcp);
+                    self.update_tcp_local(context, &packet, tcp, raw_sock);
                 } else {
                     self.update_tcp_remote(&packet, tcp);
                 }
@@ -377,7 +394,15 @@ impl Connection {
         }
     }
 
-    fn update_tcp_local(&mut self, context: &Context, packet: &OwnedParsedPacket, tcp: &TcpHeader) {
+    fn update_tcp_local<R>(
+        &mut self,
+        context: &Context,
+        packet: &OwnedParsedPacket,
+        tcp: &TcpHeader,
+        raw_sock: &mut R,
+    ) where
+        R: RawSocketWriter,
+    {
         // record the SYN to see which TCP options are negotiated
         if tcp.syn {
             self.local_syn = Some(packet.clone()); // memcpy() but doesn't happen that much or with much data
@@ -401,14 +426,7 @@ impl Connection {
                 let connection_clone = self.clone();
                 let packet_clone = packet.clone();
                 let context_clone = context.clone();
-                tokio::spawn(async move {
-                    tcp_inband_probe(context_clone, connection_clone, packet_clone)
-                        .await
-                        .unwrap();
-                    // https://rust-lang.github.io/async-book/07_workarounds/02_err_in_async_blocks.html
-                    // Except that 'dyn Error' isn't Send so it can't go between threads - just unwrap for now
-                    // Ok::<(), Box<dyn Error>>(()) // this magic hints return type to compiler
-                });
+                tcp_inband_probe(context_clone, connection_clone, packet_clone, raw_sock).unwrap();
             }
         }
 
@@ -461,4 +479,43 @@ pub fn lookup_pcap_device_by_name(name: &String) -> Result<pcap::Device, Box<dyn
         "Failed to find any pcap device with name '{}'",
         name
     ))))
+}
+
+/**
+ * Wrapper around pcap::Capture::sendpacket() so we can mock it during testing
+ */
+pub trait RawSocketWriter: Send {
+    fn sendpacket(&mut self, buf: &[u8]) -> Result<(), pcap::Error>;
+}
+
+/**
+ * Real instantiation of a RawSocketWriter using the portable libpcap library
+ */
+struct PcapRawSocketWriter {
+    capture: Capture<pcap::Active>,
+}
+
+impl PcapRawSocketWriter {
+    pub fn new(capture: Capture<pcap::Active>) -> PcapRawSocketWriter {
+        PcapRawSocketWriter { capture }
+    }
+}
+
+impl RawSocketWriter for PcapRawSocketWriter {
+    fn sendpacket(&mut self, buf: &[u8]) -> Result<(), pcap::Error> {
+        self.capture.sendpacket(buf)
+    }
+}
+
+/**
+ * Bind a pcap capture instance so we can raw write packets out of it.
+ *
+ * NOTE: funky implementation issue in Linux: if you pcap::sendpacket() out a pcap instance,
+ * that same instance does NOT actually see the outgoing packet.  We get around this by
+ * binding a different instance for reading vs. writing packets.
+ */
+pub async fn bind_writable_pcap(context: &Context) -> Result<impl RawSocketWriter, Box<dyn Error>> {
+    let device = context.read().await.pcap_device.clone();
+    let cap = Capture::from_device(device)?.open()?;
+    Ok(PcapRawSocketWriter::new(cap))
 }
