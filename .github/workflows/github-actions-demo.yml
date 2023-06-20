@@ -21,10 +21,10 @@ jobs:
         run: sudo apt-get install libpcap-dev
       - name: Build
         run: |
-          cd  ${{ github.workspace }}/webserver && cargo build --all-features --verbose
+          cargo build --all-features --verbose
       - name: Test
         run: |
-          cd  ${{ github.workspace }}/webserver && cargo test --verbose
+          cargo test --verbose
       - run: echo "🍏 This job's status is ${{ job.status }}."
 
 
