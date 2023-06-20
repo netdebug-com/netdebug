@@ -17,11 +17,6 @@ jobs:
         with:
                 # Optional version of wasm-pack to install(eg. 'v0.9.1', 'latest')
                 version: 'latest'
-      - name: Set rust nighty toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-            toolchain: nightly
-            override: true
       - name: Install libpcap
         run: sudo apt-get install libpcap-dev
       - name: Build
@@ -31,3 +26,12 @@ jobs:
         run: |
           cd  ${{ github.workspace }}/webserver && cargo test --verbose
       - run: echo "🍏 This job's status is ${{ job.status }}."
+
+
+# this was needed for the 'cargo-feature[per-package-target]'
+# but nightly is unstable and it also breaks 'cargo test' so remove for now
+#      - name: Set rust nighty toolchain
+#        uses: actions-rs/toolchain@v1
+#        with:
+#            toolchain: nightly
+#            override: true

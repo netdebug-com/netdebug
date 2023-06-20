@@ -35,7 +35,7 @@ Host github.com-capveg
 # now add the remote with the 'github.com-netdebug' hostname
 $ git remote add origin git@github.com-netdebug:netdebug-com/netdebug.git
 ```
-8. We need the 'per-project-target' feature which only exists in cargo nightly, so run:
+8. DON'T DO THIS ANYMORE - GRR - We need the 'per-project-target' feature which only exists in cargo nightly, so run:
 ```
 rustup override set nightly
 ```
