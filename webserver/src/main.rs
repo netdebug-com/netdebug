@@ -26,14 +26,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // init webserver state
     let context = Arc::new(RwLock::new(WebServerContext::new(&args)?));
     let context_clone = context.clone();
-    tokio::spawn(async move {
-        // unwrap() should be fine here as we should panic if this fails
-        if let Err(e) = start_pcap_stream(context_clone).await {
-            log::error!("start_pcap_stream() returned {} -- exiting", e);
-            // this is fatal, just exit
-            std::process::exit(1);
-        }
-    });
+    if !args.web_server_only {
+        tokio::spawn(async move {
+            // unwrap() should be fine here as we should panic if this fails
+            if let Err(e) = start_pcap_stream(context_clone).await {
+                log::error!("start_pcap_stream() returned {} -- exiting", e);
+                // this is fatal, just exit
+                std::process::exit(1);
+            }
+        });
+    }
     let listen_addr = if args.production {
         info!("Running in production mode");
         ([0, 0, 0, 0], args.listen_port)

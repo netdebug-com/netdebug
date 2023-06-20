@@ -56,6 +56,10 @@ pub struct Args {
     /// which pcap device to listen on; default is autodetect
     #[arg(long, default_value = None)]
     pub pcap_device: Option<String>,
+
+    /// Web-server only - no libpcap probing
+    #[arg(long, default_value_t = false)]
+    pub web_server_only: bool,
 }
 
 pub type Context = Arc<RwLock<WebServerContext>>;
