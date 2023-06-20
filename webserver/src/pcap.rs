@@ -204,7 +204,7 @@ impl OwnedParsedPacket {
             DestinationUnreachable(_d) => self.to_icmp_payload_connection_key(),
             Redirect(_) => todo!(),
             EchoRequest(_) => None,
-            TimeExceeded(_) => todo!(),
+            TimeExceeded(_) => self.to_icmp_payload_connection_key(),
             ParameterProblem(_) => None,
             TimestampRequest(_) => None,
             TimestampReply(_) => None,
