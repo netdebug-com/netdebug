@@ -215,28 +215,14 @@ async fn webclient(context: Context, cookie: String, wasm_root: String, file: St
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::context::{UserDb, WebServerContext};
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
-
-    const TEST_PASSWD: &str = "test";
-    fn make_test_context() -> Context {
-        let test_pass = TEST_PASSWD;
-        let test_hash = UserDb::new_password(&test_pass.to_string()).unwrap();
-        Arc::new(RwLock::new(WebServerContext {
-            user_db: UserDb::testing_demo(test_hash),
-            html_root: "html".to_string(),
-            wasm_root: "web-client/pkg".to_string(),
-            pcap_device: crate::pcap::lookup_egress_device().unwrap(),
-        }))
-    }
+    use crate::context::test::{make_test_context, TEST_PASSWD};
 
     /**
      * Step through each possible URL permuation and make sure it hits the right route/filter
      */
     #[tokio::test]
     async fn test_no_cookies() {
-        let context = make_test_context();
+        let context = crate::context::test::make_test_context();
         let all_routes = make_http_routes(context);
 
         let resp = warp::test::request()

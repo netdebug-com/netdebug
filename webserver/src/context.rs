@@ -129,3 +129,24 @@ impl UserDb {
         cookie == "SUCCESS"
     }
 }
+
+#[cfg(test)]
+pub mod test {
+    use super::*;
+
+    use crate::context::{UserDb, WebServerContext};
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    pub const TEST_PASSWD: &str = "test";
+    pub fn make_test_context() -> Context {
+        let test_pass = TEST_PASSWD;
+        let test_hash = UserDb::new_password(&test_pass.to_string()).unwrap();
+        Arc::new(RwLock::new(WebServerContext {
+            user_db: UserDb::testing_demo(test_hash),
+            html_root: "html".to_string(),
+            wasm_root: "web-client/pkg".to_string(),
+            pcap_device: crate::pcap::lookup_egress_device().unwrap(),
+        }))
+    }
+}

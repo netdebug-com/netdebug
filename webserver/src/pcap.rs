@@ -423,10 +423,9 @@ impl Connection {
             }
             self.local_data = Some(packet.payload.clone());
             if first_time {
-                let connection_clone = self.clone();
                 let packet_clone = packet.clone();
                 let context_clone = context.clone();
-                tcp_inband_probe(context_clone, connection_clone, packet_clone, raw_sock).unwrap();
+                tcp_inband_probe(context_clone, packet_clone, raw_sock).unwrap();
             }
         }
 
@@ -504,6 +503,28 @@ impl PcapRawSocketWriter {
 impl RawSocketWriter for PcapRawSocketWriter {
     fn sendpacket(&mut self, buf: &[u8]) -> Result<(), pcap::Error> {
         self.capture.sendpacket(buf)
+    }
+}
+
+/**
+ * Used for testing - just capture and buffer anything written to it
+ */
+pub struct MockRawSocketWriter {
+    pub captured: Vec<Vec<u8>>,
+}
+
+impl MockRawSocketWriter {
+    pub fn new() -> MockRawSocketWriter {
+        MockRawSocketWriter {
+            captured: Vec::new(),
+        }
+    }
+}
+
+impl RawSocketWriter for MockRawSocketWriter {
+    fn sendpacket(&mut self, buf: &[u8]) -> Result<(), pcap::Error> {
+        self.captured.push(buf.to_vec());
+        Ok(())
     }
 }
 
