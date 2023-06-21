@@ -73,19 +73,23 @@ async fn handle_ws_message(
     tx: mpsc::UnboundedSender<Message>,
 ) {
     debug!("In handle_ws_message()");
-    while let Some(msg) = rx.next().await {
-        match msg {
+    while let Some(raw_msg) = rx.next().await {
+        match raw_msg {
             Ok(msg) => {
-                // TODO: figure out if this unwrap is bad!
-                // IT IS BAD!!
-                /*
-                                 * thread 'tokio-runtime-worker' panicked at 'called `Result::unwrap()` on an `Err` value: ()', /backups/Rob/netdebug/webserver/src/webtest.rs:80:68
-                stack backtrace:
-                   0: rust_begin_unwind
-                                 * perhaps on hang up?
-                                 */
-                if let Ok(msg) = serde_json::from_str(msg.to_str().unwrap()) {
-                    handle_message(&context, msg, &tx).await;
+                let msg = match msg.to_str() {
+                    Ok(text) => text,
+                    Err(_) => {
+                        warn!("Got non-text message from websocket!? {:?}", msg);
+                        break;
+                    }
+                };
+                match serde_json::from_str(msg) {
+                    Ok(msg) => {
+                        handle_message(&context, msg, &tx).await;
+                    }
+                    Err(e) => {
+                        warn!("Failed to parse json message {}", e);
+                    }
                 }
             }
             Err(e) => {

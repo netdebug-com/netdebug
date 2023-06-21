@@ -294,7 +294,9 @@ pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
         .open()?
         .setnonblock()?;
     // only capture/probe traffic to the webserver
-    capture.filter(format!("tcp port {}", local_tcp_port).as_str(), true)?;
+    let filter_rule = format!("tcp port {}", local_tcp_port);
+    info!("Applying pcap filter '{}'", filter_rule);
+    capture.filter(filter_rule.as_str(), true)?;
     let stream = capture.stream(PacketParserCodec {})?;
     stream
         .for_each(|pkt| {
