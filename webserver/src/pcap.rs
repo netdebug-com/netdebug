@@ -285,22 +285,30 @@ pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
         local_addrs.insert(a.addr);
     }
 
+    let local_tcp_port = context.read().await.local_tcp_listen_port;
     let raw_sock = bind_writable_pcap(&context).await?;
     let mut connection_tracker = ConnectionTracker::new(context, local_addrs, raw_sock);
     info!("Starting pcap capture on {}", &device.name);
-    let capture = Capture::from_device(device)?
+    let mut capture = Capture::from_device(device)?
         .immediate_mode(true)
         .open()?
         .setnonblock()?;
+    // only capture/probe traffic to the webserver
+    capture.filter(format!("tcp port {}", local_tcp_port).as_str(), true)?;
     let stream = capture.stream(PacketParserCodec {})?;
     stream
         .for_each(|pkt| {
-            if let Ok(pkt) = pkt {
-                let _hash = pkt.sloppy_hash();
-                // TODO: use this hash to map to 256 parallel ConnectionTrackers for parallelism
-                connection_tracker.add(pkt);
+            match pkt {
+                Ok(pkt) => {
+                    let _hash = pkt.sloppy_hash();
+                    // TODO: use this hash to map to 256 parallel ConnectionTrackers for parallelism
+                    connection_tracker.add(pkt);
+                }
+                Err(e) => {
+                    warn!("start_pcap_stream got error: {} - exiting", e);
+                }
             }
-            futures::future::ready(())
+            futures::future::ready(()) // TODO: how do we return an error to stop the stream?
         })
         .await;
 

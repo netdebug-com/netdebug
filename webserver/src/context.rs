@@ -16,6 +16,7 @@ pub struct WebServerContext {
     pub html_root: String,
     pub wasm_root: String,
     pub pcap_device: pcap::Device,
+    pub local_tcp_listen_port: u16,
 }
 
 impl WebServerContext {
@@ -29,6 +30,7 @@ impl WebServerContext {
             html_root: args.html_root.clone(),
             wasm_root: args.wasm_root.clone(),
             pcap_device,
+            local_tcp_listen_port: args.listen_port,
         })
     }
 }
@@ -147,6 +149,7 @@ pub mod test {
             html_root: "html".to_string(),
             wasm_root: "web-client/pkg".to_string(),
             pcap_device: crate::pcap::lookup_egress_device().unwrap(),
+            local_tcp_listen_port: 3030,
         }))
     }
 }
