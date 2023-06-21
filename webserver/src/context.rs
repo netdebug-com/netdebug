@@ -6,6 +6,8 @@ use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::pcap::lookup_pcap_device_by_name;
+
 // All of the web server state that's maintained across
 // parallel threads.  This will be wrapped in an
 // Arc::new(Mutex::new(...)) for thread and borrower checker
@@ -22,8 +24,17 @@ pub struct WebServerContext {
 impl WebServerContext {
     pub fn new(args: &Args) -> Result<WebServerContext, Box<dyn Error>> {
         let pcap_device = match &args.pcap_device {
-            Some(d) => crate::pcap::lookup_pcap_device_by_name(&d)?,
-            None => crate::pcap::lookup_egress_device()?,
+            Some(d) => lookup_pcap_device_by_name(&d)?,
+            None => {
+                if args.production {
+                    crate::pcap::lookup_egress_device()?
+                } else {
+                    // if we're not in production mode, just capture
+                    // loopback traffic.
+                    // TODO: 'lo' is linux specific - lookup for non-Linux
+                    lookup_pcap_device_by_name(&"lo".to_string())?
+                }
+            }
         };
         Ok(WebServerContext {
             user_db: UserDb::new(),
