@@ -148,7 +148,11 @@ impl OwnedParsedPacket {
      *
      * This will let us match ICMP Unreachables back to the flows that sent them.
      */
-    fn to_connection_key(&self, local_addrs: &HashSet<IpAddr>) -> Option<ConnectionKey> {
+    fn to_connection_key(
+        &self,
+        local_addrs: &HashSet<IpAddr>,
+        local_tcp_ports: &HashSet<u16>,
+    ) -> Option<(ConnectionKey, bool)> {
         let (local_ip, remote_ip, source_is_local) = match &self.ip {
             Some(IpHeader::Version4(ip4, _)) => {
                 let source_ip = IpAddr::from(ip4.source);
@@ -179,13 +183,32 @@ impl OwnedParsedPacket {
                 } else {
                     (tcp.destination_port, tcp.source_port)
                 };
-                Some(ConnectionKey {
-                    local_ip,
-                    remote_ip,
-                    local_l4_port,
-                    remote_l4_port,
-                    ip_proto: IpNumber::Tcp as u8,
-                })
+                // NOTE: if local_ip == remote_ip, e.g., 127.0.0.1,
+                // we also need to check the tcp ports to figure out
+                // which side is 'local'/matches the webserver
+                if local_ip != remote_ip || local_tcp_ports.contains(&local_l4_port) {
+                    Some((
+                        ConnectionKey {
+                            local_ip,
+                            remote_ip,
+                            local_l4_port,
+                            remote_l4_port,
+                            ip_proto: IpNumber::Tcp as u8,
+                        },
+                        source_is_local,
+                    ))
+                } else {
+                    Some((
+                        ConnectionKey {
+                            local_ip,
+                            remote_ip,
+                            remote_l4_port: local_l4_port, // swap b/c we guessed backwards
+                            local_l4_port: remote_l4_port,
+                            ip_proto: IpNumber::Tcp as u8,
+                        },
+                        false,
+                    ))
+                }
             }
             Some(Udp(udp)) => {
                 let (local_l4_port, remote_l4_port): (u16, u16) = if source_is_local {
@@ -193,20 +216,26 @@ impl OwnedParsedPacket {
                 } else {
                     (udp.destination_port, udp.source_port)
                 };
-                Some(ConnectionKey {
-                    local_ip,
-                    remote_ip,
-                    local_l4_port,
-                    remote_l4_port,
-                    ip_proto: IpNumber::Udp as u8,
-                })
+                Some((
+                    ConnectionKey {
+                        local_ip,
+                        remote_ip,
+                        local_l4_port,
+                        remote_l4_port,
+                        ip_proto: IpNumber::Udp as u8,
+                    },
+                    source_is_local, // TODO: figure out UDP + src_ip == dst_ip case
+                ))
             }
             Some(Icmpv4(icmp4)) => self.to_icmp4_connection_key(icmp4),
             Some(Icmpv6(icmp6)) => self.to_icmp6_connection_key(icmp6),
         }
     }
 
-    fn to_icmp4_connection_key(&self, icmp4: &etherparse::Icmpv4Header) -> Option<ConnectionKey> {
+    fn to_icmp4_connection_key(
+        &self,
+        icmp4: &etherparse::Icmpv4Header,
+    ) -> Option<(ConnectionKey, bool)> {
         use etherparse::Icmpv4Type::*;
         match &icmp4.icmp_type {
             Unknown {
@@ -225,7 +254,7 @@ impl OwnedParsedPacket {
         }
     }
 
-    fn to_icmp_payload_connection_key(&self) -> Option<ConnectionKey> {
+    fn to_icmp_payload_connection_key(&self) -> Option<(ConnectionKey, bool)> {
         match etherparse::PacketHeaders::from_ip_slice(&self.payload) {
             Err(e) => {
                 warn!("Unparsed inner ICMP packet - skipping - {}", e);
@@ -239,7 +268,10 @@ impl OwnedParsedPacket {
         }
     }
 
-    fn to_icmp6_connection_key(&self, _icmp6: &etherparse::Icmpv6Header) -> Option<ConnectionKey> {
+    fn to_icmp6_connection_key(
+        &self,
+        _icmp6: &etherparse::Icmpv6Header,
+    ) -> Option<(ConnectionKey, bool)> {
         None
     }
 }
@@ -287,7 +319,7 @@ pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
 
     let local_tcp_port = context.read().await.local_tcp_listen_port;
     let raw_sock = bind_writable_pcap(&context).await?;
-    let mut connection_tracker = ConnectionTracker::new(context, local_addrs, raw_sock);
+    let mut connection_tracker = ConnectionTracker::new(context, local_addrs, raw_sock).await;
     info!("Starting pcap capture on {}", &device.name);
     let mut capture = Capture::from_device(device)?
         .immediate_mode(true)
@@ -300,6 +332,8 @@ pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
     let stream = capture.stream(PacketParserCodec {})?;
     stream
         .for_each(|pkt| {
+            // NOTE: this closure is intentionally sync and thus we can't call await in it
+            // making it async causes a bunch of compliler problems I haven't figured out how to fix
             match pkt {
                 Ok(pkt) => {
                     let _hash = pkt.sloppy_hash();
@@ -337,6 +371,14 @@ impl std::fmt::Display for ConnectionKey {
     }
 }
 
+/***
+ * Maintain the state for a bunch of connections.   Also, cache some information
+ * that doesn't change often, e.g. ,the local IP addresses and listen port of
+ * the webserver so we don't need to get the information from the WebServerContext every
+ * packet.  The assumption is that if that information changes (e.g., new IP address),
+ * then we would spin up new ConnectionTracker instances.
+ */
+
 struct ConnectionTracker<R>
 where
     R: RawSocketWriter,
@@ -344,34 +386,55 @@ where
     context: Context,
     connections: HashMap<ConnectionKey, Connection>,
     local_addrs: HashSet<IpAddr>,
+    local_tcp_ports: HashSet<u16>,
     raw_sock: R,
 }
 impl<R> ConnectionTracker<R>
 where
     R: RawSocketWriter,
 {
-    fn new(context: Context, local_addrs: HashSet<IpAddr>, raw_sock: R) -> ConnectionTracker<R> {
+    async fn new(
+        context: Context,
+        local_addrs: HashSet<IpAddr>,
+        raw_sock: R,
+    ) -> ConnectionTracker<R> {
+        let mut local_tcp_ports = HashSet::new();
+        local_tcp_ports.insert(context.read().await.local_tcp_listen_port);
         ConnectionTracker {
             context,
             connections: HashMap::new(),
             local_addrs,
+            local_tcp_ports,
             raw_sock,
         }
     }
 
     fn add(&mut self, packet: OwnedParsedPacket) {
-        if let Some(key) = packet.to_connection_key(&self.local_addrs) {
+        if let Some((key, src_is_local)) =
+            packet.to_connection_key(&self.local_addrs, &self.local_tcp_ports)
+        {
             if let Some(connection) = self.connections.get_mut(&key) {
-                connection.update(&self.context, packet, &mut self.raw_sock, &key)
+                connection.update(
+                    &self.context,
+                    packet,
+                    &mut self.raw_sock,
+                    &key,
+                    src_is_local,
+                )
             } else {
-                self.new_connection(packet, key)
+                self.new_connection(packet, key, src_is_local)
             }
         }
         // if we got here, the packet didn't have enough info to be called a 'connection'
         // just return and move on for now
     }
 
-    fn new_connection(&mut self, packet: OwnedParsedPacket, key: ConnectionKey) {
+    fn new_connection(
+        &mut self,
+        packet: OwnedParsedPacket,
+        key: ConnectionKey,
+        src_is_local: bool,
+    ) {
         let mut connection = Connection {
             local_syn: None,
             remote_syn: None,
@@ -383,7 +446,13 @@ where
         };
         info!("Tracking new connection: {}", &key);
 
-        connection.update(&self.context, packet, &mut self.raw_sock, &key);
+        connection.update(
+            &self.context,
+            packet,
+            &mut self.raw_sock,
+            &key,
+            src_is_local,
+        );
         self.connections.insert(key, connection);
     }
 }
@@ -405,11 +474,11 @@ impl Connection {
         context: &Context,
         packet: OwnedParsedPacket,
         raw_sock: &mut R,
-        key: &ConnectionKey,
+        _key: &ConnectionKey,
+        src_is_local: bool,
     ) where
         R: RawSocketWriter,
     {
-        let src_is_local = Connection::src_is_local(&packet, key);
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
                 if src_is_local {
@@ -419,17 +488,6 @@ impl Connection {
                 }
             }
             _ => warn!("Got Connection::update() for non-TCP packet - ignoring for now"),
-        }
-    }
-
-    /**
-     * Should be able to cache this somehow - TODO: rethink
-     */
-    fn src_is_local(packet: &OwnedParsedPacket, key: &ConnectionKey) -> bool {
-        match &packet.ip {
-            Some(IpHeader::Version4(ip4, _)) => IpAddr::from(ip4.source) == key.local_ip,
-            Some(IpHeader::Version6(ip6, _)) => IpAddr::from(ip6.source) == key.local_ip,
-            None => false,
         }
     }
 
@@ -627,4 +685,58 @@ pub async fn bind_writable_pcap(context: &Context) -> Result<impl RawSocketWrite
     let device = context.read().await.pcap_device.clone();
     let cap = Capture::from_device(device)?.open()?;
     Ok(PcapRawSocketWriter::new(cap))
+}
+
+#[cfg(test)]
+mod test {
+    use std::str::FromStr;
+
+    use super::*;
+
+    use crate::in_band_probe::test::test_tcp_packet_ports;
+
+    /**
+     *  ConnectionKey should be a direction agnostic key for mapping packets
+     * to a flow identifier.  but, the logic around "is the src of the packet"
+     * from the "local process" is complicated - test all of the permutations
+     */
+    #[tokio::test]
+    async fn src_is_local() {
+        let local_ip = IpAddr::from_str("192.168.1.1").unwrap();
+        let remote_ip = IpAddr::from_str("192.168.1.2").unwrap();
+        let localhost_ip = IpAddr::from_str("127.0.0.1").unwrap();
+        let mut local_addrs = HashSet::new();
+        local_addrs.insert(local_ip);
+        local_addrs.insert(localhost_ip); // both the local ip and the localhost ip are 'local'
+        let mut local_tcp_ports = HashSet::new();
+        local_tcp_ports.insert(3030);
+
+        let local_pkt = test_tcp_packet_ports(local_ip, remote_ip, 21, 12345);
+        let (l_key, src_is_local) = local_pkt
+            .to_connection_key(&local_addrs, &local_tcp_ports)
+            .unwrap();
+        assert!(src_is_local);
+
+        let remote_pkt = test_tcp_packet_ports(remote_ip, local_ip, 12345, 21);
+        let (r_key, src_is_local) = remote_pkt
+            .to_connection_key(&local_addrs, &local_tcp_ports)
+            .unwrap();
+        assert!(!src_is_local);
+
+        assert_eq!(l_key, r_key);
+
+        let local_localhost_pkt = test_tcp_packet_ports(localhost_ip, localhost_ip, 3030, 12345);
+        let (ll_key, src_is_local) = local_localhost_pkt
+            .to_connection_key(&local_addrs, &local_tcp_ports)
+            .unwrap();
+        assert!(src_is_local);
+
+        let remote_localhost_pkt = test_tcp_packet_ports(localhost_ip, localhost_ip, 12345, 3030);
+        let (rl_key, src_is_local) = remote_localhost_pkt
+            .to_connection_key(&local_addrs, &local_tcp_ports)
+            .unwrap();
+        assert!(!src_is_local);
+
+        assert_eq!(ll_key, rl_key);
+    }
 }

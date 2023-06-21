@@ -72,25 +72,39 @@ pub fn tcp_inband_probe(
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
+    use std::{net::IpAddr, str::FromStr};
+
     use super::*;
     use etherparse::PacketBuilder;
 
     use crate::pcap::{MockRawSocketWriter, OwnedParsedPacket};
 
-    fn test_tcp_packet() -> OwnedParsedPacket {
+    pub fn test_tcp_packet(src_ip: IpAddr, dst_ip: IpAddr) -> OwnedParsedPacket {
+        test_tcp_packet_ports(src_ip, dst_ip, 21, 1234)
+    }
+
+    pub fn test_tcp_packet_ports(
+        src_ip: IpAddr,
+        dst_ip: IpAddr,
+        tcp_src: u16,
+        tcp_dst: u16,
+    ) -> OwnedParsedPacket {
         let builder = PacketBuilder::ethernet2(
             [1, 2, 3, 4, 5, 6], //source mac
             [7, 8, 9, 10, 11, 12],
         ) //destionation mac
-        .ipv4(
-            [192, 168, 1, 1], //source ip
-            [192, 168, 1, 2], //desitionation ip
-            20,
-        ) //time to life
-        .tcp(
-            21, //source port
-            1234, 0, 50000,
+        ;
+        let builder = match (src_ip, dst_ip) {
+            (IpAddr::V4(s), IpAddr::V4(d)) => builder.ipv4(s.octets(), d.octets(), 20), //time to life
+            (IpAddr::V6(s), IpAddr::V6(d)) => builder.ipv6(s.octets(), d.octets(), 20),
+            (IpAddr::V6(_), IpAddr::V4(_)) | (IpAddr::V4(_), IpAddr::V6(_)) => {
+                panic!("Mismatched v4 and v6 src/dst : {} vs {}", src_ip, dst_ip)
+            }
+        };
+        let builder = builder.tcp(
+            tcp_src, //source port
+            tcp_dst, 0, 50000,
         ); //desitnation port
            // make a decent sized payload
         let payload = vec![0; 128];
@@ -112,7 +126,10 @@ mod test {
     async fn test_inband_tcp_probes() {
         let mut mock_raw_sock = MockRawSocketWriter::new();
         assert_eq!(mock_raw_sock.captured.len(), 0);
-        let packet = test_tcp_packet();
+        let packet = test_tcp_packet(
+            IpAddr::from_str("192.168.1.1").unwrap(),
+            IpAddr::from_str("192.168.1.2").unwrap(),
+        );
         let context = crate::context::test::make_test_context();
 
         tcp_inband_probe(context, packet, &mut mock_raw_sock).unwrap();
