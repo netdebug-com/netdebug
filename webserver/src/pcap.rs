@@ -274,6 +274,12 @@ impl OwnedParsedPacket {
     ) -> Option<(ConnectionKey, bool)> {
         None
     }
+
+    #[cfg(test)]
+    fn try_from(pkt: pcap::Packet) -> Result<OwnedParsedPacket, Box<dyn Error>> {
+        let parsed = etherparse::PacketHeaders::from_ethernet_slice(pkt.data)?;
+        Ok(OwnedParsedPacket::new(parsed, pkt.header.clone()))
+    }
 }
 
 struct PacketParserCodec {}
@@ -457,7 +463,7 @@ where
     }
 }
 
-type TtlValue = u8;
+type ProbeId = u8;
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub local_syn: Option<OwnedParsedPacket>,
@@ -465,8 +471,8 @@ pub struct Connection {
     pub local_seq: Option<u32>,
     pub local_ack: Option<u32>,
     pub local_data: Option<Vec<u8>>, // data sent for retransmits
-    pub outgoing_probe_timestamps: HashMap<TtlValue, HashSet<OwnedParsedPacket>>,
-    pub incoming_reply_timestamps: HashMap<TtlValue, HashSet<OwnedParsedPacket>>,
+    pub outgoing_probe_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
+    pub incoming_reply_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
 }
 impl Connection {
     fn update<R>(
@@ -507,7 +513,7 @@ impl Connection {
         &self,
         src_is_local: bool,
         packet: &OwnedParsedPacket,
-    ) -> Option<TtlValue> {
+    ) -> Option<ProbeId> {
         // any packet with a small payload is a probe
         if packet.payload.len() <= PROBE_MAX_TTL as usize {
             if src_is_local {
@@ -693,8 +699,8 @@ mod test {
 
     use super::*;
 
+    use crate::context::test::make_test_context;
     use crate::in_band_probe::test::test_tcp_packet_ports;
-
     /**
      *  ConnectionKey should be a direction agnostic key for mapping packets
      * to a flow identifier.  but, the logic around "is the src of the packet"
@@ -738,5 +744,37 @@ mod test {
         assert!(!src_is_local);
 
         assert_eq!(ll_key, rl_key);
+    }
+
+    #[tokio::test]
+    async fn connection_tracker_one_flow() {
+        let context = make_test_context();
+        let raw_sock = MockRawSocketWriter::new();
+        let mut local_addrs = HashSet::new();
+        let localhost_ip = IpAddr::from_str("127.0.0.1").unwrap();
+        local_addrs.insert(localhost_ip);
+        let mut connection_tracker = ConnectionTracker::new(context, local_addrs, raw_sock).await;
+
+        let mut capture =
+            pcap::Capture::from_file("tests/simple_websocket_cleartxt_out_probes.pcap").unwrap();
+        // take all of the packets in the capture and pipe them into the connection tracker
+        while let Ok(pkt) = capture.next_packet() {
+            let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            connection_tracker.add(owned_pkt);
+        }
+        assert_eq!(connection_tracker.connections.len(), 1);
+        let connection = connection_tracker.connections.values().next().unwrap();
+        // TODO; verify more about these pkts
+        let _local_syn = connection.local_syn.as_ref().unwrap();
+        let _remote_syn = connection.remote_syn.as_ref().unwrap();
+
+        // verify we captured each of the outgoing probes
+        assert_eq!(
+            connection.outgoing_probe_timestamps.len(),
+            PROBE_MAX_TTL as usize
+        );
+        for probes in connection.outgoing_probe_timestamps.values() {
+            assert_eq!(probes.len(), 1);
+        }
     }
 }
