@@ -4,11 +4,12 @@ use std::{
     net::IpAddr,
 };
 
-use crate::in_band_probe::tcp_inband_probe;
+use crate::in_band_probe::{tcp_inband_probe, PROBE_MAX_TTL};
 use etherparse::{IpHeader, IpNumber, TcpHeader, TransportHeader};
 use futures_util::StreamExt;
 use log::{info, warn};
 use pcap::Capture;
+use std::hash::{Hash, Hasher};
 
 use crate::context::Context;
 
@@ -23,7 +24,7 @@ use crate::context::Context;
  * If performancec becomes an issue, we'll probably have to rewrite
  * all of this with, e.g., AF_XDP anyway
  */
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[allow(dead_code)]
 pub struct OwnedParsedPacket {
     // timestamp and other capture info
@@ -38,6 +39,19 @@ pub struct OwnedParsedPacket {
     pub transport: Option<etherparse::TransportHeader>,
     /// Rest of the packet that could not be decoded as a header (usually the payload).
     pub payload: Vec<u8>,
+}
+
+/**
+ * Need to implement this by hand b/c a bunch of the underlying data
+ * doesn't implement hash itself
+ *
+ * Kinda annoying - will need to make this more complete if we use
+ * this for more than just the HashMap() packet tracking
+ */
+impl Hash for OwnedParsedPacket {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.sloppy_hash().hash(state);
+    }
 }
 
 impl OwnedParsedPacket {
@@ -253,6 +267,16 @@ impl pcap::PacketCodec for PacketParserCodec {
     }
 }
 
+/**
+ * Main control loop for reading raw packets, currently from libpcap
+ *
+ * Use this to punt packets to the connection ConnectionTracker
+ *
+ * This is setup to have many parallel connection trackers to achieve
+ * parallelism with the hash/sloppy_hash(), but it's not implemented
+ * yet.
+ */
+
 pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
     let device = context.read().await.pcap_device.clone();
 
@@ -344,6 +368,8 @@ where
             local_seq: None,
             local_ack: None,
             local_data: None,
+            outgoing_probe_timestamps: HashMap::new(),
+            incoming_reply_timestamps: HashMap::new(),
         };
         info!("Tracking new connection: {}", &key);
 
@@ -352,6 +378,7 @@ where
     }
 }
 
+type TtlValue = u8;
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub local_syn: Option<OwnedParsedPacket>,
@@ -359,6 +386,8 @@ pub struct Connection {
     pub local_seq: Option<u32>,
     pub local_ack: Option<u32>,
     pub local_data: Option<Vec<u8>>, // data sent for retransmits
+    pub outgoing_probe_timestamps: HashMap<TtlValue, HashSet<OwnedParsedPacket>>,
+    pub incoming_reply_timestamps: HashMap<TtlValue, HashSet<OwnedParsedPacket>>,
 }
 impl Connection {
     fn update<R>(
@@ -392,6 +421,46 @@ impl Connection {
             Some(IpHeader::Version6(ip6, _)) => IpAddr::from(ip6.source) == key.local_ip,
             None => false,
         }
+    }
+
+    /**
+     * To avoid storing copies of all data, particularly in a high-speed connection,
+     * we need a heuristic to separate outgoing probe packets and incoming incoming_reply_timestamps
+     * from regular traffic...
+     * .. but one that isn't obviously different enought to concern an IDS.
+     *
+     * It's performance issue if we mark too many packets as probes, so err on the
+     * inclusive side and just say "any packet with a small payload" is a probe.
+     *
+     * Use the payload length to encode the probe ID/ttl
+     */
+
+    fn is_probe_heuristic(
+        &self,
+        src_is_local: bool,
+        packet: &OwnedParsedPacket,
+    ) -> Option<TtlValue> {
+        // any packet with a small payload is a probe
+        if packet.payload.len() <= PROBE_MAX_TTL as usize {
+            if src_is_local {
+                // for outgoing packets, the TTL of the probe is the ttl of the outer packet
+                let ttl = match &packet.ip {
+                    None => None, // no IP header, not a probe
+                    Some(IpHeader::Version4(ip4, _)) => Some(ip4.time_to_live),
+                    Some(IpHeader::Version6(ip6, _)) => Some(ip6.hop_limit),
+                };
+                if let Some(t) = ttl {
+                    if t > PROBE_MAX_TTL {
+                        return None; // can't have a probe with a ttl larger than we would send
+                    }
+                }
+                return ttl; // else assume the heuristicis correct
+            }
+        } else {
+            // TODO: need to parse into the packet to extract the encapped payload and thus the probe ID
+            return None;
+        }
+        None
     }
 
     fn update_tcp_local<R>(
@@ -428,7 +497,16 @@ impl Connection {
                 tcp_inband_probe(context_clone, packet_clone, raw_sock).unwrap();
             }
         }
-
+        if let Some(ttl) = self.is_probe_heuristic(true, packet) {
+            // there's some super clean rust-ish way to compress this; don't care for now
+            if let Some(probes) = self.outgoing_probe_timestamps.get_mut(&ttl) {
+                probes.insert(packet.clone());
+            } else {
+                let mut probes = HashSet::new();
+                probes.insert(packet.clone());
+                self.outgoing_probe_timestamps.insert(ttl, probes);
+            }
+        }
         // TODO: look for outgoing selective acks (indicates packet loss)
     }
 

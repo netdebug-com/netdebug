@@ -8,6 +8,7 @@ use crate::{
     pcap::{OwnedParsedPacket, RawSocketWriter},
 };
 
+pub(crate) const PROBE_MAX_TTL: u8 = 16;
 /**
  * Create a bunch of packets with the same local/remote five tuple
  * that look like retransmited data but are in fact probe packets
@@ -23,7 +24,7 @@ pub fn tcp_inband_probe(
 ) -> Result<(), Box<dyn Error>> {
     let l2 = packet.link.as_ref().unwrap();
     // build up probes
-    let probes: Vec<Vec<u8>> = (1..=16)
+    let probes: Vec<Vec<u8>> = (1..=PROBE_MAX_TTL)
         .map(|ttl| {
             let builder = etherparse::PacketBuilder::ethernet2(l2.source, l2.destination);
             let ip_header = packet.ip.as_ref().unwrap();
