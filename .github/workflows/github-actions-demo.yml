@@ -24,7 +24,7 @@ jobs:
           cargo build --all-features --verbose
       - name: Test
         run: |
-          cargo test --verbose
+          RUST_BACKTRACE=1 cargo test --verbose
       - run: echo "🍏 This job's status is ${{ job.status }}."
 
 
