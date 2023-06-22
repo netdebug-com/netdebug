@@ -4,7 +4,10 @@ use std::{
     net::IpAddr,
 };
 
-use crate::in_band_probe::{tcp_inband_probe, PROBE_MAX_TTL};
+use crate::{
+    in_band_probe::{tcp_inband_probe, PROBE_MAX_TTL},
+    utils::etherparse_ipheaders2ipaddr,
+};
 use etherparse::{IpHeader, IpNumber, TcpHeader, TransportHeader};
 use futures_util::StreamExt;
 use log::{info, warn};
@@ -227,14 +230,20 @@ impl OwnedParsedPacket {
                     source_is_local, // TODO: figure out UDP + src_ip == dst_ip case
                 ))
             }
-            Some(Icmpv4(icmp4)) => self.to_icmp4_connection_key(icmp4),
-            Some(Icmpv6(icmp6)) => self.to_icmp6_connection_key(icmp6),
+            Some(Icmpv4(icmp4)) => {
+                self.to_icmp4_connection_key(icmp4, local_addrs, local_tcp_ports)
+            }
+            Some(Icmpv6(icmp6)) => {
+                self.to_icmp6_connection_key(icmp6, local_addrs, local_tcp_ports)
+            }
         }
     }
 
     fn to_icmp4_connection_key(
         &self,
         icmp4: &etherparse::Icmpv4Header,
+        local_addrs: &HashSet<IpAddr>,
+        local_tcp_ports: &HashSet<u16>,
     ) -> Option<(ConnectionKey, bool)> {
         use etherparse::Icmpv4Type::*;
         match &icmp4.icmp_type {
@@ -244,41 +253,159 @@ impl OwnedParsedPacket {
                 bytes5to8: _,
             } => None,
             EchoReply(_) => None,
-            DestinationUnreachable(_d) => self.to_icmp_payload_connection_key(),
+            DestinationUnreachable(_d) => {
+                self.to_icmp_payload_connection_key(local_addrs, local_tcp_ports)
+            }
             Redirect(_) => todo!(),
             EchoRequest(_) => None,
-            TimeExceeded(_) => self.to_icmp_payload_connection_key(),
+            TimeExceeded(_) => self.to_icmp_payload_connection_key(local_addrs, local_tcp_ports),
             ParameterProblem(_) => None,
             TimestampRequest(_) => None,
             TimestampReply(_) => None,
         }
     }
 
-    fn to_icmp_payload_connection_key(&self) -> Option<(ConnectionKey, bool)> {
+    /**
+     * Look at the packet embedded in the ICMP{v4,v6} payload, parse it,
+     * and return the key for the matching flow
+     *
+     * Should work for both v4 and v6 packets - crazy
+     */
+    fn to_icmp_payload_connection_key(
+        &self,
+        local_addrs: &HashSet<IpAddr>,
+        local_tcp_ports: &HashSet<u16>,
+    ) -> Option<(ConnectionKey, bool)> {
         match etherparse::PacketHeaders::from_ip_slice(&self.payload) {
-            Err(e) => {
-                warn!("Unparsed inner ICMP packet - skipping - {}", e);
-                None
+            Err(e1) => {
+                // if the embedded packet is TCP, then we don't get the full
+                // TCP header, only 8 bytes which is enough to recreate the
+                // connection key.  Just manually parse and fake the rest
+                match IpHeader::from_slice(&self.payload) {
+                    Ok((ip, ip_proto, l4)) => {
+                        if l4.len() < 4 {
+                            return None; // ICMP standard is >= 8, so we should have at least 4 but oh well...
+                        }
+                        // unwrap here should be ok: Ip parsed and it's not None
+                        let (sip, dip) = etherparse_ipheaders2ipaddr(Some(ip)).unwrap();
+                        // extract the dst/src port in the packet; already verified length is there
+                        // rust tries to make this hard - maybe someone smarter could do this cleaner :-/
+                        let sport_bytes = <&[u8; 2]>::try_from(&l4[0..=1]).unwrap();
+                        let sport = u16::from_be_bytes(*sport_bytes);
+                        let dport_bytes = <&[u8; 2]>::try_from(&l4[2..=3]).unwrap();
+                        let dport = u16::from_be_bytes(*dport_bytes);
+
+                        Some((
+                            ConnectionKey {
+                                local_ip: sip,
+                                remote_ip: dip,
+                                local_l4_port: sport,
+                                remote_l4_port: dport,
+                                ip_proto,
+                            },
+                            false,
+                        ))
+                    }
+                    Err(e) => {
+                        warn!("Tried hard but Unparsed inner ICMP packet - skipping - first try: {}, second: {}", e1, e);
+                        None
+                    }
+                }
             }
-            Ok(_embedded) => {
-                // TODO : properly extract this and map to a key
-                // for now, just punt and come back later
-                None
+            Ok(embedded) => {
+                // NOTE: Source NAT's are smart enough that if there is
+                // an ICMP reply for a source NAT'd IP, it will parse into
+                // the ICMP embedded packet and rewrite that BACK to the
+                // original/local IP.  Net net - this check doesn't need
+                // to know about the external/global IP even though that's
+                // what was on the packet when it's TTL expired - crazy
+
+                // Make this PacketHeader look like an OwnedParsedPacket to
+                // recursively re-use the to_connection_key() logic.  But
+                // NOTE that the returned src_is_local logic will be wrong
+                let owned = OwnedParsedPacket {
+                    pcap_header: pcap::PacketHeader {
+                        ts: libc::timeval {
+                            tv_sec: 0,
+                            tv_usec: 0,
+                        },
+                        caplen: 0,
+                        len: 0,
+                    },
+                    link: None,
+                    vlan: None,
+                    ip: embedded.ip,
+                    transport: embedded.transport,
+                    payload: embedded.payload.to_vec(),
+                };
+                match owned.to_connection_key(local_addrs, local_tcp_ports) {
+                    Some((key, _src_is_local)) => {
+                        // TODO: I can't convince myself there isn't a bug
+                        // here if the src actually sources an ICMP message
+                        // rather than just receives it.. maybe add a test?
+                        // For now, just hard code the common case where an
+                        // ICMP reply seen at the src should be either from
+                        // the remote or for a connection we're not tracking
+                        // e.g., like a locally running `ping`
+                        Some((key, false))
+                    }
+                    None => {
+                        warn!(
+                            "Failed to parse a key out of an embedded ICMP pkt: {:?}",
+                            self
+                        );
+                        None
+                    }
+                }
             }
         }
     }
 
     fn to_icmp6_connection_key(
         &self,
-        _icmp6: &etherparse::Icmpv6Header,
+        icmp6: &etherparse::Icmpv6Header,
+        local_addrs: &HashSet<IpAddr>,
+        local_tcp_ports: &HashSet<u16>,
     ) -> Option<(ConnectionKey, bool)> {
-        None
+        match icmp6.icmp_type {
+            etherparse::Icmpv6Type::ParameterProblem(_)
+            | etherparse::Icmpv6Type::TimeExceeded(_)
+            | etherparse::Icmpv6Type::PacketTooBig { mtu: _ }
+            | etherparse::Icmpv6Type::DestinationUnreachable(_) => {
+                self.to_icmp_payload_connection_key(local_addrs, local_tcp_ports)
+            }
+            // no embedded packet for these types
+            etherparse::Icmpv6Type::Unknown {
+                type_u8: _,
+                code_u8: _,
+                bytes5to8: _,
+            } => None,
+            etherparse::Icmpv6Type::EchoRequest(_) => None,
+            etherparse::Icmpv6Type::EchoReply(_) => None,
+        }
     }
 
     #[cfg(test)]
     fn try_from(pkt: pcap::Packet) -> Result<OwnedParsedPacket, Box<dyn Error>> {
         let parsed = etherparse::PacketHeaders::from_ethernet_slice(pkt.data)?;
         Ok(OwnedParsedPacket::new(parsed, pkt.header.clone()))
+    }
+
+    #[cfg(test)]
+    /**
+     * Utility to simplify testing - don't use in real code
+     */
+    fn try_from_fake_time(pkt: Vec<u8>) -> Result<OwnedParsedPacket, Box<dyn Error>> {
+        let pcap_header = pcap::PacketHeader {
+            ts: libc::timeval {
+                tv_sec: 0,
+                tv_usec: 0,
+            },
+            caplen: pkt.len() as u32,
+            len: pkt.len() as u32,
+        };
+        let parsed = etherparse::PacketHeaders::from_ethernet_slice(&pkt)?;
+        Ok(OwnedParsedPacket::new(parsed, pcap_header))
     }
 }
 
@@ -776,5 +903,46 @@ mod test {
         for probes in connection.outgoing_probe_timestamps.values() {
             assert_eq!(probes.len(), 1);
         }
+    }
+
+    #[tokio::test]
+    /**
+     * Make sure a probe and the corresponding ICMPv4 reply map to the same
+     * connection key and the src_is_local logic is correct for both
+     */
+    async fn icmp_to_connection_key() {
+        pretty_env_logger::init();
+
+        let mut local_addrs = HashSet::new();
+        local_addrs.insert(IpAddr::from_str("172.31.2.61").unwrap());
+        let mut local_tcp_ports = HashSet::new();
+        local_tcp_ports.insert(3030);
+        let probe = OwnedParsedPacket::try_from_fake_time(vec![
+            0x06, 0x25, 0x76, 0xbf, 0x7a, 0x4f, 0x06, 0x2e, 0x63, 0x19, 0xe4, 0xd3, 0x08, 0x00,
+            0x45, 0x00, 0x00, 0x2a, 0x00, 0x00, 0x40, 0x00, 0x02, 0x06, 0x75, 0xfb, 0xac, 0x1f,
+            0x02, 0x3d, 0x4b, 0x0b, 0x09, 0x6c, 0x01, 0xbb, 0xa1, 0x0e, 0x13, 0x87, 0x86, 0x22,
+            0x00, 0x00, 0x00, 0x00, 0x50, 0x00, 0x01, 0xe6, 0x26, 0x62, 0x00, 0x00, 0x48, 0x54,
+        ])
+        .unwrap();
+
+        let icmp_reply = OwnedParsedPacket::try_from_fake_time(vec![
+            0x06, 0x2e, 0x63, 0x19, 0xe4, 0xd3, 0x06, 0x25, 0x76, 0xbf, 0x7a, 0x4f, 0x08, 0x00,
+            0x45, 0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x00, 0xf5, 0x01, 0x56, 0x0b, 0x34, 0x5d,
+            0x8d, 0x00, 0xac, 0x1f, 0x02, 0x3d, 0x0b, 0x00, 0xb8, 0x8c, 0x00, 0x00, 0x00, 0x00,
+            0x45, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x40, 0x00, 0x01, 0x06, 0x76, 0xf6, 0xac, 0x1f,
+            0x02, 0x3d, 0x4b, 0x0b, 0x09, 0x6c, 0x01, 0xbb, 0xa1, 0x0e, 0x13, 0x87, 0x86, 0x22,
+        ])
+        .unwrap();
+        let (probe_key, src_is_local) = probe
+            .to_connection_key(&local_addrs, &local_tcp_ports)
+            .unwrap();
+        assert!(src_is_local);
+
+        let (reply_key, src_is_local) = icmp_reply
+            .to_connection_key(&local_addrs, &local_tcp_ports)
+            .unwrap();
+        assert!(!src_is_local);
+
+        assert_eq!(probe_key, reply_key);
     }
 }
