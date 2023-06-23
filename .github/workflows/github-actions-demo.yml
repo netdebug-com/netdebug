@@ -24,7 +24,9 @@ jobs:
           cargo build --all-features --verbose
       - name: Test
         run: |
-          RUST_BACKTRACE=1 cargo test --verbose
+          wasm-pack build webserver/web-client && RUST_BACKTRACE=1 cargo test --verbose
+          # FIXME 'cargo test' alone doesn't correctly depend on the wasm-pack tool
+          # but for now, just manually work around
       - run: echo "🍏 This job's status is ${{ job.status }}."
 
 
