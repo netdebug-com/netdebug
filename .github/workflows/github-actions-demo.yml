@@ -19,14 +19,12 @@ jobs:
                 version: 'latest'
       - name: Install libpcap
         run: sudo apt-get install libpcap-dev
-      - name: Build
+      - name: Build and Test
         run: |
-          cargo build --all-features --verbose
-      - name: Test
-        run: |
-          wasm-pack build webserver/web-client && RUST_BACKTRACE=1 cargo test --verbose
-          # FIXME 'cargo test' alone doesn't correctly depend on the wasm-pack tool
-          # but for now, just manually work around
+          cargo build --all-features --verbose && cargo test
+          # FIXME 'cargo test' without 'cargo build' doesn't work as
+          # it does not correctly depend on the wasm-pack tool
+          # but for now, just manually work around by doing both in same step
       - run: echo "🍏 This job's status is ${{ job.status }}."
 
 
