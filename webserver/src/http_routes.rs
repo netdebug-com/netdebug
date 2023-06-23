@@ -332,6 +332,6 @@ mod test {
         let body = resp.body().escape_ascii().to_string();
         // verify we get the login page, no matter what we ask for
         println!("Body = {}", body);
-        assert!(body.contains("let wasm;"));
+        assert!(body.contains("web_client_bg.wasm"));
     }
 }
