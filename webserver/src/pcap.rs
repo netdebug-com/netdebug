@@ -8,10 +8,12 @@ use crate::{
     in_band_probe::{tcp_inband_probe, PROBE_MAX_TTL},
     utils::etherparse_ipheaders2ipaddr,
 };
-use etherparse::{IpHeader, IpNumber, TcpHeader, TransportHeader};
+use etherparse::{
+    Icmpv4Header, Icmpv6Header, IpHeader, IpNumber, TcpHeader, TransportHeader, UdpHeader,
+};
 use futures_util::StreamExt;
 use log::{info, warn};
-use pcap::Capture;
+use pcap::{Capture, PacketHeader};
 use std::hash::{Hash, Hasher};
 
 use crate::context::Context;
@@ -277,6 +279,7 @@ impl OwnedParsedPacket {
         local_tcp_ports: &HashSet<u16>,
     ) -> Option<(ConnectionKey, bool)> {
         match etherparse::PacketHeaders::from_ip_slice(&self.payload) {
+            // case #1 - we didn't find a full packet
             Err(e1) => {
                 // if the embedded packet is TCP, then we don't get the full
                 // TCP header, only 8 bytes which is enough to recreate the
@@ -312,6 +315,7 @@ impl OwnedParsedPacket {
                     }
                 }
             }
+            // we did find a full packet
             Ok(embedded) => {
                 // NOTE: Source NAT's are smart enough that if there is
                 // an ICMP reply for a source NAT'd IP, it will parse into
@@ -382,6 +386,121 @@ impl OwnedParsedPacket {
             } => None,
             etherparse::Icmpv6Type::EchoRequest(_) => None,
             etherparse::Icmpv6Type::EchoReply(_) => None,
+        }
+    }
+
+    /**
+     * Take a partial L3/IP packet, e.g., like one embedded in an ICMP response, and try
+     * our best to parse as much of it as we can
+     *
+     * If we can reconstruct a packet, return it AND a bool for whether it's a
+     * full packet or not.  A false return value implies that fields past 8 bytes
+     * into the TCP header are all zero and should be ignored.
+     *
+     * Error out if we can't at least figure out the IP and L4 pieces
+     */
+
+    fn from_partial_embedded_ip_packet(
+        buf: &[u8],
+        pcap_header: Option<pcap::PacketHeader>,
+    ) -> Result<(OwnedParsedPacket, bool), Box<dyn Error>> {
+        let pcap_header = match pcap_header {
+            Some(hdr) => hdr,
+            None => pcap::PacketHeader {
+                ts: libc::timeval {
+                    tv_sec: 0,
+                    tv_usec: 0,
+                },
+                caplen: buf.len() as u32,
+                len: buf.len() as u32,
+            },
+        };
+        match etherparse::PacketHeaders::from_ip_slice(buf) {
+            // case #1 - we didn't find a full packet
+            Err(e1) => {
+                // try to at least get an IP packet - fail if not
+                let (ip, ip_proto, l4) = IpHeader::from_slice(buf)?;
+                if l4.len() < 4 {
+                    return Err(
+                        pcap::Error::PcapError("Not even a full IP header".to_string()).into(),
+                    );
+                    // ICMP standard is >= 8, so we should have at least 4 but oh well...
+                }
+                if ip_proto != etherparse::ip_number::TCP {
+                    return Err(pcap::Error::PcapError(format!(
+                        "Failed partial read of ip-proto={} packet {:?}",
+                        ip_proto, buf
+                    ))
+                    .into());
+                }
+                // if the embedded packet is TCP (and only TCP), then we don't get the full
+                // TCP header, only 8 bytes which is enough to recreate the
+                // header.  Just manually parse and fake the rest
+                // extract the dst/src port in the packet; already verified length is there
+                // rust tries to make this hard - maybe someone smarter could do this cleaner :-/
+                let sport_bytes = <&[u8; 2]>::try_from(&l4[0..=1]).unwrap();
+                let sport = u16::from_be_bytes(*sport_bytes);
+                let dport_bytes = <&[u8; 2]>::try_from(&l4[2..=3]).unwrap();
+                let dport = u16::from_be_bytes(*dport_bytes);
+                let seq_bytes = <&[u8; 4]>::try_from(&l4[4..=8]).unwrap();
+                let seq = u32::from_be_bytes(*seq_bytes);
+
+                let tcph = TcpHeader {
+                    source_port: sport,
+                    destination_port: dport,
+                    sequence_number: seq,
+                    acknowledgment_number: 0,
+                    _data_offset: 0,
+                    ns: None,
+                    fin: todo!(),
+                    syn: todo!(),
+                    rst: todo!(),
+                    psh: todo!(),
+                    ack: todo!(),
+                    urg: todo!(),
+                    ece: todo!(),
+                    cwr: todo!(),
+                    window_size: todo!(),
+                    checksum: todo!(),
+                    urgent_pointer: todo!(),
+                    options_buffer: todo!(),
+                };
+                Ok((
+                    OwnedParsedPacket {
+                        pcap_header,
+                        link: None,
+                        vlan: None,
+                        ip: Some(ip),
+                        transport: Some(TransportHeader::Tcp(tcph)),
+                        payload: Vec::new(), // zero length
+                    },
+                    false,
+                ))
+            }
+            // we did find a full packet - easy case without parital reconstruction
+            Ok(embedded) => {
+                // NOTE: Source NAT's are smart enough that if there is
+                // an ICMP reply for a source NAT'd IP, it will parse into
+                // the ICMP embedded packet and rewrite that BACK to the
+                // original/local IP.  Net net - this check doesn't need
+                // to know about the external/global IP even though that's
+                // what was on the packet when it's TTL expired - crazy
+
+                // Make this PacketHeader look like an OwnedParsedPacket to
+                // recursively re-use the to_connection_key() logic.  But
+                // NOTE that the returned src_is_local logic will be wrong
+                Ok((
+                    OwnedParsedPacket {
+                        pcap_header,
+                        link: None,
+                        vlan: None,
+                        ip: embedded.ip,
+                        transport: embedded.transport,
+                        payload: embedded.payload.to_vec(),
+                    },
+                    true,
+                ))
+            }
         }
     }
 
@@ -607,7 +726,7 @@ impl Connection {
         context: &Context,
         packet: OwnedParsedPacket,
         raw_sock: &mut R,
-        _key: &ConnectionKey,
+        key: &ConnectionKey,
         src_is_local: bool,
     ) where
         R: RawSocketWriter,
@@ -619,6 +738,19 @@ impl Connection {
                 } else {
                     self.update_tcp_remote(&packet, tcp);
                 }
+            }
+            Some(TransportHeader::Icmpv4(icmp4)) => {
+                if src_is_local {
+                    warn!(
+                        "Ignoring weird ICMP4 from our selves but for this connection: {} : {:?}",
+                        key, packet
+                    );
+                } else {
+                    self.update_icmp4_remote(context, &packet, icmp4);
+                }
+            }
+            Some(TransportHeader::Icmpv6(icmp6)) => {
+                todo!("Need to implement icmp6 handling")
             }
             _ => warn!("Got Connection::update() for non-TCP packet - ignoring for now"),
         }
@@ -716,6 +848,14 @@ impl Connection {
             self.remote_syn = Some(packet.clone()); // memcpy() but doesn't happen that much or with much data
         }
         // TODO: look for incoming selective acks (indicates packet loss)
+    }
+
+    fn update_icmp4_remote(
+        &self,
+        context: &Context,
+        packet: &OwnedParsedPacket,
+        icmp4: &etherparse::Icmpv4Header,
+    ) {
     }
 }
 
@@ -874,7 +1014,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn connection_tracker_one_flow() {
+    async fn connection_tracker_one_flow_outgoing() {
         let context = make_test_context();
         let raw_sock = MockRawSocketWriter::new();
         let mut local_addrs = HashSet::new();
@@ -907,10 +1047,62 @@ mod test {
 
     #[tokio::test]
     /**
+     * Follow a TCP stream with outgoing probes and incoming replies and make sure
+     * we can match them up to calculate RTTs, etc.
+     */
+    async fn connection_tracker_one_flow_out_and_in() {
+        let context = make_test_context();
+        let raw_sock = MockRawSocketWriter::new();
+        let mut local_addrs = HashSet::new();
+        let local_ip = IpAddr::from_str("172.31.2.61").unwrap();
+        local_addrs.insert(local_ip);
+        let mut local_tcp_ports = HashSet::new();
+        local_tcp_ports.insert(3030);
+        let mut connection_tracker =
+            ConnectionTracker::new(context, local_addrs.clone(), raw_sock).await;
+
+        let mut connection_key: Option<ConnectionKey> = None;
+        let mut capture =
+            pcap::Capture::from_file("tests/simple_websocket_cleartext_remote_probe_replies.pcap")
+                .unwrap();
+        // take all of the packets in the capture and pipe them into the connection tracker
+        while let Ok(pkt) = capture.next_packet() {
+            let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            let (key, _) = owned_pkt
+                .to_connection_key(&local_addrs, &local_tcp_ports)
+                .unwrap();
+            if let Some(prev_key) = connection_key {
+                assert_eq!(prev_key, key);
+            }
+            connection_key = Some(key);
+            connection_tracker.add(owned_pkt);
+        }
+        assert_eq!(connection_tracker.connections.len(), 1);
+        let connection = connection_tracker.connections.values().next().unwrap();
+        // TODO; verify more about these pkts
+        let _local_syn = connection.local_syn.as_ref().unwrap();
+        let _remote_syn = connection.remote_syn.as_ref().unwrap();
+
+        // verify we captured each of the outgoing probes
+        assert_eq!(
+            connection.outgoing_probe_timestamps.len(),
+            PROBE_MAX_TTL as usize
+        );
+        // verify we captured each of the incoming replies - note that we only got six replies!
+        assert_eq!(connection.incoming_reply_timestamps.len(), 6);
+        for probes in connection.outgoing_probe_timestamps.values() {
+            assert_eq!(probes.len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    /**
      * Make sure a probe and the corresponding ICMPv4 reply map to the same
      * connection key and the src_is_local logic is correct for both
+     *
+     * TODO: add ICMPv6 version of this test
      */
-    async fn icmp_to_connection_key() {
+    async fn icmp4_to_connection_key() {
         pretty_env_logger::init();
 
         let mut local_addrs = HashSet::new();
