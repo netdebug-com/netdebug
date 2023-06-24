@@ -88,6 +88,11 @@ fn make_webclient_route(
         .and_then(webclient)
     */
     // second pass, with no cookie checking
+    if !std::path::Path::new(wasm_root).is_dir() {
+        // if wasm-pack didn't run, just die horribly; otherwise
+        // we will just serve the wrong pages and it gets confusing
+        panic!("Wasm directory doesn't exist!? - {}", wasm_root);
+    }
     warp::path("webclient").and(warp::fs::dir(wasm_root.clone()))
 }
 
