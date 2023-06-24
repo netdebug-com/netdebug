@@ -2,8 +2,8 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() {
-    let dir = "webserver/web-client";
-    println!("cargo:rerun-if-changed={}/", dir);
+    println!("cargo:rerun-if-changed={}/", "webserver/web-client");
+    println!("cargo:rerun-if-changed={}/", "webserver/web-client/pkg");
     // don't write into the targets directory for now - figure that out later
     // let out_dir = env::var_os("OUT_DIR").unwrap();
     let dest_path = Path::new(&dir).join("pkg");
