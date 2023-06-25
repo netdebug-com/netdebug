@@ -4,16 +4,11 @@ use std::{
     net::IpAddr,
 };
 
-use crate::{
-    in_band_probe::{tcp_inband_probe, PROBE_MAX_TTL},
-    utils::etherparse_ipheaders2ipaddr,
-};
-use etherparse::{
-    Icmpv4Header, Icmpv6Header, IpHeader, IpNumber, TcpHeader, TransportHeader, UdpHeader,
-};
+use crate::in_band_probe::{tcp_inband_probe, PROBE_MAX_TTL};
+use etherparse::{IpHeader, IpNumber, TcpHeader, TransportHeader};
 use futures_util::StreamExt;
 use log::{info, warn};
-use pcap::{Capture, PacketHeader};
+use pcap::Capture;
 use std::hash::{Hash, Hasher};
 
 use crate::context::Context;
@@ -278,70 +273,13 @@ impl OwnedParsedPacket {
         local_addrs: &HashSet<IpAddr>,
         local_tcp_ports: &HashSet<u16>,
     ) -> Option<(ConnectionKey, bool)> {
-        match etherparse::PacketHeaders::from_ip_slice(&self.payload) {
-            // case #1 - we didn't find a full packet
-            Err(e1) => {
-                // if the embedded packet is TCP, then we don't get the full
-                // TCP header, only 8 bytes which is enough to recreate the
-                // connection key.  Just manually parse and fake the rest
-                match IpHeader::from_slice(&self.payload) {
-                    Ok((ip, ip_proto, l4)) => {
-                        if l4.len() < 4 {
-                            return None; // ICMP standard is >= 8, so we should have at least 4 but oh well...
-                        }
-                        // unwrap here should be ok: Ip parsed and it's not None
-                        let (sip, dip) = etherparse_ipheaders2ipaddr(Some(ip)).unwrap();
-                        // extract the dst/src port in the packet; already verified length is there
-                        // rust tries to make this hard - maybe someone smarter could do this cleaner :-/
-                        let sport_bytes = <&[u8; 2]>::try_from(&l4[0..=1]).unwrap();
-                        let sport = u16::from_be_bytes(*sport_bytes);
-                        let dport_bytes = <&[u8; 2]>::try_from(&l4[2..=3]).unwrap();
-                        let dport = u16::from_be_bytes(*dport_bytes);
-
-                        Some((
-                            ConnectionKey {
-                                local_ip: sip,
-                                remote_ip: dip,
-                                local_l4_port: sport,
-                                remote_l4_port: dport,
-                                ip_proto,
-                            },
-                            false,
-                        ))
-                    }
-                    Err(e) => {
-                        warn!("Tried hard but Unparsed inner ICMP packet - skipping - first try: {}, second: {}", e1, e);
-                        None
-                    }
-                }
+        match OwnedParsedPacket::from_partial_embedded_ip_packet(&self.payload, None) {
+            Err(e) => {
+                warn!("Unparsed packet: {} : {:?}", e, self.payload);
+                None
             }
-            // we did find a full packet
-            Ok(embedded) => {
-                // NOTE: Source NAT's are smart enough that if there is
-                // an ICMP reply for a source NAT'd IP, it will parse into
-                // the ICMP embedded packet and rewrite that BACK to the
-                // original/local IP.  Net net - this check doesn't need
-                // to know about the external/global IP even though that's
-                // what was on the packet when it's TTL expired - crazy
-
-                // Make this PacketHeader look like an OwnedParsedPacket to
-                // recursively re-use the to_connection_key() logic.  But
-                // NOTE that the returned src_is_local logic will be wrong
-                let owned = OwnedParsedPacket {
-                    pcap_header: pcap::PacketHeader {
-                        ts: libc::timeval {
-                            tv_sec: 0,
-                            tv_usec: 0,
-                        },
-                        caplen: 0,
-                        len: 0,
-                    },
-                    link: None,
-                    vlan: None,
-                    ip: embedded.ip,
-                    transport: embedded.transport,
-                    payload: embedded.payload.to_vec(),
-                };
+            Ok((owned, _full_packet)) => {
+                // ignore if we parsed the full packet - doesn't matter for key
                 match owned.to_connection_key(local_addrs, local_tcp_ports) {
                     Some((key, _src_is_local)) => {
                         // TODO: I can't convince myself there isn't a bug
@@ -428,8 +366,8 @@ impl OwnedParsedPacket {
                 }
                 if ip_proto != etherparse::ip_number::TCP {
                     return Err(pcap::Error::PcapError(format!(
-                        "Failed partial read of ip-proto={} packet {:?}",
-                        ip_proto, buf
+                        "Failed partial read of ip-proto={} packet {:?}: {}",
+                        ip_proto, buf, e1
                     ))
                     .into());
                 }
@@ -442,29 +380,10 @@ impl OwnedParsedPacket {
                 let sport = u16::from_be_bytes(*sport_bytes);
                 let dport_bytes = <&[u8; 2]>::try_from(&l4[2..=3]).unwrap();
                 let dport = u16::from_be_bytes(*dport_bytes);
-                let seq_bytes = <&[u8; 4]>::try_from(&l4[4..=8]).unwrap();
+                let seq_bytes = <&[u8; 4]>::try_from(&l4[4..=7]).unwrap();
                 let seq = u32::from_be_bytes(*seq_bytes);
 
-                let tcph = TcpHeader {
-                    source_port: sport,
-                    destination_port: dport,
-                    sequence_number: seq,
-                    acknowledgment_number: 0,
-                    _data_offset: 0,
-                    ns: None,
-                    fin: todo!(),
-                    syn: todo!(),
-                    rst: todo!(),
-                    psh: todo!(),
-                    ack: todo!(),
-                    urg: todo!(),
-                    ece: todo!(),
-                    cwr: todo!(),
-                    window_size: todo!(),
-                    checksum: todo!(),
-                    urgent_pointer: todo!(),
-                    options_buffer: todo!(),
-                };
+                let tcph = TcpHeader::new(sport, dport, seq, 0);
                 Ok((
                     OwnedParsedPacket {
                         pcap_header,
@@ -749,7 +668,7 @@ impl Connection {
                     self.update_icmp4_remote(context, &packet, icmp4);
                 }
             }
-            Some(TransportHeader::Icmpv6(icmp6)) => {
+            Some(TransportHeader::Icmpv6(_icmp6)) => {
                 todo!("Need to implement icmp6 handling")
             }
             _ => warn!("Got Connection::update() for non-TCP packet - ignoring for now"),
@@ -852,9 +771,9 @@ impl Connection {
 
     fn update_icmp4_remote(
         &self,
-        context: &Context,
-        packet: &OwnedParsedPacket,
-        icmp4: &etherparse::Icmpv4Header,
+        _context: &Context,
+        _packet: &OwnedParsedPacket,
+        _icmp4: &etherparse::Icmpv4Header,
     ) {
     }
 }
