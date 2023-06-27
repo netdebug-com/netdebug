@@ -358,10 +358,11 @@ impl OwnedParsedPacket {
             Err(e1) => {
                 // try to at least get an IP packet - fail if not
                 let (ip, ip_proto, l4) = IpHeader::from_slice(buf)?;
-                if l4.len() < 4 {
-                    return Err(
-                        pcap::Error::PcapError("Not even a full IP header".to_string()).into(),
-                    );
+                if l4.len() < 8 {
+                    return Err(pcap::Error::PcapError(
+                        "Not even a 8 bytes of a transport header".to_string(),
+                    )
+                    .into());
                     // ICMP standard is >= 8, so we should have at least 4 but oh well...
                 }
                 if ip_proto != etherparse::ip_number::TCP {
@@ -770,11 +771,98 @@ impl Connection {
     }
 
     fn update_icmp4_remote(
-        &self,
+        &mut self,
         _context: &Context,
-        _packet: &OwnedParsedPacket,
-        _icmp4: &etherparse::Icmpv4Header,
+        packet: &OwnedParsedPacket,
+        icmp4: &etherparse::Icmpv4Header,
     ) {
+        match icmp4.icmp_type {
+            etherparse::Icmpv4Type::Unknown {
+                type_u8: _,
+                code_u8: _,
+                bytes5to8: _,
+            }
+            | etherparse::Icmpv4Type::EchoRequest(_)
+            | etherparse::Icmpv4Type::EchoReply(_)
+            | etherparse::Icmpv4Type::TimestampRequest(_)
+            | etherparse::Icmpv4Type::TimestampReply(_) => (),
+            etherparse::Icmpv4Type::DestinationUnreachable(_)
+            | etherparse::Icmpv4Type::Redirect(_)
+            | etherparse::Icmpv4Type::TimeExceeded(_)
+            | etherparse::Icmpv4Type::ParameterProblem(_) => {
+                // TODO figure out how to cache this from the connection_key() computation
+                // if it's a perf problem - ignore for now
+                // but right now we're creating this embedded packet twice!
+                match OwnedParsedPacket::from_partial_embedded_ip_packet(
+                    &packet.payload,
+                    Some(packet.pcap_header),
+                ) {
+                    Ok((pkt, _partial)) => {
+                        if let Some(probe_id) = self.is_reply_heuristic(&pkt) {
+                            if let Some(hash) = self.incoming_reply_timestamps.get_mut(&probe_id) {
+                                hash.insert(pkt);
+                            } else {
+                                self.incoming_reply_timestamps
+                                    .insert(probe_id, HashSet::from([pkt]));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to parsed update_icmp4_remote() {} for {:?}",
+                            e, packet
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Call on a packet which is potentially a reply to a probe and if it is,
+     * extract the probe ID;  this should be called on the embedded packet
+     * of an ICMP TTL exceeded
+     *
+     * TODO: suppoort matching a TCP ACK from the end host
+     *
+     * Something is a probe is (1) it's old data and (2) if the payload
+     * length (which we don't have but can reconstruct) is < PROBE_MAX_TTL
+     *
+     * This is a "heuristic" because there's possibly pathological behavior
+     * in the network such that we falsely identify a regular packet as a reply
+     */
+
+    fn is_reply_heuristic(&self, pkt: &OwnedParsedPacket) -> Option<ProbeId> {
+        match &pkt.transport {
+            Some(TransportHeader::Tcp(_tcp)) => {
+                // TODO: convert to SEQ-based probe-id encoding
+                let (total_len, iph_len) = match &pkt.ip {
+                    Some(IpHeader::Version4(ip4, _)) => {
+                        // NOTE: etherparse "smartly" already returns hdr_len * 4
+                        (ip4.total_len(), ip4.header_len() as u16)
+                    }
+                    Some(IpHeader::Version6(ip6, _)) => {
+                        // NOTE: etherparse "smartly" already returns hdr_len * 4
+                        (ip6.payload_length, ip6.header_len() as u16)
+                    }
+                    None => {
+                        warn!("No IP packet with a TCP packet!?");
+                        return None;
+                    }
+                };
+                // probe-Id = total_len - sizeof(iph) - sizeof(tcph)
+                // Outgoing probes have no TCP options; so are exactly 20 bytes
+                // which makes them look weird to an IDS and we lose precision
+                let probe_id = total_len - iph_len - 20;
+
+                if probe_id < PROBE_MAX_TTL as u16 {
+                    Some(probe_id as u8)
+                } else {
+                    None
+                }
+            }
+            Some(_) | None => None,
+        }
     }
 }
 
@@ -964,12 +1052,29 @@ mod test {
         }
     }
 
+    const TEST_PROBE: [u8; 61] = [
+        0x06, 0x25, 0x76, 0xbf, 0x7a, 0x4f, 0x06, 0x2e, 0x63, 0x19, 0xe4, 0xd3, 0x08, 0x00, 0x45,
+        0x00, 0x00, 0x2f, 0x00, 0x00, 0x40, 0x00, 0x07, 0x06, 0x70, 0xf6, 0xac, 0x1f, 0x02, 0x3d,
+        0x4b, 0x0b, 0x09, 0x6c, 0x01, 0xbb, 0xa1, 0x0e, 0x13, 0x87, 0x86, 0x22, 0x00, 0x00, 0x00,
+        0x00, 0x50, 0x00, 0x01, 0xe6, 0x74, 0xdb, 0x00, 0x00, 0x48, 0x54, 0x54, 0x50, 0x2f, 0x31,
+        0x2e,
+    ];
+
+    const TEST_REPLY: [u8; 70] = [
+        0x06, 0x2e, 0x63, 0x19, 0xe4, 0xd3, 0x06, 0x25, 0x76, 0xbf, 0x7a, 0x4f, 0x08, 0x00, 0x45,
+        0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x00, 0xf5, 0x01, 0x56, 0x0b, 0x34, 0x5d, 0x8d, 0x00,
+        0xac, 0x1f, 0x02, 0x3d, 0x0b, 0x00, 0xb8, 0x8c, 0x00, 0x00, 0x00, 0x00, 0x45, 0x00, 0x00,
+        0x2f, 0x00, 0x00, 0x40, 0x00, 0x01, 0x06, 0x76, 0xf6, 0xac, 0x1f, 0x02, 0x3d, 0x4b, 0x0b,
+        0x09, 0x6c, 0x01, 0xbb, 0xa1, 0x0e, 0x13, 0x87, 0x86, 0x22,
+    ];
+
     #[tokio::test]
     /**
      * Follow a TCP stream with outgoing probes and incoming replies and make sure
      * we can match them up to calculate RTTs, etc.
      */
     async fn connection_tracker_one_flow_out_and_in() {
+        pretty_env_logger::init();
         let context = make_test_context();
         let raw_sock = MockRawSocketWriter::new();
         let mut local_addrs = HashSet::new();
@@ -1016,34 +1121,53 @@ mod test {
 
     #[tokio::test]
     /**
+     * Follow a TCP stream with outgoing probes and incoming replies and make sure
+     * we can match them up to calculate RTTs, etc.
+     */
+    async fn connection_tracker_probe_and_reply() {
+        let context = make_test_context();
+        let raw_sock = MockRawSocketWriter::new();
+        let mut local_addrs = HashSet::new();
+        let local_ip = IpAddr::from_str("172.31.2.61").unwrap();
+        local_addrs.insert(local_ip);
+        let mut local_tcp_ports = HashSet::new();
+        local_tcp_ports.insert(3030);
+        let mut connection_tracker =
+            ConnectionTracker::new(context, local_addrs.clone(), raw_sock).await;
+
+        let probe = OwnedParsedPacket::try_from_fake_time(TEST_PROBE.to_vec()).unwrap();
+
+        let icmp_reply = OwnedParsedPacket::try_from_fake_time(TEST_REPLY.to_vec()).unwrap();
+
+        connection_tracker.add(probe);
+        connection_tracker.add(icmp_reply);
+
+        assert_eq!(connection_tracker.connections.len(), 1);
+        let connection = connection_tracker.connections.values().next().unwrap();
+        assert_eq!(connection.outgoing_probe_timestamps.len(), 1);
+        assert_eq!(connection.incoming_reply_timestamps.len(), 1);
+        let probe_id = connection.outgoing_probe_timestamps.keys().next().unwrap();
+        let reply_id = connection.incoming_reply_timestamps.keys().next().unwrap();
+        // probe and reply match!
+        assert_eq!(*probe_id, 7);
+        assert_eq!(*reply_id, 7);
+    }
+
+    #[tokio::test]
+    /**
      * Make sure a probe and the corresponding ICMPv4 reply map to the same
      * connection key and the src_is_local logic is correct for both
      *
      * TODO: add ICMPv6 version of this test
      */
     async fn icmp4_to_connection_key() {
-        pretty_env_logger::init();
-
         let mut local_addrs = HashSet::new();
         local_addrs.insert(IpAddr::from_str("172.31.2.61").unwrap());
         let mut local_tcp_ports = HashSet::new();
         local_tcp_ports.insert(3030);
-        let probe = OwnedParsedPacket::try_from_fake_time(vec![
-            0x06, 0x25, 0x76, 0xbf, 0x7a, 0x4f, 0x06, 0x2e, 0x63, 0x19, 0xe4, 0xd3, 0x08, 0x00,
-            0x45, 0x00, 0x00, 0x2a, 0x00, 0x00, 0x40, 0x00, 0x02, 0x06, 0x75, 0xfb, 0xac, 0x1f,
-            0x02, 0x3d, 0x4b, 0x0b, 0x09, 0x6c, 0x01, 0xbb, 0xa1, 0x0e, 0x13, 0x87, 0x86, 0x22,
-            0x00, 0x00, 0x00, 0x00, 0x50, 0x00, 0x01, 0xe6, 0x26, 0x62, 0x00, 0x00, 0x48, 0x54,
-        ])
-        .unwrap();
+        let probe = OwnedParsedPacket::try_from_fake_time(TEST_PROBE.to_vec()).unwrap();
 
-        let icmp_reply = OwnedParsedPacket::try_from_fake_time(vec![
-            0x06, 0x2e, 0x63, 0x19, 0xe4, 0xd3, 0x06, 0x25, 0x76, 0xbf, 0x7a, 0x4f, 0x08, 0x00,
-            0x45, 0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x00, 0xf5, 0x01, 0x56, 0x0b, 0x34, 0x5d,
-            0x8d, 0x00, 0xac, 0x1f, 0x02, 0x3d, 0x0b, 0x00, 0xb8, 0x8c, 0x00, 0x00, 0x00, 0x00,
-            0x45, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x40, 0x00, 0x01, 0x06, 0x76, 0xf6, 0xac, 0x1f,
-            0x02, 0x3d, 0x4b, 0x0b, 0x09, 0x6c, 0x01, 0xbb, 0xa1, 0x0e, 0x13, 0x87, 0x86, 0x22,
-        ])
-        .unwrap();
+        let icmp_reply = OwnedParsedPacket::try_from_fake_time(TEST_REPLY.to_vec()).unwrap();
         let (probe_key, src_is_local) = probe
             .to_connection_key(&local_addrs, &local_tcp_ports)
             .unwrap();
