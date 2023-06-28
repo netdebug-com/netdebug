@@ -1,3 +1,5 @@
+use std::{fmt::Display, net::IpAddr};
+
 /**
  * Attention: everything in this library (including transitively) must
  * complile for both native rust as well as for WASM, so:
@@ -45,5 +47,53 @@ impl Message {
         // should all use the same GIT_HASH and this is created
         // at compile time by build.rs
         git_hash == env!("GIT_HASH")
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProbeReport {
+    pub report: Vec<ProbeReportEntry>,
+}
+
+impl Display for ProbeReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (ttl, e) in self.report.iter().enumerate() {
+            writeln!(f, "TTL {} - {:?}", ttl, e)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ProbeReportEntry {
+    // the notion of 'comment' might get abused - consider strongly typing everything(?)
+    ReplyFound {
+        ttl: u8,
+        out_timestamp_ms: f64,
+        rtt_ms: f64,
+        src_ip: IpAddr,
+        comment: String,
+    },
+    NoReply {
+        ttl: u8,
+        out_timestamp_ms: f64,
+        comment: String,
+    },
+    NoOutgoing {
+        ttl: u8,
+        comment: String,
+    },
+    ReplyNoProbe {
+        ttl: u8,
+        in_timestamp_ms: f64,
+        src_ip: IpAddr,
+        comment: String,
+    },
+    // TODO: add GoodRR etc. for w/ Record Route
+}
+
+impl ProbeReport {
+    pub fn new(report: Vec<ProbeReportEntry>) -> ProbeReport {
+        ProbeReport { report }
     }
 }

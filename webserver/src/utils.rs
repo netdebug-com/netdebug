@@ -2,7 +2,7 @@ use std::net::IpAddr;
 
 use etherparse::IpHeader;
 
-pub fn etherparse_ipheaders2ipaddr(ip: Option<IpHeader>) -> Result<(IpAddr, IpAddr), pcap::Error> {
+pub fn etherparse_ipheaders2ipaddr(ip: &Option<IpHeader>) -> Result<(IpAddr, IpAddr), pcap::Error> {
     match ip {
         Some(IpHeader::Version4(ip4, _)) => {
             Ok((IpAddr::from(ip4.source), IpAddr::from(ip4.destination)))

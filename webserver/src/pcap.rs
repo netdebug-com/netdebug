@@ -4,7 +4,11 @@ use std::{
     net::IpAddr,
 };
 
-use crate::in_band_probe::{tcp_inband_probe, PROBE_MAX_TTL};
+use crate::{
+    in_band_probe::{tcp_inband_probe, PROBE_MAX_TTL},
+    utils::etherparse_ipheaders2ipaddr,
+};
+use common::{ProbeReport, ProbeReportEntry};
 use etherparse::{IpHeader, TcpHeader, TransportHeader};
 use futures_util::StreamExt;
 use log::{info, warn};
@@ -429,8 +433,118 @@ impl Connection {
             Some(_) | None => None,
         }
     }
+
+    /**
+     * Match up the outgoing probes vs. incoming replies and generate a
+     * report.  If 'clear' is set, reset the connection's state so we can do a new set
+     * of probes on the next data packet
+     */
+    #[allow(dead_code)]
+    async fn generate_probe_report(&mut self, clear: bool) -> Result<ProbeReport, Box<dyn Error>> {
+        let mut report = Vec::new();
+        for ttl in 1..=PROBE_MAX_TTL {
+            let mut comment = String::new(); // no comment by default
+            if let Some(probe_set) = self.outgoing_probe_timestamps.get(&ttl) {
+                if probe_set.len() != 1 {
+                    comment.push_str(
+                        format!(
+                            "Weird: {} probes found; guessing first one.",
+                            probe_set.len()
+                        )
+                        .as_str(),
+                    );
+                }
+                let probe = probe_set.iter().next().unwrap();
+                let out_timestamp_ms = probe.pcap_header.ts.tv_sec as f64 * 1000.0
+                    + (probe.pcap_header.ts.tv_usec as f64 / 1000.0) as f64;
+                if let Some(reply_set) = self.incoming_reply_timestamps.get(&ttl) {
+                    if reply_set.len() != 1 {
+                        comment.push_str(
+                            format!(
+                                " Weird: {} replies found; guessing first one.",
+                                reply_set.len()
+                            )
+                            .as_str(),
+                        );
+                    }
+                    // found a probe and a reply!
+                    let reply = reply_set.iter().next().unwrap();
+                    let rtt_ms = calc_rtt_ms(reply.pcap_header, probe.pcap_header);
+                    // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
+                    let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
+                    report.push(ProbeReportEntry::ReplyFound {
+                        ttl,
+                        out_timestamp_ms,
+                        rtt_ms,
+                        src_ip,
+                        comment,
+                    })
+                } else {
+                    // missing reply - unfortunately common
+                    report.push(ProbeReportEntry::NoReply {
+                        ttl,
+                        out_timestamp_ms,
+                        comment,
+                    });
+                }
+            } else {
+                // sigh, duplicate code
+                if let Some(reply_set) = self.incoming_reply_timestamps.get(&ttl) {
+                    if reply_set.len() != 1 {
+                        comment.push_str(
+                            format!(
+                                " Weird: {} replies found; guessing first one.",
+                                reply_set.len()
+                            )
+                            .as_str(),
+                        );
+                    }
+                    // found a reply with out a probe (?) - can happen when pcap drops packets
+                    let reply = reply_set.iter().next().unwrap();
+                    // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
+                    let in_timestamp_ms = reply.pcap_header.ts.tv_sec as f64 * 1000.0
+                        + (reply.pcap_header.ts.tv_usec as f64 / 1000.0) as f64;
+                    let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
+                    report.push(ProbeReportEntry::ReplyNoProbe {
+                        ttl,
+                        in_timestamp_ms,
+                        src_ip,
+                        comment,
+                    });
+                } else {
+                    // missing both reply and probe - a bad day
+                    report.push(ProbeReportEntry::NoOutgoing { ttl, comment });
+                }
+            }
+        }
+        if clear {
+            // reset the state so that the next outgoing data packet triggers another set of probes
+            self.incoming_reply_timestamps.clear();
+            self.outgoing_probe_timestamps.clear();
+            self.local_data = None;
+        }
+        Ok(ProbeReport::new(report))
+    }
 }
 
+/**
+ * Calculate the time between when packet_before was sent and pkt_after was received
+ *
+ * NOTE: we do not encode the _milliseconds_ part of the reply into the type
+ * (e.g., ala std::time::Duration) because we need to communicate this value over
+ * JSON which could get messy
+ */
+
+fn calc_rtt_ms(pkt_after: pcap::PacketHeader, pkt_before: pcap::PacketHeader) -> f64 {
+    // my kingdom for timesub(3) - not sure why it's not in libc crate
+    if pkt_after.ts.tv_usec > pkt_before.ts.tv_usec {
+        (pkt_after.ts.tv_sec - pkt_before.ts.tv_sec) as f64 * 1000.0
+            - (pkt_after.ts.tv_usec - pkt_before.ts.tv_usec) as f64 / 1000.0 as f64
+    } else {
+        (pkt_after.ts.tv_sec - pkt_before.ts.tv_sec - 1) as f64 * 1000.0
+            - (1_000_000 + pkt_after.ts.tv_usec - pkt_before.ts.tv_usec) as f64 / 1000.0 as f64
+    }
+}
 /**
  * Bind a socket to a remote addr (8.8.8.8) and see which
  * IP it maps to and return the corresponding device
@@ -668,7 +782,7 @@ mod test {
             connection_tracker.add(owned_pkt);
         }
         assert_eq!(connection_tracker.connections.len(), 1);
-        let connection = connection_tracker.connections.values().next().unwrap();
+        let connection = connection_tracker.connections.values_mut().next().unwrap();
         // TODO; verify more about these pkts
         let _local_syn = connection.local_syn.as_ref().unwrap();
         let _remote_syn = connection.remote_syn.as_ref().unwrap();
@@ -683,6 +797,9 @@ mod test {
         for probes in connection.outgoing_probe_timestamps.values() {
             assert_eq!(probes.len(), 1);
         }
+
+        let report = connection.generate_probe_report(false).await.unwrap();
+        println!("Report: {}", report);
     }
 
     #[tokio::test]
