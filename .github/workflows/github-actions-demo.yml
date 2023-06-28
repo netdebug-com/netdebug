@@ -19,9 +19,15 @@ jobs:
                 version: 'latest'
       - name: Install libpcap
         run: sudo apt-get install libpcap-dev
-      - name: Build and Test
+      - name: Cargo build
         run: |
-          cargo build --all-features --verbose && cargo test
+          cargo build --all-features --verbose 
+      - name: wasm-pack
+        run: |
+          wasm-pack build webserver/web-client
+      - name: cargo test
+        run: |
+          cargo test
           # FIXME 'cargo test' without 'cargo build' doesn't work as
           # it does not correctly depend on the wasm-pack tool
           # but for now, just manually work around by doing both in same step
