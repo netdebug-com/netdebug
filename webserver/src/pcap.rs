@@ -372,7 +372,8 @@ impl Connection {
                                 hash.insert(pkt);
                             } else {
                                 self.incoming_reply_timestamps
-                                    .insert(probe_id, HashSet::from([pkt]));
+                                    // careful to store the original packet and not the embedded one
+                                    .insert(probe_id, HashSet::from([packet.clone()]));
                             }
                         }
                     }
