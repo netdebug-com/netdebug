@@ -417,6 +417,7 @@ impl OwnedParsedPacket {
     }
 
     #[cfg(test)]
+    // TODO: this looks like the TryFrom trait but actually isn't it which might confuse people
     pub(crate) fn try_from(pkt: pcap::Packet) -> Result<OwnedParsedPacket, Box<dyn Error>> {
         let parsed = etherparse::PacketHeaders::from_ethernet_slice(pkt.data)?;
         Ok(OwnedParsedPacket::new(parsed, pkt.header.clone()))
