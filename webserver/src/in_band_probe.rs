@@ -3,10 +3,7 @@ use std::error::Error;
 use etherparse::{PacketHeaders, TransportHeader};
 use log::{info, warn};
 
-use crate::{
-    context::Context,
-    pcap::{OwnedParsedPacket, RawSocketWriter},
-};
+use crate::{context::Context, owned_packet::OwnedParsedPacket, pcap::RawSocketWriter};
 
 pub(crate) const PROBE_MAX_TTL: u8 = 16;
 /**
@@ -78,7 +75,8 @@ pub mod test {
     use super::*;
     use etherparse::PacketBuilder;
 
-    use crate::pcap::{MockRawSocketWriter, OwnedParsedPacket};
+    use crate::owned_packet::OwnedParsedPacket;
+    use crate::pcap::MockRawSocketWriter;
 
     pub fn test_tcp_packet(src_ip: IpAddr, dst_ip: IpAddr) -> OwnedParsedPacket {
         test_tcp_packet_ports(src_ip, dst_ip, 21, 1234)
