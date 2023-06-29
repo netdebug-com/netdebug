@@ -3,7 +3,7 @@ use std::{collections::HashSet, error::Error, net::IpAddr};
 use etherparse::{IpHeader, IpNumber, TcpHeader, TransportHeader};
 use log::warn;
 
-use crate::pcap::ConnectionKey;
+use crate::connection::ConnectionKey;
 
 /**
  * This is like an etherparse::PacketHeader struct, but is 'owned'

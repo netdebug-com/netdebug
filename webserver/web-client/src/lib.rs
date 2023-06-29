@@ -277,6 +277,7 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, graph: &mut Graph) -> Resul
     let msg: common::Message = serde_json::from_str(raw_msg.as_str()).unwrap();
     use common::Message::*;
     match msg {
+        // TODO: add logic to reload client on version check mismatch
         VersionCheck { git_hash } => handle_version_check(git_hash, &ws),
         Ping1FromServer {
             server_timestamp_ms: t,
