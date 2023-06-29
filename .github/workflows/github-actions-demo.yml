@@ -24,7 +24,8 @@ jobs:
           cargo build --all-features --verbose 
       - name: wasm-pack
         run: |
-          wasm-pack build webserver/web-client
+          wasm-pack build webserver/web-client --target web
+          # if you get '--target web' important!
       - name: cargo test
         run: |
           cargo test
