@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    error::Error,
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
 };
 
 use common::{ProbeReport, ProbeReportEntry};
@@ -34,6 +33,48 @@ impl std::fmt::Display for ConnectionKey {
             proto_desc, self.local_ip, self.local_l4_port, self.remote_ip, self.remote_l4_port,
         )
     }
+}
+
+impl ConnectionKey {
+    /**
+     * Create a ConnectionKey from a remote socket addr and the global context
+     */
+    pub async fn new(context: &Context, addr: &SocketAddr, ip_proto: u8) -> Self {
+        // TODO: once we start supporting v4 and v6 or different listening address combos, this
+        // 'which addr is our local port' logic will have to get smarter
+
+        let local_ip = {
+            let ctx = context.read().await;
+            ctx.local_ips.iter().next().unwrap().clone()
+        };
+        let c = context.read().await;
+        let local_l4_port = c.local_tcp_listen_port;
+
+        ConnectionKey {
+            local_ip,
+            remote_ip: addr.ip(),
+            local_l4_port,
+            remote_l4_port: addr.port(),
+            ip_proto,
+        }
+    }
+}
+
+/**
+ * ConnectionTracker uses the Agent model :: https://en.wikipedia.org/wiki/Agent-oriented_programming
+ * which simplifies multithreading and state management.
+ *
+ * When a piece of code wants to interact with a ConnectionTracker, get the sender from the
+ * global context and send it an async message
+ */
+#[derive(Debug)]
+pub enum ConnectionTrackerMsg {
+    Pkt(OwnedParsedPacket), // send the connecti
+    ProbeReport {
+        key: ConnectionKey,
+        clear_state: bool,
+        tx: tokio::sync::mpsc::Sender<ProbeReport>,
+    },
 }
 
 /***
@@ -72,6 +113,24 @@ where
             local_tcp_ports,
             raw_sock,
         }
+    }
+
+    pub async fn rx_loop(
+        &mut self,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<ConnectionTrackerMsg>,
+    ) {
+        while let Some(msg) = rx.recv().await {
+            use ConnectionTrackerMsg::*;
+            match msg {
+                Pkt(pkt) => self.add(pkt),
+                ProbeReport {
+                    key,
+                    clear_state,
+                    tx,
+                } => self.generate_report(key, clear_state, tx).await,
+            }
+        }
+        info!("ConnectionTracker exiting rx_loop()");
     }
 
     pub fn add(&mut self, packet: OwnedParsedPacket) {
@@ -119,6 +178,26 @@ where
             src_is_local,
         );
         self.connections.insert(key, connection);
+    }
+
+    /**
+     * Generate a ProbeReport from the given connection/key
+     *
+     * If called with a bad key, caller will get back None from rx.recv() if we exit without
+     */
+
+    async fn generate_report(
+        &mut self,
+        key: ConnectionKey,
+        clear_state: bool,
+        tx: tokio::sync::mpsc::Sender<ProbeReport>,
+    ) {
+        if let Some(connection) = self.connections.get_mut(&key) {
+            let report = connection.generate_probe_report(clear_state).await;
+            if let Err(e) = tx.send(report).await {
+                warn!("Error sending back report: {}", e);
+            }
+        }
     }
 }
 
@@ -364,8 +443,8 @@ impl Connection {
      * report.  If 'clear' is set, reset the connection's state so we can do a new set
      * of probes on the next data packet
      */
-    #[allow(dead_code)]
-    async fn generate_probe_report(&mut self, clear: bool) -> Result<ProbeReport, Box<dyn Error>> {
+    #[allow(dead_code)] // TODO: remove once we're calling this properly from the client
+    async fn generate_probe_report(&mut self, clear: bool) -> ProbeReport {
         let mut report = Vec::new();
         for ttl in 1..=PROBE_MAX_TTL {
             let mut comment = String::new(); // no comment by default
@@ -446,7 +525,7 @@ impl Connection {
             self.outgoing_probe_timestamps.clear();
             self.local_data = None;
         }
-        Ok(ProbeReport::new(report))
+        ProbeReport::new(report)
     }
 }
 #[cfg(test)]
@@ -602,7 +681,7 @@ mod test {
             assert_eq!(probes.len(), 1);
         }
 
-        let report = connection.generate_probe_report(false).await.unwrap();
+        let report = connection.generate_probe_report(false).await;
         println!("Report:\n{}", report);
     }
 

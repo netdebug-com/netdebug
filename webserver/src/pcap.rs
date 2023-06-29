@@ -1,6 +1,6 @@
 use std::{collections::HashSet, error::Error};
 
-use crate::connection::ConnectionTracker;
+use crate::connection::{ConnectionTracker, ConnectionTrackerMsg};
 use futures_util::StreamExt;
 use log::{info, warn};
 use pcap::Capture;
@@ -35,6 +35,8 @@ impl pcap::PacketCodec for PacketParserCodec {
  *
  * Use this to punt packets to the connection ConnectionTracker
  *
+ * Store connection_tracker into the context so other agents can talk to it
+ *
  * This is setup to have many parallel connection trackers to achieve
  * parallelism with the hash/sloppy_hash(), but it's not implemented
  * yet.
@@ -48,9 +50,25 @@ pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
         local_addrs.insert(a.addr);
     }
 
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+    // record which IP addresses we're accepting traffic on, and connection tracker tx queue
+    // put in it's own block so we release the ctx lock ASAP
+    {
+        let mut ctx = context.write().await;
+        ctx.local_ips = local_addrs.clone();
+        ctx.connection_tracker = tx.clone();
+    }
+
     let local_tcp_port = context.read().await.local_tcp_listen_port;
     let raw_sock = bind_writable_pcap(&context).await?;
-    let mut connection_tracker = ConnectionTracker::new(context, local_addrs, raw_sock).await;
+    // Spawn a ConnectionTracker task
+    // TODO Spawn lots for multi-processing
+    tokio::spawn(async move {
+        let mut connection_tracker = ConnectionTracker::new(context, local_addrs, raw_sock).await;
+        connection_tracker.rx_loop(rx).await;
+    });
+
     info!("Starting pcap capture on {}", &device.name);
     let mut capture = Capture::from_device(device)?
         .immediate_mode(true)
@@ -69,7 +87,7 @@ pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
                 Ok(pkt) => {
                     let _hash = pkt.sloppy_hash();
                     // TODO: use this hash to map to 256 parallel ConnectionTrackers for parallelism
-                    connection_tracker.add(pkt);
+                    tx.send(ConnectionTrackerMsg::Pkt(pkt)).unwrap();
                 }
                 Err(e) => {
                     warn!("start_pcap_stream got error: {} - exiting", e);

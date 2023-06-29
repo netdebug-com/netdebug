@@ -1,12 +1,12 @@
-use std::{error::Error, sync::Arc};
+use std::{collections::HashSet, error::Error, net::IpAddr, sync::Arc};
 
 use clap::Parser;
 use pwhash::{sha512_crypt, HashSetup};
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc::UnboundedSender, RwLock};
 
-use crate::pcap::lookup_pcap_device_by_name;
+use crate::{connection::ConnectionTrackerMsg, pcap::lookup_pcap_device_by_name};
 
 // All of the web server state that's maintained across
 // parallel threads.  This will be wrapped in an
@@ -14,11 +14,15 @@ use crate::pcap::lookup_pcap_device_by_name;
 // safety
 #[derive(Debug, Clone)]
 pub struct WebServerContext {
-    pub user_db: UserDb,
-    pub html_root: String,
-    pub wasm_root: String,
-    pub pcap_device: pcap::Device,
-    pub local_tcp_listen_port: u16,
+    pub user_db: UserDb,            // only used for demo auth for now
+    pub html_root: String,          // path to "html" directory
+    pub wasm_root: String,          // path to wasm pkg directory
+    pub pcap_device: pcap::Device,  // which ethernet device are we capturing from?
+    pub local_tcp_listen_port: u16, // what port are we listening on?
+    pub local_ips: HashSet<IpAddr>, // which IP addresses do we listen on?
+    // communications channel to the connection_tracker
+    // TODO: make a pool for multi-threading
+    pub connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
 }
 
 impl WebServerContext {
@@ -36,12 +40,19 @@ impl WebServerContext {
                 }
             }
         };
+
+        // create a connection tracker to nothing, for now
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
         Ok(WebServerContext {
             user_db: UserDb::new(),
             html_root: args.html_root.clone(),
             wasm_root: args.wasm_root.clone(),
             pcap_device,
             local_tcp_listen_port: args.listen_port,
+            local_ips: HashSet::new(), // will get filled in when we bind the pcap device
+            connection_tracker: tx,
         })
     }
 }
@@ -155,12 +166,16 @@ pub mod test {
     pub fn make_test_context() -> Context {
         let test_pass = TEST_PASSWD;
         let test_hash = UserDb::new_password(&test_pass.to_string()).unwrap();
+        // create a connection tracker to nothing for the test context
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         Arc::new(RwLock::new(WebServerContext {
             user_db: UserDb::testing_demo(test_hash),
             html_root: "html".to_string(),
             wasm_root: "web-client/pkg".to_string(),
             pcap_device: crate::pcap::lookup_egress_device().unwrap(),
             local_tcp_listen_port: 3030,
+            local_ips: HashSet::new(),
+            connection_tracker: tx,
         }))
     }
 }

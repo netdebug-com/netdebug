@@ -4,7 +4,7 @@ use std::{net::SocketAddr, time::Duration};
 use tokio::sync::mpsc;
 use warp::ws::{self, WebSocket};
 
-use crate::context::Context;
+use crate::{connection::ConnectionKey, context::Context};
 use futures_util::{stream::SplitStream, SinkExt, StreamExt};
 use log::{debug, info, warn};
 
@@ -13,22 +13,26 @@ pub async fn handle_websocket(
     websocket: warp::ws::WebSocket,
     addr: Option<SocketAddr>,
 ) {
-    let addr_str = match addr {
+    let (addr_str, connection_key) = match &addr {
         None => {
             if cfg!(tests) {
-                "unknown  - but ok for tests".to_string()
+                ("unknown  - but ok for tests".to_string(), None)
             } else {
                 warn!("Rejecting websocket from client where remote addr=None");
                 return;
             }
         }
-        Some(a) => a.to_string(),
+        Some(a) => (
+            a.to_string(),
+            Some(ConnectionKey::new(&context, a, etherparse::ip_number::TCP).await),
+        ),
     };
     info!("New websocket connection from {}", &addr_str);
     let (mut ws_tx, ws_rx) = websocket.split();
 
-    // wrap the ws_tx with an unbounded mpsc channel because we can't clone it...
+    let connection_tracker = context.read().await.connection_tracker.clone();
 
+    // wrap the ws_tx with an unbounded mpsc channel because we can't clone it...
     let (tx, mut rx) = mpsc::unbounded_channel::<common::Message>();
     let tx_clone = tx.clone();
     let addr_str_clone = addr_str.clone();
@@ -59,7 +63,27 @@ pub async fn handle_websocket(
                 addr_str, e
             );
         });
+        // TODO: calc this from RTT of connection, not a hard/fixed limit
         tokio::time::sleep(Duration::from_millis(50)).await;
+        // now that time has passed, collect the ProbeReport from the connection tracker
+        if let Some(key) = &connection_key {
+            let key = key.clone();
+            let (report_tx, mut report_rx) = tokio::sync::mpsc::channel(1);
+            if let Err(e) =
+                connection_tracker.send(crate::connection::ConnectionTrackerMsg::ProbeReport {
+                    key,
+                    clear_state: true,
+                    tx: report_tx,
+                })
+            {
+                warn!("Error talking to connection tracker: {}", e);
+            } else {
+                match report_rx.recv().await {
+                    Some(_report) => todo!(),
+                    None => todo!(),
+                }
+            }
+        }
     }
 }
 
