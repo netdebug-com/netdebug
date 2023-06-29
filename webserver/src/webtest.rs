@@ -13,6 +13,7 @@ pub async fn handle_websocket(
     websocket: warp::ws::WebSocket,
     addr: Option<SocketAddr>,
 ) {
+    info!("Starting webtest");
     let (addr_str, connection_key) = match &addr {
         None => {
             if cfg!(tests) {
@@ -52,7 +53,7 @@ pub async fn handle_websocket(
     tokio::spawn(async move { handle_ws_message(context, ws_rx, tx_clone).await });
 
     // send 100 rounds of pings to the client
-    for _i in 1..100 {
+    for probe_round in 1..100 {
         let t = make_time_ms();
         let msg = common::Message::Ping1FromServer {
             server_timestamp_ms: t,
@@ -66,6 +67,11 @@ pub async fn handle_websocket(
         // TODO: calc this from RTT of connection, not a hard/fixed limit
         tokio::time::sleep(Duration::from_millis(50)).await;
         // now that time has passed, collect the ProbeReport from the connection tracker
+        debug!(
+            "Collecting probe report for {} :: {}",
+            addr_str, probe_round
+        );
+        /*
         if let Some(key) = &connection_key {
             let key = key.clone();
             let (report_tx, mut report_rx) = tokio::sync::mpsc::channel(1);
@@ -79,11 +85,12 @@ pub async fn handle_websocket(
                 warn!("Error talking to connection tracker: {}", e);
             } else {
                 match report_rx.recv().await {
-                    Some(_report) => todo!(),
+                    Some(report) => debug!("Got probe report!\n{}", report),
                     None => todo!(),
                 }
             }
         }
+        */
     }
 }
 
