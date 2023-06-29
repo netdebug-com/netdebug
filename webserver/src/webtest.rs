@@ -4,7 +4,10 @@ use std::{net::SocketAddr, time::Duration};
 use tokio::sync::mpsc;
 use warp::ws::{self, WebSocket};
 
-use crate::{connection::ConnectionKey, context::Context};
+use crate::{
+    connection::{ConnectionKey, ConnectionTrackerMsg},
+    context::Context,
+};
 use futures_util::{stream::SplitStream, SinkExt, StreamExt};
 use log::{debug, info, warn};
 
@@ -14,7 +17,7 @@ pub async fn handle_websocket(
     addr: Option<SocketAddr>,
 ) {
     info!("Starting webtest");
-    let (addr_str, _connection_key) = match &addr {
+    let (addr_str, connection_key) = match &addr {
         None => {
             if cfg!(tests) {
                 ("unknown  - but ok for tests".to_string(), None)
@@ -31,7 +34,7 @@ pub async fn handle_websocket(
     info!("New websocket connection from {}", &addr_str);
     let (mut ws_tx, ws_rx) = websocket.split();
 
-    let _connection_tracker = context.read().await.connection_tracker.clone();
+    let connection_tracker = context.read().await.connection_tracker.clone();
 
     // wrap the ws_tx with an unbounded mpsc channel because we can't clone it...
     let (tx, mut rx) = mpsc::unbounded_channel::<common::Message>();
@@ -71,26 +74,22 @@ pub async fn handle_websocket(
             "Collecting probe report for {} :: {}",
             addr_str, probe_round
         );
-        /*
         if let Some(key) = &connection_key {
             let key = key.clone();
             let (report_tx, mut report_rx) = tokio::sync::mpsc::channel(1);
-            if let Err(e) =
-                connection_tracker.send(crate::connection::ConnectionTrackerMsg::ProbeReport {
-                    key,
-                    clear_state: true,
-                    tx: report_tx,
-                })
-            {
+            if let Err(e) = connection_tracker.send(ConnectionTrackerMsg::ProbeReport {
+                key,
+                clear_state: true,
+                tx: report_tx,
+            }) {
                 warn!("Error talking to connection tracker: {}", e);
             } else {
                 match report_rx.recv().await {
                     Some(report) => debug!("Got probe report!\n{}", report),
-                    None => todo!(),
+                    None => warn!("Got 'None' back from report_tx for {}", addr_str),
                 }
             }
         }
-        */
     }
 }
 

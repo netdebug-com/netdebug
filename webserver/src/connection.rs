@@ -198,6 +198,9 @@ where
             if let Err(e) = tx.send(report).await {
                 warn!("Error sending back report: {}", e);
             }
+        } else {
+            warn!("Found no connection matching key {}", key);
+            // sending nothing will close the connection and thus return None to the report receiver
         }
     }
 }

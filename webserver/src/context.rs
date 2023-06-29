@@ -6,7 +6,10 @@ use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc::UnboundedSender, RwLock};
 
-use crate::{connection::ConnectionTrackerMsg, pcap::lookup_pcap_device_by_name};
+use crate::{
+    connection::{ConnectionTracker, ConnectionTrackerMsg},
+    pcap::{bind_writable_pcap, lookup_pcap_device_by_name},
+};
 
 // All of the web server state that's maintained across
 // parallel threads.  This will be wrapped in an
@@ -44,12 +47,12 @@ impl WebServerContext {
         for a in &pcap_device.addresses {
             local_ips.insert(a.addr);
         }
+        let local_addrs = local_ips.clone();
 
-        // create a connection tracker to nothing, for now
-        // start_pcap_stream() will fill in the real version
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-
-        Ok(WebServerContext {
+        // create a connection tracker
+        //
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let context = WebServerContext {
             user_db: UserDb::new(),
             html_root: args.html_root.clone(),
             wasm_root: args.wasm_root.clone(),
@@ -57,7 +60,18 @@ impl WebServerContext {
             local_tcp_listen_port: args.listen_port,
             local_ips: local_ips,
             connection_tracker: tx,
-        })
+        };
+        let context_clone = Arc::new(RwLock::new(context.clone()));
+        // Spawn a ConnectionTracker task
+        // TODO Spawn lots for multi-processing
+        tokio::spawn(async move {
+            let raw_sock = bind_writable_pcap(&context_clone).await.unwrap();
+            let mut connection_tracker =
+                ConnectionTracker::new(context_clone, local_addrs, raw_sock).await;
+            connection_tracker.rx_loop(rx).await;
+        });
+
+        Ok(context)
     }
 }
 

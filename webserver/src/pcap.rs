@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use crate::connection::{ConnectionTracker, ConnectionTrackerMsg};
+use crate::connection::ConnectionTrackerMsg;
 use futures_util::StreamExt;
 use log::{info, warn};
 use pcap::Capture;
@@ -43,21 +43,14 @@ impl pcap::PacketCodec for PacketParserCodec {
  */
 
 pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
-    let (device, local_addrs) = {
+    let (device, tx, local_tcp_port) = {
         let ctx = context.read().await;
-        (ctx.pcap_device.clone(), ctx.local_ips.clone())
+        (
+            ctx.pcap_device.clone(),
+            ctx.connection_tracker.clone(),
+            ctx.local_tcp_listen_port,
+        )
     };
-
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-
-    let local_tcp_port = context.read().await.local_tcp_listen_port;
-    let raw_sock = bind_writable_pcap(&context).await?;
-    // Spawn a ConnectionTracker task
-    // TODO Spawn lots for multi-processing
-    tokio::spawn(async move {
-        let mut connection_tracker = ConnectionTracker::new(context, local_addrs, raw_sock).await;
-        connection_tracker.rx_loop(rx).await;
-    });
 
     info!("Starting pcap capture on {}", &device.name);
     let mut capture = Capture::from_device(device)?
