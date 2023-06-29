@@ -40,9 +40,13 @@ impl WebServerContext {
                 }
             }
         };
+        let mut local_ips = HashSet::new();
+        for a in &pcap_device.addresses {
+            local_ips.insert(a.addr);
+        }
 
         // create a connection tracker to nothing, for now
-
+        // start_pcap_stream() will fill in the real version
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
 
         Ok(WebServerContext {
@@ -51,7 +55,7 @@ impl WebServerContext {
             wasm_root: args.wasm_root.clone(),
             pcap_device,
             local_tcp_listen_port: args.listen_port,
-            local_ips: HashSet::new(), // will get filled in when we bind the pcap device
+            local_ips: local_ips,
             connection_tracker: tx,
         })
     }

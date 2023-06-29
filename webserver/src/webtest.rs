@@ -14,7 +14,7 @@ pub async fn handle_websocket(
     addr: Option<SocketAddr>,
 ) {
     info!("Starting webtest");
-    let (addr_str, connection_key) = match &addr {
+    let (addr_str, _connection_key) = match &addr {
         None => {
             if cfg!(tests) {
                 ("unknown  - but ok for tests".to_string(), None)
@@ -31,7 +31,7 @@ pub async fn handle_websocket(
     info!("New websocket connection from {}", &addr_str);
     let (mut ws_tx, ws_rx) = websocket.split();
 
-    let connection_tracker = context.read().await.connection_tracker.clone();
+    let _connection_tracker = context.read().await.connection_tracker.clone();
 
     // wrap the ws_tx with an unbounded mpsc channel because we can't clone it...
     let (tx, mut rx) = mpsc::unbounded_channel::<common::Message>();

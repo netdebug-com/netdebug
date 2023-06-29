@@ -45,6 +45,7 @@ impl ConnectionKey {
 
         let local_ip = {
             let ctx = context.read().await;
+            // start_pcap_stream() should have filled this in my now to get here
             ctx.local_ips.iter().next().unwrap().clone()
         };
         let c = context.read().await;

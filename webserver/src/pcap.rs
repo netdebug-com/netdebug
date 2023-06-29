@@ -1,4 +1,4 @@
-use std::{collections::HashSet, error::Error};
+use std::error::Error;
 
 use crate::connection::{ConnectionTracker, ConnectionTrackerMsg};
 use futures_util::StreamExt;
@@ -43,22 +43,12 @@ impl pcap::PacketCodec for PacketParserCodec {
  */
 
 pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
-    let device = context.read().await.pcap_device.clone();
-
-    let mut local_addrs = HashSet::new();
-    for a in &device.addresses {
-        local_addrs.insert(a.addr);
-    }
+    let (device, local_addrs) = {
+        let ctx = context.read().await;
+        (ctx.pcap_device.clone(), ctx.local_ips.clone())
+    };
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-
-    // record which IP addresses we're accepting traffic on, and connection tracker tx queue
-    // put in it's own block so we release the ctx lock ASAP
-    {
-        let mut ctx = context.write().await;
-        ctx.local_ips = local_addrs.clone();
-        ctx.connection_tracker = tx.clone();
-    }
 
     let local_tcp_port = context.read().await.local_tcp_listen_port;
     let raw_sock = bind_writable_pcap(&context).await?;
