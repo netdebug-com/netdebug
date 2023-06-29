@@ -57,8 +57,8 @@ pub struct ProbeReport {
 
 impl Display for ProbeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (ttl, e) in self.report.iter().enumerate() {
-            writeln!(f, "TTL {} - {:?}", ttl, e)?;
+        for (probe_id, e) in self.report.iter().enumerate() {
+            writeln!(f, "Probe {:3} - {:?}", probe_id + 1, e)?;
         }
         Ok(())
     }

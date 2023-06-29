@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     in_band_probe::{tcp_inband_probe, PROBE_MAX_TTL},
-    utils::etherparse_ipheaders2ipaddr,
+    utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timeval_to_ms},
 };
 use common::{ProbeReport, ProbeReportEntry};
 use etherparse::{IpHeader, TcpHeader, TransportHeader};
@@ -456,8 +456,7 @@ impl Connection {
                     );
                 }
                 let probe = probe_set.iter().next().unwrap();
-                let out_timestamp_ms = probe.pcap_header.ts.tv_sec as f64 * 1000.0
-                    + (probe.pcap_header.ts.tv_usec as f64 / 1000.0) as f64;
+                let out_timestamp_ms = timeval_to_ms(probe.pcap_header.ts);
                 if let Some(reply_set) = self.incoming_reply_timestamps.get(&ttl) {
                     if reply_set.len() != 1 {
                         comment.push_str(
@@ -503,8 +502,7 @@ impl Connection {
                     // found a reply with out a probe (?) - can happen when pcap drops packets
                     let reply = reply_set.iter().next().unwrap();
                     // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
-                    let in_timestamp_ms = reply.pcap_header.ts.tv_sec as f64 * 1000.0
-                        + (reply.pcap_header.ts.tv_usec as f64 / 1000.0) as f64;
+                    let in_timestamp_ms = timeval_to_ms(reply.pcap_header.ts);
                     let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
                     report.push(ProbeReportEntry::ReplyNoProbe {
                         ttl,
@@ -525,25 +523,6 @@ impl Connection {
             self.local_data = None;
         }
         Ok(ProbeReport::new(report))
-    }
-}
-
-/**
- * Calculate the time between when packet_before was sent and pkt_after was received
- *
- * NOTE: we do not encode the _milliseconds_ part of the reply into the type
- * (e.g., ala std::time::Duration) because we need to communicate this value over
- * JSON which could get messy
- */
-
-fn calc_rtt_ms(pkt_after: pcap::PacketHeader, pkt_before: pcap::PacketHeader) -> f64 {
-    // my kingdom for timesub(3) - not sure why it's not in libc crate
-    if pkt_after.ts.tv_usec > pkt_before.ts.tv_usec {
-        (pkt_after.ts.tv_sec - pkt_before.ts.tv_sec) as f64 * 1000.0
-            - (pkt_after.ts.tv_usec - pkt_before.ts.tv_usec) as f64 / 1000.0 as f64
-    } else {
-        (pkt_after.ts.tv_sec - pkt_before.ts.tv_sec - 1) as f64 * 1000.0
-            - (1_000_000 + pkt_after.ts.tv_usec - pkt_before.ts.tv_usec) as f64 / 1000.0 as f64
     }
 }
 /**
@@ -800,7 +779,7 @@ mod test {
         }
 
         let report = connection.generate_probe_report(false).await.unwrap();
-        println!("Report: {}", report);
+        println!("Report:\n{}", report);
     }
 
     #[tokio::test]
