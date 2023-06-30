@@ -293,7 +293,20 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, graph: &mut Graph) -> Resul
             server_rtt: rtt,
             client_timestamp_ms: t,
         } => handle_ping3(&rtt, &t, &ws, graph),
+        ProbeReport {
+            report,
+            probe_round,
+        } => handle_probe_report(report, probe_round, graph),
     }
+}
+
+fn handle_probe_report(
+    report: common::ProbeReport,
+    probe_round: u32,
+    _graph: &mut Graph,
+) -> Result<(), JsValue> {
+    console_log!("Round {} -- report\n{}", probe_round, report);
+    Ok(())
 }
 
 fn handle_ping3(rtt: &f64, t: &f64, _ws: &WebSocket, graph: &mut Graph) -> Result<(), JsValue> {

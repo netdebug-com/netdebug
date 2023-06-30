@@ -14,6 +14,20 @@ pub fn etherparse_ipheaders2ipaddr(ip: &Option<IpHeader>) -> Result<(IpAddr, IpA
     }
 }
 
+/***
+ * Given a remote IP address, figure out which local ip the local host
+ * stack would use to connect to it.
+ *
+ * NOTE: this doesn't actually put any packets on the network and should
+ * be reasonably cheap to run - just a local route table lookup
+ */
+
+pub fn remote_ip_to_local(remote_ip: IpAddr) -> std::io::Result<IpAddr> {
+    let udp_sock = std::net::UdpSocket::bind(("0.0.0.0", 0))?;
+    udp_sock.connect((remote_ip, 53))?;
+    Ok(udp_sock.local_addr()?.ip())
+}
+
 /**
  * Calculate the time between when packet_before was sent and pkt_after was received
  *

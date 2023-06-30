@@ -33,6 +33,10 @@ pub enum Message {
         server_rtt: f64,
         client_timestamp_ms: f64,
     },
+    ProbeReport {
+        report: ProbeReport,
+        probe_round: u32,
+    },
 }
 
 impl Message {

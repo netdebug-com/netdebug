@@ -40,20 +40,19 @@ impl ConnectionKey {
      * Create a ConnectionKey from a remote socket addr and the global context
      */
     pub async fn new(context: &Context, addr: &SocketAddr, ip_proto: u8) -> Self {
-        // TODO: once we start supporting v4 and v6 or different listening address combos, this
-        // 'which addr is our local port' logic will have to get smarter
+        // Annoying - it turns out it's hard in Warp to figure out which local IP a given
+        // connection is talking to - this technique should be close, but might
+        // have problems with funky routing tables, e.g., where the packets
+        // are coming in one interface but going out another
 
-        let local_ip = {
-            let ctx = context.read().await;
-            // start_pcap_stream() should have filled this in my now to get here
-            ctx.local_ips.iter().next().unwrap().clone()
-        };
+        let remote_ip = addr.ip();
+        let local_ip = crate::utils::remote_ip_to_local(remote_ip).unwrap();
         let c = context.read().await;
         let local_l4_port = c.local_tcp_listen_port;
 
         ConnectionKey {
             local_ip,
-            remote_ip: addr.ip(),
+            remote_ip,
             local_l4_port,
             remote_l4_port: addr.port(),
             ip_proto,

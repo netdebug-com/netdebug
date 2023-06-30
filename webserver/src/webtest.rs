@@ -85,7 +85,17 @@ pub async fn handle_websocket(
                 warn!("Error talking to connection tracker: {}", e);
             } else {
                 match report_rx.recv().await {
-                    Some(report) => debug!("Got probe report!\n{}", report),
+                    Some(report) => tx
+                        .send(common::Message::ProbeReport {
+                            report,
+                            probe_round,
+                        })
+                        .unwrap_or_else(|e| {
+                            warn!(
+                                "Error while sending ProbeReport to client: {} :: {}",
+                                addr_str, e
+                            );
+                        }),
                     None => warn!("Got 'None' back from report_tx for {}", addr_str),
                 }
             }
@@ -134,7 +144,11 @@ async fn handle_message(_context: &Context, msg: Message, tx: &mpsc::UnboundedSe
     use Message::*;
     match msg {
         VersionCheck { git_hash } => handle_version_check(git_hash, tx),
-        Ping1FromServer {
+        ProbeReport {
+            report: _,
+            probe_round: _,
+        }
+        | Ping1FromServer {
             server_timestamp_ms: _,
         }
         | Ping3FromServer {

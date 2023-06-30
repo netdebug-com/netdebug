@@ -1,4 +1,6 @@
 use std::error::Error;
+use std::net::IpAddr;
+use std::str::FromStr;
 
 use crate::connection::ConnectionTrackerMsg;
 use futures_util::StreamExt;
@@ -87,13 +89,10 @@ pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
  * Bind a socket to a remote addr (8.8.8.8) and see which
  * IP it maps to and return the corresponding device
  *
- * NOTE: this technique actually sends no traffic; it's purely local
  */
 
 pub fn lookup_egress_device() -> Result<pcap::Device, Box<dyn Error>> {
-    let udp_sock = std::net::UdpSocket::bind(("0.0.0.0", 0))?;
-    udp_sock.connect(("8.8.8.8", 53))?;
-    let addr = udp_sock.local_addr()?.ip();
+    let addr = crate::utils::remote_ip_to_local(IpAddr::from_str("8.8.8.8").unwrap())?;
     for d in &pcap::Device::list()? {
         if d.addresses.iter().find(|&a| a.addr == addr).is_some() {
             return Ok(d.clone());
