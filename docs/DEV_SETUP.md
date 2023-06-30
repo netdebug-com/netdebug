@@ -6,16 +6,17 @@
     1. Recommended that you install the vscode rpm repo so you get auto 6.1updates!
     2. Recommended packages include : 
 5. Setup a new ssh-key only for the new github account (github requires this)
-6. On RPM instances, install min packages:
+6. On ubuntu server instances:
 ```
+# install rustup
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-sudo dnf install git gcc tmux libpcap fontconfig-devel
-```
-7. Install required rust tools
-```
-for p in wasm-pack fmt clippy; do
-    cargo install $p
-done
+# update system to current
+sudo apt-get update
+sudo apt-get upgrade
+# install build deps - TODO - just publish a built image
+sudo apt-get install -y build-essential libpcap-dev cmake libfontconfig-dev
+# Install required rust tools
+cargo install wasm-pack
 ```
 7. You can manage multiple ssh-keys into github ala a special ssh config
     and then add the actual repo as:
