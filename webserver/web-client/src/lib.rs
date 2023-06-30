@@ -195,18 +195,27 @@ impl Graph {
             .build_cartesian_2d(0f64..100.0, 0.0..self.autoscale_max)
             .unwrap();
 
+        let y_off = 8; // !? need a fudge factor to get the legend to line up with the series label text
         chart
-            .draw_series(LineSeries::new(plot_server.iter().map(|v| (v.1, v.0)), &BLACK))
+            .draw_series(LineSeries::new(
+                plot_server.iter().map(|v| (v.1, v.0)),
+                &BLACK,
+            ))
             .unwrap()
             .label("Application S->C->S RTT CDF(% < Y)")
-            // .legend(move |(x, y)| PathElement::new(vec![(x - 200, y), (x - 70, y + 20)], &BLACK))
-            ;
+            .legend(move |(x, y)| {
+                PathElement::new(vec![(x, y - y_off), (x + 20, y - y_off)], &BLACK)
+            });
         chart
-            .draw_series(LineSeries::new(plot_client.iter().map(|v| (v.1, v.0)), &RED))
+            .draw_series(LineSeries::new(
+                plot_client.iter().map(|v| (v.1, v.0)),
+                &RED,
+            ))
             .unwrap()
             .label("Application C->S->C RTT CDF(% < Y)")
-            // .legend(move |(x, y)| PathElement::new(vec![(x - 200, y), (x - 70, y + 20)], &BLACK))
-            ;
+            .legend(move |(x, y)| {
+                PathElement::new(vec![(x, y - y_off), (x + 20, y - y_off)], &RED)
+            });
 
         // quick sanity check
         if plot_client.len() != plot_server.len() {
