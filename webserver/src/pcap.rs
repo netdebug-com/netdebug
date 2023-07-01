@@ -60,7 +60,7 @@ pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
         .open()?
         .setnonblock()?;
     // only capture/probe traffic to the webserver
-    let filter_rule = format!("tcp port {}", local_tcp_port);
+    let filter_rule = format!("tcp port {} or icmp or icmp6", local_tcp_port);
     info!("Applying pcap filter '{}'", filter_rule);
     capture.filter(filter_rule.as_str(), true)?;
     let stream = capture.stream(PacketParserCodec {})?;

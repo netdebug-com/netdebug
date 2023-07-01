@@ -14,7 +14,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 sudo apt-get update
 sudo apt-get upgrade
 # install build deps - TODO - just publish a built image
-sudo apt-get install -y build-essential libpcap-dev cmake libfontconfig-dev
+sudo apt-get install -y build-essential libpcap-dev cmake libfontconfig-dev tmux
 # Install required rust tools
 cargo install wasm-pack
 ```
