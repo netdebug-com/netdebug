@@ -272,7 +272,7 @@ impl Graph {
                     .unwrap()
                     .label(format!("TTL={} RTT CDF(% < Y)", ttl))
                     .legend(move |(x, y)| {
-                        PathElement::new(vec![(x, y - y_off), (x + 20, y - y_off)], &RED)
+                        PathElement::new(vec![(x, y - y_off), (x + 20, y - y_off)], &color)
                     });
             }
         }

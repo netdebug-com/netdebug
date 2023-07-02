@@ -1,11 +1,11 @@
 use std::error::Error;
 
+use common::PROBE_MAX_TTL;
 use etherparse::{PacketHeaders, TransportHeader};
 use log::{info, warn};
 
 use crate::{context::Context, owned_packet::OwnedParsedPacket, pcap::RawSocketWriter};
 
-pub(crate) const PROBE_MAX_TTL: u8 = 16;
 /**
  * Create a bunch of packets with the same local/remote five tuple
  * that look like retransmited data but are in fact probe packets

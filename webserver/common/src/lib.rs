@@ -13,6 +13,8 @@ use std::{fmt::Display, net::IpAddr};
  */
 use serde::{Deserialize, Serialize};
 
+pub const PROBE_MAX_TTL: u8 = 32;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Message {
     VersionCheck {

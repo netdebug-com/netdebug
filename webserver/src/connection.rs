@@ -3,13 +3,13 @@ use std::{
     net::{IpAddr, SocketAddr},
 };
 
-use common::{ProbeReport, ProbeReportEntry};
+use common::{ProbeReport, ProbeReportEntry, PROBE_MAX_TTL};
 use etherparse::{IpHeader, TcpHeader, TransportHeader};
 use log::{info, warn};
 
 use crate::{
     context::Context,
-    in_band_probe::{tcp_inband_probe, PROBE_MAX_TTL},
+    in_band_probe::tcp_inband_probe,
     owned_packet::OwnedParsedPacket,
     pcap::RawSocketWriter,
     utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timeval_to_ms},
