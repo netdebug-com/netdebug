@@ -1,6 +1,8 @@
 mod utils;
 
-use common::Message;
+use std::{collections::HashMap, vec};
+
+use common::{Message, ProbeReport, ProbeReportEntry};
 use js_sys::Date;
 use plotters::coord::Shift;
 use plotters::prelude::*;
@@ -111,6 +113,7 @@ impl Ord for PingData {
 struct Graph {
     data_server: SortedVec<PingData>,
     data_client: SortedVec<PingData>,
+    data_ttl: HashMap<u8, SortedVec<PingData>>,
     data_points_per_draw: usize,
     root: DrawingArea<CanvasBackend, Shift>,
     autoscale_max: f64,
@@ -124,6 +127,7 @@ impl Graph {
         Graph {
             data_server: SortedVec::new(),
             data_client: SortedVec::new(),
+            data_ttl: HashMap::new(),
             data_points_per_draw,
             root,
             autoscale_max: f64::MIN,
@@ -148,6 +152,38 @@ impl Graph {
         // did we get enough data to be worth redrawing the graph?
         if self.data_server.len() % self.data_points_per_draw == 0 {
             self.draw();
+        }
+    }
+
+    /**
+     * Copy in the data from the probe reports
+     *
+     * NOTE: because we're decoupling the probe report data from the application
+     * data and sorting them independently, it's not the case that the data lines
+     * up in time, e.g., the p75 of the application data and the p75 of the probe report
+     * data may not occur at the same time
+     */
+
+    fn add_data_probe_report(&mut self, probe_report: ProbeReport) {
+        for probe in probe_report.report {
+            if let ProbeReportEntry::ReplyFound {
+                ttl,
+                out_timestamp_ms,
+                rtt_ms,
+                src_ip: _,
+                comment: _,
+            } = probe
+            {
+                let d = PingData {
+                    rtt: rtt_ms,
+                    time_stamp: out_timestamp_ms,
+                };
+                if let Some(probes) = self.data_ttl.get_mut(&ttl) {
+                    probes.push(d);
+                } else {
+                    self.data_ttl.insert(ttl, SortedVec::from(vec![d]));
+                }
+            }
         }
     }
 
@@ -180,7 +216,6 @@ impl Graph {
 
         self.root.fill(&WHITE).unwrap();
         // draw a new chart
-        // TODO - manual double buffering b/c the lib doesn't do it itself
         let mut chart = ChartBuilder::on(&self.root)
             .margin(20)
             .caption(
@@ -216,6 +251,31 @@ impl Graph {
             .legend(move |(x, y)| {
                 PathElement::new(vec![(x, y - y_off), (x + 20, y - y_off)], &RED)
             });
+        // Plot the data from each TTL's RTT's
+        // TODO: make these TTL constants global/non-hardcoded
+        for ttl in 1..=16 {
+            // TODO: pretty up the color selection algorithm
+            let color = Palette99::pick(ttl).mix(0.9);
+            if let Some(data_points) = self.data_ttl.get(&(ttl as u8)) {
+                let data: Vec<(f64, f64)> = data_points
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, ping)| {
+                        (
+                            ping.rtt,
+                            100.0 * (idx as f64 + 1.0) / (data_points.len() as f64),
+                        )
+                    })
+                    .collect();
+                chart
+                    .draw_series(LineSeries::new(data.iter().map(|v| (v.1, v.0)), &color))
+                    .unwrap()
+                    .label(format!("TTL={} RTT CDF(% < Y)", ttl))
+                    .legend(move |(x, y)| {
+                        PathElement::new(vec![(x, y - y_off), (x + 20, y - y_off)], &RED)
+                    });
+            }
+        }
 
         // quick sanity check
         if plot_client.len() != plot_server.len() {
@@ -312,9 +372,10 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, graph: &mut Graph) -> Resul
 fn handle_probe_report(
     report: common::ProbeReport,
     probe_round: u32,
-    _graph: &mut Graph,
+    graph: &mut Graph,
 ) -> Result<(), JsValue> {
     console_log!("Round {} -- report\n{}", probe_round, report);
+    graph.add_data_probe_report(report);
     Ok(())
 }
 
