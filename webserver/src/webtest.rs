@@ -16,7 +16,6 @@ pub async fn handle_websocket(
     websocket: warp::ws::WebSocket,
     addr: Option<SocketAddr>,
 ) {
-    info!("Starting webtest");
     let (addr_str, connection_key) = match &addr {
         None => {
             if cfg!(tests) {
@@ -68,7 +67,7 @@ pub async fn handle_websocket(
             );
         });
         // TODO: calc this from RTT of connection, not a hard/fixed limit
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
         // now that time has passed, collect the ProbeReport from the connection tracker
         debug!(
             "Collecting probe report for {} :: {}",
