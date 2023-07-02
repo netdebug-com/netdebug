@@ -611,7 +611,8 @@ mod test {
         // verify we captured each of the outgoing probes
         assert_eq!(
             connection.outgoing_probe_timestamps.len(),
-            PROBE_MAX_TTL as usize
+            16 as usize // NOTE: this should be the constant not PROBE_MAX_TTL because
+                        // the ground truth is the packet capture, not the current const value
         );
         for probes in connection.outgoing_probe_timestamps.values() {
             assert_eq!(probes.len(), 1);
@@ -676,7 +677,7 @@ mod test {
         // verify we captured each of the outgoing probes
         assert_eq!(
             connection.outgoing_probe_timestamps.len(),
-            PROBE_MAX_TTL as usize
+            16 as usize // this is hard coded by the pcap
         );
         // verify we captured each of the incoming replies - note that we only got six replies!
         assert_eq!(connection.incoming_reply_timestamps.len(), 6);

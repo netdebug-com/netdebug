@@ -132,13 +132,13 @@ pub mod test {
 
         tcp_inband_probe(context, packet, &mut mock_raw_sock).unwrap();
 
-        assert_eq!(mock_raw_sock.captured.len(), 16);
+        assert_eq!(mock_raw_sock.captured.len(), PROBE_MAX_TTL as usize);
 
         // now verify the last packet is what we think it should be
         let last_pkt =
             PacketHeaders::from_ethernet_slice(mock_raw_sock.captured.last().unwrap()).unwrap();
-        // 16th pkt should have a 16 byte payload
-        assert_eq!(last_pkt.payload.len(), 16);
+        // nth pkt should have a 16 byte payload
+        assert_eq!(last_pkt.payload.len(), PROBE_MAX_TTL as usize);
         // TODO: more checks as needed, but if we got here, it's probably mostly working
     }
 }
