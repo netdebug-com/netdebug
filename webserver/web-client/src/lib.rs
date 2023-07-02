@@ -2,7 +2,7 @@ mod utils;
 
 use std::{collections::HashMap, vec};
 
-use common::{Message, ProbeReport, ProbeReportEntry};
+use common::{Message, ProbeReport, ProbeReportEntry, PROBE_MAX_TTL};
 use js_sys::Date;
 use plotters::coord::Shift;
 use plotters::prelude::*;
@@ -252,11 +252,10 @@ impl Graph {
                 PathElement::new(vec![(x, y - y_off), (x + 20, y - y_off)], &RED)
             });
         // Plot the data from each TTL's RTT's
-        // TODO: make these TTL constants global/non-hardcoded
-        for ttl in 1..=16 {
+        for ttl in 1..=PROBE_MAX_TTL {
             // TODO: pretty up the color selection algorithm
-            let color = Palette99::pick(ttl).mix(0.9);
-            if let Some(data_points) = self.data_ttl.get(&(ttl as u8)) {
+            let color = Palette99::pick(ttl as usize).mix(0.9);
+            if let Some(data_points) = self.data_ttl.get(&(ttl)) {
                 let data: Vec<(f64, f64)> = data_points
                     .iter()
                     .enumerate()
