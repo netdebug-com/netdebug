@@ -40,31 +40,24 @@ pub fn main() -> Result<(), JsValue> {
     let document = window.document().expect("should have a document on window");
     let body = document.body().expect("document should have a body");
 
-    // Manufacture the element we're gonna append
-    /*
-    let list = document.create_element("ol")?;
-    list.set_id(TIME_LOG);
+    let div = document.create_element("div").unwrap();
+    div.set_inner_html("Build info:");
+    let list = document.create_element("ul")?;
     let list_item = document.create_element("li")?;
-    list_item.set_inner_html("Network isn't the problem!");
+    list_item.set_inner_html(format!("GitHash = {}", env!("GIT_HASH")).as_str());
     list.append_child(&list_item)?;
-
-    let div = lookup_by_id("root_div");
-    if let Some(d) = div {
-        d.append_child(&list)?;
-    } else {
-        body.append_child(&list)?;
-    }
-    */
+    div.append_child(&list)?;
 
     let canvas = document.create_element("canvas").unwrap();
     canvas.set_id("canvas"); // come back if we need manual double buffering
     let (width, height) = calc_height(&document, &body);
-    let width = 4 * width / 5;
+    let width = 9 * width / 10;
     let height = 4 * height / 5;
     console_log!("Setting height to {}, width to {}", height, width);
     canvas.set_attribute("width", format!("{}", width).as_str())?;
     canvas.set_attribute("height", format!("{}", height).as_str())?;
     body.append_child(&canvas).unwrap();
+    body.append_child(&div).unwrap();
 
     // canvas example - https://rustwasm.github.io/docs/wasm-bindgen/examples/2d-canvas.html
 
@@ -413,6 +406,10 @@ fn handle_ping1(t: &f64, ws: &WebSocket) -> Result<(), JsValue> {
 
 fn handle_version_check(git_hash: String, ws: &WebSocket) -> Result<(), JsValue> {
     if common::Message::check_version(&git_hash) {
+        console_log!(
+            "Version checked passed: both client and server on {}",
+            git_hash
+        );
         let reply = common::Message::make_version_check();
         ws.send_with_str(serde_json::to_string(&reply).unwrap().as_str())
     } else {

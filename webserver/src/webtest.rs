@@ -73,6 +73,11 @@ pub async fn handle_websocket(
 
     let _ws_msg_handler_handle =
         tokio::spawn(async move { handle_ws_message(context, ws_rx, tx_clone, barrier_tx).await });
+    // Version check - is the client build from the same git hash as the server?
+    tx.send(common::Message::make_version_check())
+        .unwrap_or_else(|e| {
+            warn!("Sending version check: {} got {}", addr_str, e);
+        });
 
     // send 100 rounds of pings to the client
     for probe_round in 1..100 {
