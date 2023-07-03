@@ -21,7 +21,7 @@ jobs:
         run: sudo apt-get install libpcap-dev
       - name: Cargo build
         run: |
-          cargo build --all-features --verbose 
+          cargo build --all-features --verbose  --release
       - name: wasm-pack
         run: |
           wasm-pack build webserver/web-client --target web
