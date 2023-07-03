@@ -1,3 +1,21 @@
+/**
+ * This is the main test logic.  Currently the WASM client connects
+ * to the server with a websocket and we setup a ping/pong message
+ * back and forth ~100 times.  With each ping/pong round, we send a
+ * burst of TCP restransmits as inband probes.
+ *
+ * We use three different mpsc channels which
+ * can get confusing:
+ * 1) tx/rx : the ws_tx function does not allow itself to be cloned
+ *     so we set up a special thread to wrap the ws_tx with a standard tokio mspc channel
+ *     so that multiple senders can independently send to the ws_tx channel, e.g.,
+ *     the main handle_websocket() and the response handles
+ * 2) connection_tracker: this is the tx side of talking to the connection tracker
+ * 3) barrier: this is used to single between the handle_websocket and handle_ws_message
+ *    to mark when a ping/pong test is done and we should start another one
+ *
+ * More tests to be added with time
+ */
 use chrono::Utc;
 use common::Message;
 use std::{net::SocketAddr, time::Duration};
@@ -37,9 +55,10 @@ pub async fn handle_websocket(
 
     // wrap the ws_tx with an unbounded mpsc channel because we can't clone it...
     let (tx, mut rx) = mpsc::unbounded_channel::<common::Message>();
+    let (barrier_tx, mut barrier_rx) = mpsc::unbounded_channel::<()>();
     let tx_clone = tx.clone();
     let addr_str_clone = addr_str.clone();
-    tokio::spawn(async move {
+    let _sender_wrapper_handle = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let Err(e) = ws_tx
                 .send(ws::Message::text(
@@ -52,7 +71,8 @@ pub async fn handle_websocket(
         }
     });
 
-    tokio::spawn(async move { handle_ws_message(context, ws_rx, tx_clone).await });
+    let _ws_msg_handler_handle =
+        tokio::spawn(async move { handle_ws_message(context, ws_rx, tx_clone, barrier_tx).await });
 
     // send 100 rounds of pings to the client
     for probe_round in 1..100 {
@@ -66,8 +86,16 @@ pub async fn handle_websocket(
                 addr_str, e
             );
         });
-        // TODO: calc this from RTT of connection, not a hard/fixed limit
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        if let None = barrier_rx.recv().await {
+            warn!("barrier_rx returned none? channel closed!?");
+            break;
+        }
+        // the application-to-application ping is done; wait a little longer
+        // just to make sure any out-of-order probes are flushed/processed from the network
+        // This may sound pedantic as the application ping should take longer than the in-band
+        // network probes, but with CPU processing delays on routers, this may not always be the
+        // case.  10ms should be ok?!
+        tokio::time::sleep(Duration::from_millis(10)).await;
         // now that time has passed, collect the ProbeReport from the connection tracker
         debug!(
             "Collecting probe report for {} :: {}",
@@ -110,6 +138,7 @@ async fn handle_ws_message(
     context: Context,
     mut rx: SplitStream<WebSocket>,
     tx: mpsc::UnboundedSender<Message>,
+    barrier_tx: mpsc::UnboundedSender<()>,
 ) {
     debug!("In handle_ws_message()");
     while let Some(raw_msg) = rx.next().await {
@@ -124,7 +153,7 @@ async fn handle_ws_message(
                 };
                 match serde_json::from_str(msg) {
                     Ok(msg) => {
-                        handle_message(&context, msg, &tx).await;
+                        handle_message(&context, msg, &tx, &barrier_tx).await;
                     }
                     Err(e) => {
                         warn!("Failed to parse json message {}", e);
@@ -139,7 +168,12 @@ async fn handle_ws_message(
     }
 }
 
-async fn handle_message(_context: &Context, msg: Message, tx: &mpsc::UnboundedSender<Message>) {
+async fn handle_message(
+    _context: &Context,
+    msg: Message,
+    tx: &mpsc::UnboundedSender<Message>,
+    barrier_tx: &mpsc::UnboundedSender<()>,
+) {
     use Message::*;
     match msg {
         VersionCheck { git_hash } => handle_version_check(git_hash, tx),
@@ -159,7 +193,13 @@ async fn handle_message(_context: &Context, msg: Message, tx: &mpsc::UnboundedSe
         Ping2FromClient {
             server_timestamp_ms,
             client_timestamp_ms,
-        } => handle_ping2(server_timestamp_ms, client_timestamp_ms, tx),
+        } => {
+            handle_ping2(server_timestamp_ms, client_timestamp_ms, tx);
+            // tell the handle_websocket() that we're done with this probe round
+            if let Err(e) = barrier_tx.send(()) {
+                warn!("barrier_tx.send() produced :: {}", e);
+            }
+        }
     }
 }
 

@@ -2,7 +2,7 @@ use std::error::Error;
 
 use common::PROBE_MAX_TTL;
 use etherparse::{PacketHeaders, TransportHeader};
-use log::{info, warn};
+use log::{debug, warn};
 
 use crate::{context::Context, owned_packet::OwnedParsedPacket, pcap::RawSocketWriter};
 
@@ -57,7 +57,7 @@ pub fn tcp_inband_probe(
         // not what we think we're sending.
         // unwrap() here should be ok because if this doesn't parse, we should die obviously
         let parsed_probe = PacketHeaders::from_ethernet_slice(first_probe).unwrap();
-        info!("Sending tcp_inband_probes() :: {:?}", parsed_probe);
+        debug!("Sending tcp_inband_probes() :: {:?}", parsed_probe);
     }
     for probe in probes {
         if let Err(e) = raw_sock.sendpacket(&probe) {
