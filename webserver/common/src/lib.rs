@@ -56,6 +56,10 @@ impl Message {
     }
 }
 
+pub fn get_git_hash_version() -> String {
+    env!("GIT_HASH").to_string()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProbeReport {
     pub report: Vec<ProbeReportEntry>,

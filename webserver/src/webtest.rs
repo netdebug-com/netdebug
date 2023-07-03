@@ -237,7 +237,7 @@ fn handle_version_check(git_hash: String, _tx: &mpsc::UnboundedSender<Message>) 
             "Weird: client has differnt version than server but thinks it's the same: 
         {} != {}",
             &git_hash,
-            env!("GIT_HASH")
+            common::get_git_hash_version(),
         );
     }
 }

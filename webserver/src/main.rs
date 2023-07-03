@@ -36,6 +36,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         });
     }
+
+    info!(
+        "Running webserver version: {}",
+        common::get_git_hash_version()
+    );
     let listen_addr = if args.production {
         info!("Running in production mode");
         ([0, 0, 0, 0], args.listen_port)

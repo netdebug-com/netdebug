@@ -2,7 +2,7 @@ mod utils;
 
 use std::{collections::HashMap, vec};
 
-use common::{Message, ProbeReport, ProbeReportEntry, PROBE_MAX_TTL};
+use common::{get_git_hash_version, Message, ProbeReport, ProbeReportEntry, PROBE_MAX_TTL};
 use js_sys::Date;
 use plotters::coord::Shift;
 use plotters::prelude::*;
@@ -44,7 +44,7 @@ pub fn main() -> Result<(), JsValue> {
     div.set_inner_html("Build info:");
     let list = document.create_element("ul")?;
     let list_item = document.create_element("li")?;
-    list_item.set_inner_html(format!("GitHash = {}", env!("GIT_HASH")).as_str());
+    list_item.set_inner_html(format!("GitHash = {}", common::get_git_hash_version()).as_str());
     list.append_child(&list_item)?;
     div.append_child(&list)?;
 
@@ -416,7 +416,7 @@ fn handle_version_check(git_hash: String, ws: &WebSocket) -> Result<(), JsValue>
         console_log!(
             "Server has version {} != client version {}",
             &git_hash,
-            env!("GIT_HASH")
+            get_git_hash_version(),
         );
         Err(JsValue::from_str(
             format!("need reload for new version").as_str(),
