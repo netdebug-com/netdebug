@@ -49,3 +49,5 @@ rustup override set nightly
 # NOTES:
 
 In VSCode, CTR+SHIFT+V will generate a preview of markdown
+9. If this a new cloud instance, make sure to allow ICMP and ICMP6 in both directions in your security group or 
+nothing will work properly!
