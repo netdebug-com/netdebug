@@ -4,7 +4,7 @@ use common::PROBE_MAX_TTL;
 use etherparse::{PacketHeaders, TransportHeader};
 use log::{debug, warn};
 
-use crate::{context::Context, owned_packet::OwnedParsedPacket, pcap::RawSocketWriter};
+use crate::{owned_packet::OwnedParsedPacket, pcap::RawSocketWriter};
 
 /**
  * Create a bunch of packets with the same local/remote five tuple
@@ -15,8 +15,7 @@ use crate::{context::Context, owned_packet::OwnedParsedPacket, pcap::RawSocketWr
  * take the 'raw_sock' param explicitly to facilitate testing
 */
 pub fn tcp_inband_probe(
-    _context: Context,
-    packet: OwnedParsedPacket,
+    packet: &OwnedParsedPacket,
     raw_sock: &mut dyn RawSocketWriter, // used with testing
 ) -> Result<(), Box<dyn Error>> {
     let l2 = packet.link.as_ref().unwrap();
@@ -128,9 +127,8 @@ pub mod test {
             IpAddr::from_str("192.168.1.1").unwrap(),
             IpAddr::from_str("192.168.1.2").unwrap(),
         );
-        let context = crate::context::test::make_test_context();
 
-        tcp_inband_probe(context, packet, &mut mock_raw_sock).unwrap();
+        tcp_inband_probe(&packet, &mut mock_raw_sock).unwrap();
 
         assert_eq!(mock_raw_sock.captured.len(), PROBE_MAX_TTL as usize);
 

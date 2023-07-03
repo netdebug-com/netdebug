@@ -4,7 +4,7 @@ use std::{
 };
 
 use common::{ProbeReport, ProbeReportEntry, PROBE_MAX_TTL};
-use etherparse::{IpHeader, TcpHeader, TransportHeader};
+use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader};
 use log::{info, warn};
 
 use crate::{
@@ -69,11 +69,16 @@ impl ConnectionKey {
  */
 #[derive(Debug)]
 pub enum ConnectionTrackerMsg {
-    Pkt(OwnedParsedPacket), // send the connecti
+    Pkt(OwnedParsedPacket), // send to the connection tracker to track
     ProbeReport {
         key: ConnectionKey,
         clear_state: bool,
         tx: tokio::sync::mpsc::Sender<ProbeReport>,
+    },
+    ProbeOnIdle {
+        // launch a set of inband probes when the connection next goes idle
+        // NOTE: idle is both remote_ack  == local_seq and a promise from the application not to send anymore data for a while
+        key: ConnectionKey, // for this connection
     },
 }
 
@@ -128,6 +133,9 @@ where
                     clear_state,
                     tx,
                 } => self.generate_report(key, clear_state, tx).await,
+                ProbeOnIdle { key } => {
+                    self.set_probe_on_idle(key).await;
+                }
             }
         }
         info!("ConnectionTracker exiting rx_loop()");
@@ -164,7 +172,9 @@ where
             remote_syn: None,
             local_seq: None,
             local_ack: None,
+            remote_ack: None,
             local_data: None,
+            next_end_host_reply: None,
             outgoing_probe_timestamps: HashMap::new(),
             incoming_reply_timestamps: HashMap::new(),
         };
@@ -202,6 +212,14 @@ where
             // sending nothing will close the connection and thus return None to the report receiver
         }
     }
+
+    async fn set_probe_on_idle(&mut self, key: ConnectionKey) {
+        if let Some(connection) = self.connections.get_mut(&key) {
+            connection.probe_on_idle(&mut self.raw_sock).await;
+        } else {
+            warn!("Tried to set ProbeOnIdle for unknown connection {}", key);
+        }
+    }
 }
 
 type ProbeId = u8;
@@ -211,7 +229,9 @@ pub struct Connection {
     pub remote_syn: Option<OwnedParsedPacket>,
     pub local_seq: Option<u32>,
     pub local_ack: Option<u32>,
-    pub local_data: Option<Vec<u8>>, // data sent for retransmits
+    pub remote_ack: Option<u32>,
+    pub local_data: Option<OwnedParsedPacket>, // data sent for retransmits
+    pub next_end_host_reply: Option<ProbeId>,
     pub outgoing_probe_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
     pub incoming_reply_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
 }
@@ -293,7 +313,7 @@ impl Connection {
 
     fn update_tcp_local<R>(
         &mut self,
-        context: &Context,
+        _context: &Context,
         packet: &OwnedParsedPacket,
         tcp: &TcpHeader,
         raw_sock: &mut R,
@@ -318,11 +338,11 @@ impl Connection {
                 // spawn an inband probe
                 first_time = true;
             }
-            self.local_data = Some(packet.payload.clone());
+            self.local_data = Some(packet.clone());
             if first_time {
-                let packet_clone = packet.clone();
-                let context_clone = context.clone();
-                tcp_inband_probe(context_clone, packet_clone, raw_sock).unwrap();
+                // reset the probe state
+                self.next_end_host_reply = Some(PROBE_MAX_TTL);
+                tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock).unwrap();
             }
         }
         if let Some(ttl) = self.is_probe_heuristic(true, packet) {
@@ -341,6 +361,56 @@ impl Connection {
     fn update_tcp_remote(&mut self, packet: &OwnedParsedPacket, tcp: &TcpHeader) {
         if tcp.syn {
             self.remote_syn = Some(packet.clone()); // memcpy() but doesn't happen that much or with much data
+        }
+        // record how far the remote side has acknowledged; check for old acks for outstanding probes
+        if tcp.ack {
+            // TODO: figure out if we need to implement Protection Against Wrapped Segments (PAWS) here
+            // e.g., check to make sure that sequence space wraps are correctly handled
+            // for now, wrapped segements show up as lost packets, so it's not the end of the world - I think
+            if let Some(old_ack) = self.remote_ack {
+                // Is this ACK a duplicate ACK?
+                if old_ack == tcp.acknowledgment_number && packet.payload.len() == 0 {
+                    if let Some(_selective_ack) = tcp.options_iterator().find(|opt| match &opt {
+                        Ok(TcpOptionElement::SelectiveAcknowledgement(_l, _r)) => true,
+                        _ => false,
+                    }) {
+                        // a dup-ack with a selective acknowledgements option is a legit congestion event
+                        // and not a probe reply
+                        // TODO: use selective ack params to estimate packets lost
+                    } else {
+                        // looks like a inband probe reply - no SelectiveAck option!
+                        // assume that inband ACK replies come from the highest TTL we sent
+                        // and work backwards for each reply we received, e.g.,
+                        // first reply is from TTL=max, second from TTL=max - 1, etc.
+                        // this is a bit of a cheat as we really should try to match the
+                        // reply to the actual outgoing probe that caused it, but there's not
+                        // enough into the in ACK to infer the probe that caused it.  Working
+                        // backwards adds some error to the RTT estimation, but it's on the
+                        // order of the sent_time(probe_k) vs. sent_time(probe_n) which
+                        // is extremely small (e.g., ~10 microseconds) because they are sent
+                        // quickly back-to-back
+                        // TODO if we need to fix this, need to change the probing strategy to binary
+                        // search for the smallest ttl that gets the ACK and we can start at
+                        // the last ttl where we got an ICMP reply
+                        if let Some(probe_id) = self.next_end_host_reply {
+                            if let Some(replies) = self.incoming_reply_timestamps.get_mut(&probe_id)
+                            {
+                                replies.insert(packet.clone());
+                            } else {
+                                self.incoming_reply_timestamps
+                                    .insert(probe_id, HashSet::from([packet.clone()]));
+                            }
+                            // make sure the next probe goes in the next nearer TTL's slot
+                            self.next_end_host_reply = Some(probe_id - 1);
+                        } else {
+                            warn!("Looks like we got a inband ACK reply without next_end_host_reply set!? : {:?}", self);
+                        }
+                    }
+                }
+            }
+            // what ever the case, update the ack for next time
+            // NOTE: this could be a NOOP in the dup ack case
+            self.remote_ack = Some(tcp.acknowledgment_number);
         }
         // TODO: look for incoming selective acks (indicates packet loss)
     }
@@ -446,7 +516,6 @@ impl Connection {
      * report.  If 'clear' is set, reset the connection's state so we can do a new set
      * of probes on the next data packet
      */
-    #[allow(dead_code)] // TODO: remove once we're calling this properly from the client
     async fn generate_probe_report(&mut self, clear: bool) -> ProbeReport {
         let mut report = Vec::new();
         for ttl in 1..=PROBE_MAX_TTL {
@@ -523,16 +592,42 @@ impl Connection {
             }
         }
         if clear {
-            // reset the state so that the next outgoing data packet triggers another set of probes
-            self.incoming_reply_timestamps.clear();
-            self.outgoing_probe_timestamps.clear();
-            self.local_data = None;
+            self.clear_probe_data(true);
         }
         ProbeReport::new(report)
+    }
+
+    /**
+     * If we're idle now, launch probes, else flag that we're looking for an outstanding ack
+     */
+    async fn probe_on_idle<R: RawSocketWriter>(&mut self, raw_sock: &mut R) {
+        if self.remote_ack >= self.local_seq {
+            // are we idle now?
+            self.clear_probe_data(false);
+            self.next_end_host_reply = Some(PROBE_MAX_TTL);
+            tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock).unwrap();
+        }
+    }
+
+    /**
+     * Reset the state around a set of probes.  If we clear the local_data,
+     * then we're saying "when you next get a valid data packet, launch a probe
+     * again".  
+     */
+
+    fn clear_probe_data(&mut self, flush_local_data: bool) {
+        // clear any old probe data
+        self.incoming_reply_timestamps.clear();
+        self.outgoing_probe_timestamps.clear();
+        self.next_end_host_reply = Some(PROBE_MAX_TTL);
+        if flush_local_data {
+            self.local_data = None;
+        }
     }
 }
 #[cfg(test)]
 mod test {
+    use std::path::Path;
     use std::str::FromStr;
 
     use super::*;
@@ -586,6 +681,27 @@ mod test {
         assert_eq!(ll_key, rl_key);
     }
 
+    /**
+     * Help tests find the testing directory - it's harder than it should be.
+     *
+     * If we invoke tests via 'cargo test', the base dir is netdebug/webserver
+     * but if we start it from the vscode debug IDE, it's netdebug
+     */
+
+    pub fn test_dir(f: &str) -> String {
+        use std::fs::metadata;
+        if metadata(f).is_ok() {
+            return f.to_string();
+        }
+        let p = Path::new("webserver").join(f);
+        if metadata(&p).is_ok() {
+            let p = p.into_os_string().to_str().unwrap().to_string();
+            return p;
+        } else {
+            panic!("Couldn't find a test_dir for {}", f);
+        }
+    }
+
     #[tokio::test]
     async fn connection_tracker_one_flow_outgoing() {
         let context = make_test_context();
@@ -596,7 +712,8 @@ mod test {
         let mut connection_tracker = ConnectionTracker::new(context, local_addrs, raw_sock).await;
 
         let mut capture =
-            pcap::Capture::from_file("tests/simple_websocket_cleartxt_out_probes.pcap").unwrap();
+            pcap::Capture::from_file(test_dir("tests/simple_websocket_cleartxt_out_probes.pcap"))
+                .unwrap();
         // take all of the packets in the capture and pipe them into the connection tracker
         while let Ok(pkt) = capture.next_packet() {
             let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
@@ -653,9 +770,10 @@ mod test {
             ConnectionTracker::new(context, local_addrs.clone(), raw_sock).await;
 
         let mut connection_key: Option<ConnectionKey> = None;
-        let mut capture =
-            pcap::Capture::from_file("tests/simple_websocket_cleartext_remote_probe_replies.pcap")
-                .unwrap();
+        let mut capture = pcap::Capture::from_file(test_dir(
+            "tests/simple_websocket_cleartext_remote_probe_replies.pcap",
+        ))
+        .unwrap();
         // take all of the packets in the capture and pipe them into the connection tracker
         while let Ok(pkt) = capture.next_packet() {
             let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
@@ -749,5 +867,24 @@ mod test {
         assert!(!src_is_local);
 
         assert_eq!(probe_key, reply_key);
+    }
+
+    #[test]
+    fn options_cmp() {
+        // it looks like you can compare inside options!?
+        // some of the ack vs. seq comparisons assume this, so write a test just to make sure this
+        // behavior doesn't change/go away
+        //
+        // https://doc.rust-lang.org/src/core/option.rs.html#560
+        // apparently it's implemented by #[derive(Ord)] !?!
+        let a = Some(10);
+        let b = Some(20);
+        let c: Option<i32> = None;
+
+        assert!(a < b);
+        assert!(b > a);
+        assert!(a != c);
+        assert!(a > c); // seems like None is less than everything!?
+        assert!(b > c);
     }
 }
