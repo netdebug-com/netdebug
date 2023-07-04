@@ -12,7 +12,8 @@
  *     the main handle_websocket() and the response handles
  * 2) connection_tracker: this is the tx side of talking to the connection tracker
  * 3) barrier: this is used to single between the handle_websocket and handle_ws_message
- *    to mark when a ping/pong test is done and we should start another one
+ *    to mark when a ping/pong test is done and we should start another one.
+ *    It returns the most recent RTT from the ping/pong scheme
  *
  * More tests to be added with time
  */
@@ -56,7 +57,7 @@ pub async fn handle_websocket(
 
     // wrap the ws_tx with an unbounded mpsc channel because we can't clone it...
     let (tx, mut rx) = mpsc::unbounded_channel::<common::Message>();
-    let (barrier_tx, mut barrier_rx) = mpsc::unbounded_channel::<()>();
+    let (barrier_tx, mut barrier_rx) = mpsc::unbounded_channel::<f64>();
     let tx_clone = tx.clone();
     let addr_str_clone = addr_str.clone();
     let _sender_wrapper_handle = tokio::spawn(async move {
@@ -97,7 +98,7 @@ pub async fn handle_websocket(
 async fn run_probe_round(
     probe_round: u32,
     tx: &mpsc::UnboundedSender<Message>,
-    barrier_rx: &mut mpsc::UnboundedReceiver<()>,
+    barrier_rx: &mut mpsc::UnboundedReceiver<f64>,
     connection_key: &Option<ConnectionKey>,
     connection_tracker: &mpsc::UnboundedSender<ConnectionTrackerMsg>,
     addr_str: &String,
@@ -113,10 +114,10 @@ async fn run_probe_round(
         );
     });
     // wait for Ping1-->Ping2-->Ping3 sequence to finish
-    if let None = barrier_rx.recv().await {
+    let rtt_estimate = barrier_rx.recv().await.unwrap_or_else(|| {
         warn!("barrier_rx returned none? channel closed!?");
-        return;
-    }
+        500.0 // guess 500 but should prob just die
+    });
     // the application-to-application ping is done; wait a little longer
     // just to make sure any out-of-order probes are flushed/processed from the network
     // This may sound pedantic as the application ping should take longer than the in-band
@@ -154,6 +155,8 @@ async fn run_probe_round(
             warn!("connection_tracker::send() returned {}", e);
             return;
         });
+    // TODO: do a smarter RTT estimate
+    tokio::time::sleep(Duration::from_millis(rtt_estimate.round() as u64)).await;
     // second report we get, do clear state
     // TODO refactor duplicate code! signal idle report?
     match get_probe_report(connection_tracker, connection_key, true).await {
@@ -208,7 +211,7 @@ async fn handle_ws_message(
     context: Context,
     mut rx: SplitStream<WebSocket>,
     tx: mpsc::UnboundedSender<Message>,
-    barrier_tx: mpsc::UnboundedSender<()>,
+    barrier_tx: mpsc::UnboundedSender<f64>,
 ) {
     debug!("In handle_ws_message()");
     while let Some(raw_msg) = rx.next().await {
@@ -242,7 +245,7 @@ async fn handle_message(
     _context: &Context,
     msg: Message,
     tx: &mpsc::UnboundedSender<Message>,
-    barrier_tx: &mpsc::UnboundedSender<()>,
+    barrier_tx: &mpsc::UnboundedSender<f64>,
 ) {
     use Message::*;
     match msg {
@@ -264,11 +267,7 @@ async fn handle_message(
             server_timestamp_ms,
             client_timestamp_ms,
         } => {
-            handle_ping2(server_timestamp_ms, client_timestamp_ms, tx);
-            // tell the handle_websocket() that we're done with this probe round
-            if let Err(e) = barrier_tx.send(()) {
-                warn!("barrier_tx.send() produced :: {}", e);
-            }
+            handle_ping2(server_timestamp_ms, client_timestamp_ms, tx, barrier_tx);
         }
     }
 }
@@ -281,6 +280,7 @@ fn handle_ping2(
     server_timestamp_ms: f64,
     client_timestamp_ms: f64,
     tx: &mpsc::UnboundedSender<Message>,
+    barrier_tx: &mpsc::UnboundedSender<f64>,
 ) {
     debug!("Got ping2 from client");
     let rtt = make_time_ms() - server_timestamp_ms;
@@ -290,6 +290,10 @@ fn handle_ping2(
     };
     if let Err(e) = tx.send(reply) {
         warn!("Websocket write failed: {}", e);
+    }
+    // tell the handle_websocket() that we're done with this probe round
+    if let Err(e) = barrier_tx.send(rtt) {
+        warn!("barrier_tx.send() produced :: {}", e);
     }
 }
 
