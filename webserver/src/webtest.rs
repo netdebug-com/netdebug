@@ -81,55 +81,79 @@ pub async fn handle_websocket(
 
     // send 100 rounds of pings to the client
     for probe_round in 1..100 {
-        let t = make_time_ms();
-        let msg = common::Message::Ping1FromServer {
-            server_timestamp_ms: t,
-        };
-        tx.send(msg).unwrap_or_else(|e| {
-            warn!(
-                "Closing connection: Failed to send message to {}: {}",
-                addr_str, e
-            );
-        });
-        if let None = barrier_rx.recv().await {
-            warn!("barrier_rx returned none? channel closed!?");
-            break;
-        }
-        // the application-to-application ping is done; wait a little longer
-        // just to make sure any out-of-order probes are flushed/processed from the network
-        // This may sound pedantic as the application ping should take longer than the in-band
-        // network probes, but with CPU processing delays on routers, this may not always be the
-        // case.  10ms should be ok?!
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        // now that time has passed, collect the ProbeReport from the connection tracker
-        debug!(
-            "Collecting probe report for {} :: {}",
-            addr_str, probe_round
+        run_probe_round(
+            probe_round,
+            &tx,
+            &mut barrier_rx,
+            &connection_key,
+            &connection_tracker,
+            &addr_str,
+        )
+        .await;
+    }
+}
+
+async fn run_probe_round(
+    probe_round: u32,
+    tx: &mpsc::UnboundedSender<Message>,
+    barrier_rx: &mut mpsc::UnboundedReceiver<()>,
+    connection_key: &Option<ConnectionKey>,
+    connection_tracker: &mpsc::UnboundedSender<ConnectionTrackerMsg>,
+    addr_str: &String,
+) {
+    use common::Message::*;
+    tx.send(Ping1FromServer {
+        server_timestamp_ms: make_time_ms(),
+    })
+    .unwrap_or_else(|e| {
+        warn!(
+            "Closing connection: Failed to send message to {}: {}",
+            addr_str, e
         );
-        if let Some(key) = &connection_key {
-            let key = key.clone();
-            let (report_tx, mut report_rx) = tokio::sync::mpsc::channel(1);
-            if let Err(e) = connection_tracker.send(ConnectionTrackerMsg::ProbeReport {
-                key,
-                clear_state: true,
-                tx: report_tx,
-            }) {
-                warn!("Error talking to connection tracker: {}", e);
-            } else {
-                match report_rx.recv().await {
-                    Some(report) => tx
-                        .send(common::Message::ProbeReport {
-                            report,
-                            probe_round,
-                        })
-                        .unwrap_or_else(|e| {
-                            warn!(
-                                "Error while sending ProbeReport to client: {} :: {}",
-                                addr_str, e
-                            );
-                        }),
-                    None => warn!("Got 'None' back from report_tx for {}", addr_str),
-                }
+    });
+    // wait for Ping1-->Ping2-->Ping3 sequence to finish
+    if let None = barrier_rx.recv().await {
+        warn!("barrier_rx returned none? channel closed!?");
+        return;
+    }
+    // the application-to-application ping is done; wait a little longer
+    // just to make sure any out-of-order probes are flushed/processed from the network
+    // This may sound pedantic as the application ping should take longer than the in-band
+    // network probes, but with CPU processing delays on routers, this may not always be the
+    // case.  10ms should be ok?!
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    // now that time has passed, collect the ProbeReport from the connection tracker
+    debug!(
+        "Collecting probe report for {} :: {}",
+        addr_str, probe_round
+    );
+    if let Some(key) = &connection_key {
+        let key = key.clone();
+        // create an async channel for the connection tracker to send us back the report on
+        let (report_tx, mut report_rx) = tokio::sync::mpsc::channel(1);
+        if let Err(e) = connection_tracker.send(ConnectionTrackerMsg::ProbeReport {
+            key,
+            clear_state: true,
+            tx: report_tx,
+        }) {
+            warn!("Error talking to connection tracker: {}", e);
+        } else {
+            // wait for the report to come on the channel
+            match report_rx.recv().await {
+                // TODO: log the report centrally - useful data!
+                // if we got the report, send it to the remote WASM client
+                Some(report) => tx
+                    .send(common::Message::ProbeReport {
+                        report,
+                        probe_round,
+                    })
+                    .unwrap_or_else(|e| {
+                        warn!(
+                            "Error while sending ProbeReport to client: {} :: {}",
+                            addr_str, e
+                        );
+                    }),
+                None => warn!("Got 'None' back from report_tx for {}", addr_str),
             }
         }
     }
