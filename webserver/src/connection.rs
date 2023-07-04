@@ -95,6 +95,7 @@ where
     R: RawSocketWriter,
 {
     context: Context,
+    // TODO: change this to an LRUHashMap to avoid mem leaks!
     connections: HashMap<ConnectionKey, Connection>,
     local_addrs: HashSet<IpAddr>,
     local_tcp_ports: HashSet<u16>,
@@ -372,6 +373,7 @@ impl Connection {
             }
         }
         // TODO: look for outgoing selective acks (indicates packet loss)
+        // TODO: track FIN and RST to feedback to connectiontracker when it's time to delete this state!
     }
 
     fn update_tcp_remote<R: RawSocketWriter>(
@@ -440,6 +442,7 @@ impl Connection {
             }
         }
         // TODO: look for incoming selective acks (indicates packet loss)
+        // TODO: track FIN and RST to feedback to connectiontracker when it's time to delete this state!
     }
 
     fn update_icmp4_remote(
