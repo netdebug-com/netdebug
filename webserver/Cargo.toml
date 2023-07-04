@@ -30,14 +30,16 @@ cli = []
 common = { path = "./common" }
 chrono = "0.4.26"
 clap = { version = "4.2.7", features = ["derive"] }
-etherparse = "0.13.0"
+# move back to the public branch once https://github.com/JulianSchmid/etherparse/pull/66 is merged
+# NOTE: 0.14.0 looks like it breaks partial IpHeader::from_slice() parsing
+# See https://github.com/JulianSchmid/etherparse/issues/46
+#etherparse = "0.13.0"
+etherparse = { git = "https://github.com/robs-zeynet/etherparse", branch="tcp_header"}
 futures = "0.3.28"
 futures-util = "0.3.28"
 libc = "0.2.146"
 log = "0.4.18"
-# packet-builder = "0.7.0"  ## didn't have an easy interface; come back
 pcap = { version = "1.1.0", features = ["capture-stream"]}
-# pnet = "0.33.0"  ## needed by packet_builder
 pretty_env_logger = "0.5.0"
 pwhash = "1.0.0"
 rand = "0.8.5"

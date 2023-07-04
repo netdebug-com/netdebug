@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use common::PROBE_MAX_TTL;
-use etherparse::{PacketHeaders, TransportHeader};
+use etherparse::{PacketHeaders, TcpHeader, TransportHeader};
 use log::{debug, warn};
 
 use crate::{owned_packet::OwnedParsedPacket, pcap::RawSocketWriter};
@@ -33,12 +33,20 @@ pub fn tcp_inband_probe(
                 }
             };
             let builder = match &packet.transport {
-                Some(TransportHeader::Tcp(tcp)) => builder.tcp(
-                    tcp.source_port,
-                    tcp.destination_port,
-                    tcp.sequence_number,
-                    tcp.window_size,
-                ),
+                Some(TransportHeader::Tcp(tcp)) => {
+                    let mut tcph = TcpHeader::new(
+                        tcp.source_port,
+                        tcp.destination_port,
+                        tcp.sequence_number,
+                        tcp.window_size,
+                    );
+                    // make this probe look more believable
+                    tcph.psh = true;
+                    tcph.ack = true;
+                    tcph.acknowledgment_number = tcp.acknowledgment_number;
+                    // don't set the TCP options for now - lazy
+                    builder.tcp_header(tcph)
+                }
                 _ => panic!("Called tcp_band_probe on non-TCP connection: {:?}", packet),
             };
 
