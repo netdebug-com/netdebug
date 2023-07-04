@@ -1027,6 +1027,7 @@ mod test {
         let local_data = OwnedParsedPacket::try_from_fake_time(TEST_1_LOCAL_DATA.to_vec()).unwrap();
         let remote_data_ack =
             OwnedParsedPacket::try_from_fake_time(TEST_1_REMOTE_ACK.to_vec()).unwrap();
+        let dup_ack = remote_data_ack.clone();
 
         let (key, src_is_local) = syn
             .to_connection_key(&local_addrs, &local_tcp_ports)
@@ -1061,7 +1062,7 @@ mod test {
         connection_tracker.raw_sock.captured.clear();
 
         // schedule a 'probe on idle' -> shouldn't trigger yet as we have outstanding data/not idle
-        connection_tracker.set_probe_on_idle(key).await;
+        connection_tracker.set_probe_on_idle(key.clone()).await;
         assert_eq!(connection_tracker.raw_sock.captured.len(), 0);
 
         // the process of adding this ACK should trigger the idle condition and send probes
@@ -1070,5 +1071,30 @@ mod test {
             connection_tracker.raw_sock.captured.len(),
             PROBE_MAX_TTL as usize
         );
+
+        // now process the SAME remote_data_ack packet five times: this is what EndHost probe
+        // replies look like and verify the resulting ProbeReport
+        // captured them correctly
+        for _ in 0..5 {
+            connection_tracker.add(dup_ack.clone());
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        connection_tracker.generate_report(key, false, tx).await;
+        let report = rx.recv().await.unwrap();
+
+        let replies = report.report.iter().filter(|e| {
+            matches!(
+                e,
+                ProbeReportEntry::ReplyFound {
+                    ttl: _,
+                    out_timestamp_ms: _,
+                    rtt_ms: _,
+                    src_ip: _,
+                    comment: _
+                }
+            )
+        });
+        assert_eq!(replies.count(), 5);
     }
 }
