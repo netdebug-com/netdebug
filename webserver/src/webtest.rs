@@ -17,7 +17,7 @@
  * More tests to be added with time
  */
 use chrono::Utc;
-use common::Message;
+use common::{Message, ProbeReport};
 use std::{net::SocketAddr, time::Duration};
 use tokio::sync::mpsc;
 use warp::ws::{self, WebSocket};
@@ -48,6 +48,7 @@ pub async fn handle_websocket(
             Some(ConnectionKey::new(&context, a, etherparse::ip_number::TCP).await),
         ),
     };
+    let _addr = addr.expect("We weren't passed a valid SocketAddr!?");
     info!("New websocket connection from {}", &addr_str);
     let (mut ws_tx, ws_rx) = websocket.split();
 
@@ -127,35 +128,75 @@ async fn run_probe_round(
         "Collecting probe report for {} :: {}",
         addr_str, probe_round
     );
+    // first report we get, don't clear state b/c the idle probes need that state
+    match get_probe_report(connection_tracker, connection_key, false).await {
+        // TODO: also log the report centrally - useful data!
+        // if we got the report, send it to the remote WASM client
+        Some(report) => tx
+            .send(common::Message::ProbeReport {
+                report,
+                probe_round,
+            })
+            .unwrap_or_else(|e| {
+                warn!(
+                    "Error while sending ProbeReport to client: {} :: {}",
+                    addr_str, e
+                );
+            }),
+        None => warn!("Got 'None' back from report_tx for {}", addr_str),
+    }
+    // next, set for idle probes to get the endhost pings
+    connection_tracker
+        .send(ConnectionTrackerMsg::ProbeOnIdle {
+            key: connection_key.clone().unwrap(),
+        })
+        .unwrap_or_else(|e| {
+            warn!("connection_tracker::send() returned {}", e);
+            return;
+        });
+    // second report we get, do clear state
+    // TODO refactor duplicate code! signal idle report?
+    match get_probe_report(connection_tracker, connection_key, true).await {
+        // TODO: also log the report centrally - useful data!
+        // if we got the report, send it to the remote WASM client
+        Some(report) => tx
+            .send(common::Message::ProbeReport {
+                report,
+                probe_round,
+            })
+            .unwrap_or_else(|e| {
+                warn!(
+                    "Error while sending ProbeReport to client: {} :: {}",
+                    addr_str, e
+                );
+            }),
+        None => warn!("Got 'None' back from report_tx for {}", addr_str),
+    }
+}
+
+async fn get_probe_report(
+    connection_tracker: &mpsc::UnboundedSender<ConnectionTrackerMsg>,
+    connection_key: &Option<ConnectionKey>,
+    clear_state: bool,
+) -> Option<ProbeReport> {
     if let Some(key) = &connection_key {
         let key = key.clone();
         // create an async channel for the connection tracker to send us back the report on
         let (report_tx, mut report_rx) = tokio::sync::mpsc::channel(1);
         if let Err(e) = connection_tracker.send(ConnectionTrackerMsg::ProbeReport {
             key,
-            clear_state: true,
+            clear_state,
             tx: report_tx,
         }) {
             warn!("Error talking to connection tracker: {}", e);
+            None
         } else {
             // wait for the report to come on the channel
-            match report_rx.recv().await {
-                // TODO: log the report centrally - useful data!
-                // if we got the report, send it to the remote WASM client
-                Some(report) => tx
-                    .send(common::Message::ProbeReport {
-                        report,
-                        probe_round,
-                    })
-                    .unwrap_or_else(|e| {
-                        warn!(
-                            "Error while sending ProbeReport to client: {} :: {}",
-                            addr_str, e
-                        );
-                    }),
-                None => warn!("Got 'None' back from report_tx for {}", addr_str),
-            }
+            report_rx.recv().await
         }
+    } else {
+        None // keylookup failed, just return None
+             // TODO: this may need to be a panic!() - think about it
     }
 }
 
