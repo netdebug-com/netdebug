@@ -575,15 +575,25 @@ impl Connection {
                     // found a probe and a reply!
                     let reply = reply_set.iter().next().unwrap();
                     let rtt_ms = calc_rtt_ms(reply.pcap_header, probe.pcap_header);
-                    // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
-                    let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
-                    report.push(ProbeReportEntry::ReplyFound {
-                        ttl,
-                        out_timestamp_ms,
-                        rtt_ms,
-                        src_ip,
-                        comment,
-                    })
+                    if matches!(&reply.transport, Some(TransportHeader::Tcp(_tcph))) {
+                        report.push(ProbeReportEntry::EndHostReplyFound {
+                            ttl,
+                            out_timestamp_ms,
+                            rtt_ms,
+                            comment,
+                        })
+                    } else {
+                        // else is an ICMP reply
+                        // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
+                        let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
+                        report.push(ProbeReportEntry::ReplyFound {
+                            ttl,
+                            out_timestamp_ms,
+                            rtt_ms,
+                            src_ip,
+                            comment,
+                        })
+                    }
                 } else {
                     // missing reply - unfortunately common
                     report.push(ProbeReportEntry::NoReply {
@@ -608,13 +618,22 @@ impl Connection {
                     let reply = reply_set.iter().next().unwrap();
                     // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
                     let in_timestamp_ms = timeval_to_ms(reply.pcap_header.ts);
-                    let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
-                    report.push(ProbeReportEntry::ReplyNoProbe {
-                        ttl,
-                        in_timestamp_ms,
-                        src_ip,
-                        comment,
-                    });
+                    if matches!(&reply.transport, Some(TransportHeader::Tcp(_tcp))) {
+                        report.push(ProbeReportEntry::EndHostNoProbe {
+                            ttl,
+                            in_timestamp_ms,
+                            comment,
+                        });
+                    } else {
+                        // ICMP reply
+                        let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
+                        report.push(ProbeReportEntry::ReplyNoProbe {
+                            ttl,
+                            in_timestamp_ms,
+                            src_ip,
+                            comment,
+                        });
+                    }
                 } else {
                     // missing both reply and probe - a bad day
                     report.push(ProbeReportEntry::NoOutgoing { ttl, comment });
@@ -1083,14 +1102,14 @@ mod test {
         connection_tracker.generate_report(key, false, tx).await;
         let report = rx.recv().await.unwrap();
 
+        // NOTE: because we didn't feed any outgoing probes into the connection_tracker, we will only get
+        // ReplyNoProbe instead of ReplyFound
         let replies = report.report.iter().filter(|e| {
             matches!(
                 e,
-                ProbeReportEntry::ReplyFound {
+                ProbeReportEntry::EndHostNoProbe {
                     ttl: _,
-                    out_timestamp_ms: _,
-                    rtt_ms: _,
-                    src_ip: _,
+                    in_timestamp_ms: _,
                     comment: _
                 }
             )

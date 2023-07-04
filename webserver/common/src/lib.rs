@@ -99,6 +99,17 @@ pub enum ProbeReportEntry {
         src_ip: IpAddr,
         comment: String,
     },
+    EndHostReplyFound {
+        ttl: u8,
+        out_timestamp_ms: f64,
+        rtt_ms: f64,
+        comment: String,
+    },
+    EndHostNoProbe {
+        ttl: u8,
+        in_timestamp_ms: f64,
+        comment: String,
+    },
     // TODO: add GoodRR etc. for w/ Record Route
 }
 
