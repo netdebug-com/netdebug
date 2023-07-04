@@ -358,7 +358,7 @@ impl Connection {
             self.local_data = Some(packet.clone());
             if first_time {
                 // reset the probe state
-                self.next_end_host_reply = Some(PROBE_MAX_TTL);
+                self.next_end_host_reply = Some(PROBE_MAX_TTL - 1);
                 tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock).unwrap();
             }
         }
@@ -653,7 +653,7 @@ impl Connection {
         if self.local_seq.is_some() && self.remote_ack >= self.local_seq {
             // are we idle now?
             self.clear_probe_data(false);
-            self.next_end_host_reply = Some(PROBE_MAX_TTL);
+            self.next_end_host_reply = Some(PROBE_MAX_TTL - 1);
             tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock).unwrap();
         } else {
             self.send_probes_on_idle = true; // queue up that we want to send the probes
@@ -671,7 +671,7 @@ impl Connection {
         // clear any old probe data
         self.incoming_reply_timestamps.clear();
         self.outgoing_probe_timestamps.clear();
-        self.next_end_host_reply = Some(PROBE_MAX_TTL);
+        self.next_end_host_reply = Some(PROBE_MAX_TTL - 1);
         if flush_local_data {
             self.local_data = None;
         }
