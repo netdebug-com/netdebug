@@ -562,11 +562,12 @@ impl Connection {
                     }
                 };
                 // probe-Id = total_len - sizeof(iph) - sizeof(tcph)
-                // Outgoing probes have no TCP options; so are exactly 20 bytes
+                // but we don't have sizeof(tcph) here b/c it might be truncated
+                // ASSUME Outgoing probes have no TCP options; so are exactly 20 bytes
                 // which makes them look weird to an IDS and we lose precision
                 let probe_id = total_len - iph_len - 20;
 
-                if probe_id < PROBE_MAX_TTL as u16 {
+                if probe_id <= PROBE_MAX_TTL as u16 {
                     Some(probe_id as u8)
                 } else {
                     None
