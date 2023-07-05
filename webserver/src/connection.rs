@@ -393,15 +393,46 @@ impl Connection {
             if let Some(old_ack) = self.remote_ack {
                 // Is this ACK a duplicate ACK?
                 if old_ack == tcp.acknowledgment_number && packet.payload.len() == 0 {
-                    if let Some(_selective_ack) = tcp.options_iterator().find(|opt| match &opt {
-                        Ok(TcpOptionElement::SelectiveAcknowledgement(_l, _r)) => true,
-                        _ => false,
+                    if let Some(Ok(selective_ack)) = tcp.options_iterator().find(|opt| {
+                        matches!(&opt, Ok(TcpOptionElement::SelectiveAcknowledgement(_, _)))
                     }) {
-                        // a dup-ack with a selective acknowledgements option is a legit congestion event
-                        // and not a probe reply
-                        // TODO: use selective ack params to estimate packets lost
+                        // CRAZY: an out-of-sequence dupACK SHOULD contain a SACK option ala RFC2018, S4/page 5
+                        // check whether the ACK sequence is ahead of the SACK range - that tells us it's a probe!
+                        if let TcpOptionElement::SelectiveAcknowledgement((left, right), acks) =
+                            selective_ack
+                        {
+                            if acks[0].is_some() || right > tcp.acknowledgment_number {
+                                // this is not a dupACK/probe reply but a legit indication of a lost packet
+                                // TODO: use selective ack params to estimate packets lost
+                            } else {
+                                // this is a dupACK/probe reply! the right - left indicates the probe id
+                                let probe_id = if right >= left {
+                                    // PAWS check
+                                    right - left + 1 // the +1 is due to the left includes the 'current' byte; TESTED!
+                                } else {
+                                    // SEQ wrapped!  (or maybe a malicious receiver?)
+                                    (u32::MAX - left) + right + 1 // TODO: write a test for this, as we will panic if this goes negative
+                                };
+                                if probe_id <= PROBE_MAX_TTL as u32 {
+                                    // record the reply
+                                    let probe_id = probe_id as u8; // safe because we just checked
+                                    if let Some(replies) =
+                                        self.incoming_reply_timestamps.get_mut(&probe_id)
+                                    {
+                                        replies.insert(packet.clone());
+                                    } else {
+                                        self.incoming_reply_timestamps
+                                            .insert(probe_id, HashSet::from([packet.clone()]));
+                                    }
+                                } else {
+                                    info!("Looks like we got a dupACK but the probe_id is too big {} :: {:?}", probe_id, packet);
+                                }
+                            }
+                        }
                     } else {
-                        // looks like a inband probe reply - no SelectiveAck option!
+                        // TODO: test against all TCP stacks to see if this code path is needed
+                        // or can be removed, e.g., does anyone not support SACK by default?
+                        // no SelectiveAck option, so asume this is a probe reply
                         // assume that inband ACK replies come from the highest TTL we sent
                         // and work backwards for each reply we received, e.g.,
                         // first reply is from TTL=max, second from TTL=max - 1, etc.
@@ -412,9 +443,6 @@ impl Connection {
                         // order of the sent_time(probe_k) vs. sent_time(probe_n) which
                         // is extremely small (e.g., ~10 microseconds) because they are sent
                         // quickly back-to-back
-                        // TODO if we need to fix this, need to change the probing strategy to binary
-                        // search for the smallest ttl that gets the ACK and we can start at
-                        // the last ttl where we got an ICMP reply
                         if let Some(probe_id) = self.next_end_host_reply {
                             if let Some(replies) = self.incoming_reply_timestamps.get_mut(&probe_id)
                             {
@@ -500,8 +528,6 @@ impl Connection {
      * Call on a packet which is potentially a reply to a probe and if it is,
      * extract the probe ID;  this should be called on the embedded packet
      * of an ICMP TTL exceeded
-     *
-     * TODO: suppoort matching a TCP ACK from the end host
      *
      * Something is a probe is (1) it's old data and (2) if the payload
      * length (which we don't have but can reconstruct) is < PROBE_MAX_TTL
@@ -688,6 +714,8 @@ impl Connection {
      */
 
     fn idle_check(&self) -> bool {
+        // TODO: if we decide to use idle probes, may need to check the incoming direction as well, e.g.,
+        // track and add self.local_ack == self.remote_seq
         self.send_probes_on_idle && self.remote_ack == self.local_seq
     }
 }
@@ -1127,5 +1155,100 @@ mod test {
             )
         });
         assert_eq!(replies.count(), 5);
+    }
+
+    /**
+     * Walk through a captured tcpdump of a single TCP stream, read all traffic
+     * including the outgoing probes and incoming replies and make sure
+     * that everything is read/processed correctly - including SACK from dup ACKs
+     * to map replies back to probes
+     */
+    #[tokio::test]
+    async fn full_probe_report() {
+        let context = make_test_context();
+        let raw_sock = MockRawSocketWriter::new();
+        let local_addrs = HashSet::from([IpAddr::from_str("172.31.10.232").unwrap()]);
+        let local_tcp_ports = HashSet::from([443]);
+        let mut connection_tracker =
+            ConnectionTracker::new(context, local_addrs.clone(), raw_sock).await;
+
+        let mut connection_key: Option<ConnectionKey> = None;
+        let mut capture = pcap::Capture::from_file(test_dir(
+            "tests/aws-sfc-to-turkey-psh-dup-ack-sack-ones-stream.pcap",
+        ))
+        .unwrap();
+        // take all of the packets in the capture and pipe them into the connection tracker
+        while let Ok(pkt) = capture.next_packet() {
+            let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            let (key, _) = owned_pkt
+                .to_connection_key(&local_addrs, &local_tcp_ports)
+                .unwrap();
+            // make sure every packet in trace maps to same connection key
+            if let Some(prev_key) = connection_key {
+                assert_eq!(prev_key, key);
+            }
+            connection_key = Some(key);
+            connection_tracker.add(owned_pkt);
+        }
+        let connection_key = connection_key.unwrap();
+        assert_eq!(connection_tracker.connections.len(), 1);
+        let connection = connection_tracker
+            .connections
+            .get_mut(&connection_key)
+            .unwrap();
+        let report = connection.generate_probe_report(false).await;
+        // println!("{}", report); // useful for debugging
+
+        // hand analysis via wireshark = which TTL's got which reply types?
+        let no_replies = [1, 3, 5, 6, 9, 16, 18];
+        let icmp_replies = [2, 4, 7, 8, 10, 11, 12, 13, 14, 15, 17];
+        let endhost_replies = [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32];
+
+        // sanity check to make sure we didn't miss something
+        let mut all_probes = no_replies.clone().to_vec();
+        all_probes.append(&mut icmp_replies.clone().to_vec());
+        all_probes.append(&mut endhost_replies.clone().to_vec());
+
+        // make sure all probes are accounted for
+        for probe_id in 1..=PROBE_MAX_TTL {
+            assert!(all_probes
+                .iter()
+                .find(|x| **x == probe_id as usize)
+                .is_some());
+        }
+        // now check that probes are correctly catergorized
+        for ttl in no_replies {
+            assert!(matches!(
+                report.report[ttl - 1],
+                ProbeReportEntry::NoReply {
+                    ttl: _,
+                    out_timestamp_ms: _,
+                    comment: _
+                }
+            ));
+        }
+        for ttl in icmp_replies {
+            assert!(matches!(
+                report.report[ttl - 1],
+                ProbeReportEntry::ReplyFound {
+                    ttl: _,
+                    out_timestamp_ms: _,
+                    rtt_ms: _,
+                    src_ip: _,
+                    comment: _
+                }
+            ));
+        }
+        for ttl in endhost_replies {
+            assert!(matches!(
+                report.report[ttl - 1],
+                ProbeReportEntry::EndHostReplyFound {
+                    ttl: _,
+                    out_timestamp_ms: _,
+                    rtt_ms: _,
+                    comment: _
+                }
+            ));
+        }
     }
 }

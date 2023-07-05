@@ -3,6 +3,8 @@
 * use linux-endhost-replies-remote-capture.pcap to write test for endhost replies
 	- resolve weird "2 replies in one probe issue"
 	- Probe  14 - ReplyFound { ttl: 14, out_timestamp_ms: 1688477355885.367, rtt_ms: 21.204, src_ip: 62.115.124.55, comment: " Weird: 2 replies found; guessing first one." }
+	- Duplicate ACK's have SACK set!!
+* Add DNS lookups for ProbeReports
 
 
 
