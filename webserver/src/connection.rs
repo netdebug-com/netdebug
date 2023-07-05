@@ -390,9 +390,14 @@ impl Connection {
             // TODO: figure out if we need to implement Protection Against Wrapped Segments (PAWS) here
             // e.g., check to make sure that sequence space wraps are correctly handled
             // for now, wrapped segements show up as lost packets, so it's not the end of the world - I think
+            // also make sure neither SYN or FIN are set as these can look like dupACKs if we're not careful
             if let Some(old_ack) = self.remote_ack {
                 // Is this ACK a duplicate ACK?
-                if old_ack == tcp.acknowledgment_number && packet.payload.len() == 0 {
+                if old_ack == tcp.acknowledgment_number
+                    && packet.payload.len() == 0
+                    && !tcp.syn
+                    && !tcp.fin
+                {
                     if let Some(Ok(selective_ack)) = tcp.options_iterator().find(|opt| {
                         matches!(&opt, Ok(TcpOptionElement::SelectiveAcknowledgement(_, _)))
                     }) {
