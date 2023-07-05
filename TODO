@@ -1,4 +1,3 @@
-* fix off by one ProbeReport error
 * Plot the endhost and the nat datapoints!
 * Add summarization logic to ProbeReport - common to client and server
 * Figure out why we're seeing multiple hopcounts/pathsin the same TCP stream - route flaps?

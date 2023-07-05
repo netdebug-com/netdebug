@@ -3,7 +3,7 @@ use std::{
     net::{IpAddr, SocketAddr},
 };
 
-use common::{ProbeReport, ProbeReportEntry, PROBE_MAX_TTL};
+use common::{ProbeId, ProbeReport, ProbeReportEntry, PROBE_MAX_TTL};
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader};
 use log::{info, warn};
 
@@ -225,7 +225,6 @@ where
     }
 }
 
-type ProbeId = u8;
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub connection_key: ConnectionKey,
@@ -288,11 +287,7 @@ impl Connection {
      * Use the payload length to encode the probe ID/ttl
      */
 
-    fn is_probe_heuristic(
-        &self,
-        src_is_local: bool,
-        packet: &OwnedParsedPacket,
-    ) -> Option<ProbeId> {
+    fn is_probe_heuristic(src_is_local: bool, packet: &OwnedParsedPacket) -> Option<ProbeId> {
         // any packet with a small payload is a probe
         if packet.payload.len() <= PROBE_MAX_TTL as usize {
             if src_is_local {
@@ -364,7 +359,7 @@ impl Connection {
                 tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock).unwrap();
             }
         }
-        if let Some(ttl) = self.is_probe_heuristic(true, packet) {
+        if let Some(ttl) = Connection::is_probe_heuristic(true, packet) {
             // there's some super clean rust-ish way to compress this; don't care for now
             if let Some(probes) = self.outgoing_probe_timestamps.get_mut(&ttl) {
                 probes.insert(packet.clone());
@@ -415,10 +410,10 @@ impl Connection {
                                 // this is a dupACK/probe reply! the right - left indicates the probe id
                                 let probe_id = if right >= left {
                                     // PAWS check
-                                    right - left + 1 // the +1 is due to the left includes the 'current' byte; TESTED!
+                                    right - left // NOTE: hand verified that this doesn't have off-by-one issues
                                 } else {
                                     // SEQ wrapped!  (or maybe a malicious receiver?)
-                                    (u32::MAX - left) + right + 1 // TODO: write a test for this, as we will panic if this goes negative
+                                    (u32::MAX - left) + right // TODO: write a test for this, as we will panic if this goes negative
                                 };
                                 if probe_id <= PROBE_MAX_TTL as u32 {
                                     // record the reply
@@ -583,7 +578,7 @@ impl Connection {
      * of probes on the next data packet
      */
     async fn generate_probe_report(&mut self, clear: bool) -> ProbeReport {
-        let mut report = Vec::new();
+        let mut report = HashMap::new();
         if self.outgoing_probe_timestamps.len() > PROBE_MAX_TTL as usize {
             warn!(
                 "Extra probes {} in {:?}",
@@ -626,42 +621,54 @@ impl Connection {
                     let reply = reply_set.iter().next().unwrap();
                     let rtt_ms = calc_rtt_ms(reply.pcap_header, probe.pcap_header);
                     if matches!(&reply.transport, Some(TransportHeader::Tcp(_tcph))) {
-                        report.push(ProbeReportEntry::EndHostReplyFound {
+                        report.insert(
                             ttl,
-                            out_timestamp_ms,
-                            rtt_ms,
-                            comment,
-                        })
+                            ProbeReportEntry::EndHostReplyFound {
+                                ttl,
+                                out_timestamp_ms,
+                                rtt_ms,
+                                comment,
+                            },
+                        );
                     } else {
                         // else is an ICMP reply
                         // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
                         let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
                         // NAT check - does the dst of the connection key == this src_ip?
                         if src_ip == self.connection_key.remote_ip {
-                            report.push(ProbeReportEntry::NatReplyFound {
+                            report.insert(
                                 ttl,
-                                out_timestamp_ms,
-                                rtt_ms,
-                                src_ip,
-                                comment,
-                            })
+                                ProbeReportEntry::NatReplyFound {
+                                    ttl,
+                                    out_timestamp_ms,
+                                    rtt_ms,
+                                    src_ip,
+                                    comment,
+                                },
+                            );
                         } else {
-                            report.push(ProbeReportEntry::RouterReplyFound {
+                            report.insert(
                                 ttl,
-                                out_timestamp_ms,
-                                rtt_ms,
-                                src_ip,
-                                comment,
-                            })
+                                ProbeReportEntry::RouterReplyFound {
+                                    ttl,
+                                    out_timestamp_ms,
+                                    rtt_ms,
+                                    src_ip,
+                                    comment,
+                                },
+                            );
                         }
                     }
                 } else {
                     // missing reply - unfortunately common
-                    report.push(ProbeReportEntry::NoReply {
+                    report.insert(
                         ttl,
-                        out_timestamp_ms,
-                        comment,
-                    });
+                        ProbeReportEntry::NoReply {
+                            ttl,
+                            out_timestamp_ms,
+                            comment,
+                        },
+                    );
                 }
             } else {
                 // sigh, duplicate code
@@ -680,34 +687,43 @@ impl Connection {
                     // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
                     let in_timestamp_ms = timeval_to_ms(reply.pcap_header.ts);
                     if matches!(&reply.transport, Some(TransportHeader::Tcp(_tcp))) {
-                        report.push(ProbeReportEntry::EndHostNoProbe {
+                        report.insert(
                             ttl,
-                            in_timestamp_ms,
-                            comment,
-                        });
+                            ProbeReportEntry::EndHostNoProbe {
+                                ttl,
+                                in_timestamp_ms,
+                                comment,
+                            },
+                        );
                     } else {
                         // ICMP reply
                         let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
                         // NAT check - does the dst of the connection key == this src_ip?
                         if src_ip == self.connection_key.remote_ip {
-                            report.push(ProbeReportEntry::NatReplyNoProbe {
+                            report.insert(
                                 ttl,
-                                in_timestamp_ms,
-                                src_ip,
-                                comment,
-                            });
+                                ProbeReportEntry::NatReplyNoProbe {
+                                    ttl,
+                                    in_timestamp_ms,
+                                    src_ip,
+                                    comment,
+                                },
+                            );
                         } else {
-                            report.push(ProbeReportEntry::RouterReplyNoProbe {
+                            report.insert(
                                 ttl,
-                                in_timestamp_ms,
-                                src_ip,
-                                comment,
-                            });
+                                ProbeReportEntry::RouterReplyNoProbe {
+                                    ttl,
+                                    in_timestamp_ms,
+                                    src_ip,
+                                    comment,
+                                },
+                            );
                         }
                     }
                 } else {
                     // missing both reply and probe - a bad day
-                    report.push(ProbeReportEntry::NoOutgoing { ttl, comment });
+                    report.insert(ttl, ProbeReportEntry::NoOutgoing { ttl, comment });
                 }
             }
         }
@@ -1187,7 +1203,7 @@ mod test {
 
         // NOTE: because we didn't feed any outgoing probes into the connection_tracker, we will only get
         // ReplyNoProbe instead of ReplyFound
-        let replies = report.report.iter().filter(|e| {
+        let replies = report.probes.values().filter(|e| {
             matches!(
                 e,
                 ProbeReportEntry::EndHostNoProbe {
@@ -1243,10 +1259,11 @@ mod test {
         println!("{}", report); // useful for debugging
 
         // hand analysis via wireshark = which TTL's got which reply types?
-        let no_replies = [1, 3, 5, 6, 9, 16, 18];
-        let router_icmp_replies = [2, 4, 7, 8, 10, 11, 12, 13, 14, 15];
-        let nat_icmp_replies = [17];
-        let endhost_replies = [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32];
+        let no_replies: [u8; 6] = [1, 3, 5, 6, 9, 16];
+        let router_icmp_replies: [u8; 10] = [2, 4, 7, 8, 10, 11, 12, 13, 14, 15];
+        let nat_icmp_replies: [u8; 1] = [17];
+        let endhost_replies: [u8; 15] =
+            [18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32];
 
         // sanity check to make sure we didn't miss something
         let mut all_probes = no_replies.clone().to_vec();
@@ -1256,16 +1273,13 @@ mod test {
 
         // make sure all probes are accounted for
         for probe_id in 1..=PROBE_MAX_TTL {
-            assert!(all_probes
-                .iter()
-                .find(|x| **x == probe_id as usize)
-                .is_some());
+            assert!(all_probes.iter().find(|x| **x == probe_id).is_some());
         }
-        assert_eq!(report.report.len(), all_probes.len());
+        assert_eq!(report.probes.len(), all_probes.len());
         // now check that probes are correctly catergorized
         for ttl in no_replies {
             assert!(matches!(
-                report.report[ttl - 1],
+                report.probes[&ttl],
                 ProbeReportEntry::NoReply {
                     ttl: _,
                     out_timestamp_ms: _,
@@ -1275,7 +1289,7 @@ mod test {
         }
         for ttl in router_icmp_replies {
             assert!(matches!(
-                report.report[ttl - 1],
+                report.probes[&ttl],
                 ProbeReportEntry::RouterReplyFound {
                     ttl: _,
                     out_timestamp_ms: _,
@@ -1287,7 +1301,7 @@ mod test {
         }
         for ttl in nat_icmp_replies {
             assert!(matches!(
-                report.report[ttl - 1],
+                report.probes[&ttl],
                 ProbeReportEntry::NatReplyFound {
                     ttl: _,
                     out_timestamp_ms: _,
@@ -1299,7 +1313,7 @@ mod test {
         }
         for ttl in endhost_replies {
             assert!(matches!(
-                report.report[ttl - 1],
+                report.probes[&ttl],
                 ProbeReportEntry::EndHostReplyFound {
                     ttl: _,
                     out_timestamp_ms: _,
@@ -1308,5 +1322,36 @@ mod test {
                 }
             ));
         }
+    }
+
+    /**
+     * Verify that we can extract the probe_id's from probes off of the wire correctly
+     */
+    #[tokio::test]
+    async fn probe_id_off_by_one() {
+        let ttl1_probe = [
+            0x06, 0x50, 0x3e, 0xb8, 0xcf, 0xe9, 0x06, 0x95, 0x86, 0x20, 0x25, 0x41, 0x08, 0x00,
+            0x45, 0x00, 0x00, 0x29, 0x00, 0x00, 0x40, 0x00, 0x01, 0x06, 0x86, 0x69, 0xac, 0x1f,
+            0x0a, 0xe8, 0x51, 0xd7, 0xea, 0x87, 0x01, 0xbb, 0x63, 0x7e, 0x0a, 0xf0, 0x8c, 0x3c,
+            0x7d, 0x62, 0x09, 0xd2, 0x50, 0x18, 0x01, 0xfa, 0xee, 0xd0, 0x00, 0x00, 0x48,
+        ];
+        let probe1 = OwnedParsedPacket::try_from_fake_time(ttl1_probe.to_vec()).unwrap();
+
+        let probe_id = Connection::is_probe_heuristic(true, &probe1).unwrap();
+        assert_eq!(probe_id, 1);
+
+        let ttl32_probe = [
+            0x06, 0x50, 0x3e, 0xb8, 0xcf, 0xe9, 0x06, 0x95, 0x86, 0x20, 0x25, 0x41, 0x08, 0x00,
+            0x45, 0x00, 0x00, 0x48, 0x00, 0x00, 0x40, 0x00, 0x20, 0x06, 0x67, 0x4a, 0xac, 0x1f,
+            0x0a, 0xe8, 0x51, 0xd7, 0xea, 0x87, 0x01, 0xbb, 0x63, 0x7e, 0x0a, 0xf0, 0x8c, 0x3c,
+            0x7d, 0x62, 0x09, 0xd2, 0x50, 0x18, 0x01, 0xfa, 0xf7, 0xad, 0x00, 0x00, 0x48, 0x54,
+            0x54, 0x50, 0x2f, 0x31, 0x2e, 0x31, 0x20, 0x32, 0x30, 0x30, 0x20, 0x4f, 0x4b, 0x0d,
+            0x0a, 0x63, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x2d, 0x74, 0x79, 0x70, 0x65, 0x3a,
+            0x20, 0x74,
+        ];
+        let probe32 = OwnedParsedPacket::try_from_fake_time(ttl32_probe.to_vec()).unwrap();
+
+        let probe_id = Connection::is_probe_heuristic(true, &probe32).unwrap();
+        assert_eq!(probe_id, 32);
     }
 }

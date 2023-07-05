@@ -1,4 +1,5 @@
-use std::{fmt::Display, net::IpAddr};
+use itertools::Itertools;
+use std::{collections::HashMap, fmt::Display, net::IpAddr}; // for .sorted()
 
 /**
  * Attention: everything in this library (including transitively) must
@@ -62,17 +63,20 @@ pub fn get_git_hash_version() -> String {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProbeReport {
-    pub report: Vec<ProbeReportEntry>,
+    pub probes: HashMap<ProbeId, ProbeReportEntry>,
 }
 
 impl Display for ProbeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (probe_id, e) in self.report.iter().enumerate() {
-            writeln!(f, "Probe {:3} - {:?}", probe_id + 1, e)?;
+        for probe_id in self.probes.keys().sorted() {
+            let e = self.probes.get(probe_id).unwrap();
+            writeln!(f, "Probe {:3} - {:?}", probe_id, e)?;
         }
         Ok(())
     }
 }
+
+pub type ProbeId = u8;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ProbeReportEntry {
@@ -129,7 +133,7 @@ pub enum ProbeReportEntry {
 }
 
 impl ProbeReport {
-    pub fn new(report: Vec<ProbeReportEntry>) -> ProbeReport {
-        ProbeReport { report }
+    pub fn new(report: HashMap<ProbeId, ProbeReportEntry>) -> ProbeReport {
+        ProbeReport { probes: report }
     }
 }

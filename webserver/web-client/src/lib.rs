@@ -158,7 +158,7 @@ impl Graph {
      */
 
     fn add_data_probe_report(&mut self, probe_report: ProbeReport) {
-        for probe in probe_report.report {
+        for (_ttl, probe) in probe_report.probes {
             if let ProbeReportEntry::RouterReplyFound {
                 ttl,
                 out_timestamp_ms,
