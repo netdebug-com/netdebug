@@ -1,4 +1,5 @@
 use itertools::Itertools;
+use log::info;
 use std::{collections::HashMap, fmt::Display, net::IpAddr}; // for .sorted()
 
 /**
@@ -131,9 +132,278 @@ pub enum ProbeReportEntry {
     },
     // TODO: add GoodRR etc. for w/ Record Route
 }
+impl ProbeReportEntry {
+    fn get_comment(&self) -> String {
+        use ProbeReportEntry::*;
+        match self {
+            RouterReplyFound {
+                ttl: _,
+                out_timestamp_ms: _,
+                rtt_ms: _,
+                src_ip: _,
+                comment,
+            }
+            | NatReplyFound {
+                ttl: _,
+                out_timestamp_ms: _,
+                rtt_ms: _,
+                src_ip: _,
+                comment,
+            }
+            | NoReply {
+                ttl: _,
+                out_timestamp_ms: _,
+                comment,
+            }
+            | NoOutgoing { ttl: _, comment }
+            | RouterReplyNoProbe {
+                ttl: _,
+                in_timestamp_ms: _,
+                src_ip: _,
+                comment,
+            }
+            | NatReplyNoProbe {
+                ttl: _,
+                in_timestamp_ms: _,
+                src_ip: _,
+                comment,
+            }
+            | EndHostReplyFound {
+                ttl: _,
+                out_timestamp_ms: _,
+                rtt_ms: _,
+                comment,
+            }
+            | EndHostNoProbe {
+                ttl: _,
+                in_timestamp_ms: _,
+                comment,
+            } => comment.clone(),
+        }
+    }
+
+    fn get_ip(&self) -> Option<IpAddr> {
+        use ProbeReportEntry::*;
+        match self {
+            RouterReplyFound {
+                ttl: _,
+                out_timestamp_ms: _,
+                rtt_ms: _,
+                src_ip,
+                comment: _,
+            }
+            | NatReplyFound {
+                ttl: _,
+                out_timestamp_ms: _,
+                rtt_ms: _,
+                src_ip,
+                comment: _,
+            }
+            | NatReplyNoProbe {
+                ttl: _,
+                in_timestamp_ms: _,
+                src_ip,
+                comment: _,
+            } => Some(*src_ip),
+            RouterReplyNoProbe {
+                ttl: _,
+                in_timestamp_ms: _,
+                src_ip: _,
+                comment: _,
+            }
+            | NoReply {
+                ttl: _,
+                out_timestamp_ms: _,
+                comment: _,
+            }
+            | NoOutgoing { ttl: _, comment: _ }
+            | EndHostReplyFound {
+                ttl: _,
+                out_timestamp_ms: _,
+                rtt_ms: _,
+                comment: _,
+            }
+            | EndHostNoProbe {
+                ttl: _,
+                in_timestamp_ms: _,
+                comment: _,
+            } => None,
+        }
+    }
+}
 
 impl ProbeReport {
     pub fn new(report: HashMap<ProbeId, ProbeReportEntry>) -> ProbeReport {
         ProbeReport { probes: report }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProbeReportSummaryNode {
+    pub probe_type: ProbeReportEntry,
+    pub ttl: u8,
+    pub ip: Option<IpAddr>,
+    pub rtts: Vec<f64>,
+    pub comments: Vec<String>,
+}
+
+impl Display for ProbeReportSummaryNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut min = f64::MAX;
+        let mut max = f64::MIN;
+        let mut sum = 0.0;
+        for rtt in &self.rtts {
+            min = if min > *rtt { *rtt } else { min };
+            max = if max > *rtt { max } else { *rtt };
+            sum += rtt;
+        }
+        let avg = sum / self.rtts.len() as f64;
+        // TODO: aggregate the comments
+        write!(
+            f,
+            "{:?} {:?} RTT(ms) min={} avg={} max={} ",
+            self.probe_type, self.ip, min, avg, max
+        )
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProbeReportSummary {
+    pub raw_reports: Vec<ProbeReport>,
+    pub summary: HashMap<u8, Vec<ProbeReportSummaryNode>>,
+}
+
+impl ProbeReportSummary {
+    pub fn new() -> ProbeReportSummary {
+        ProbeReportSummary {
+            raw_reports: Vec::new(),
+            summary: HashMap::new(),
+        }
+    }
+
+    /**
+     * For each ttl, we can have multiple events (e.g., sometimes a packet is dropped, sometime not)
+     *
+     */
+    pub fn update(&mut self, report: ProbeReport) {
+        for (ttl, probe) in &report.probes {
+            let nodes = self.summary.entry(*ttl).or_insert(Vec::new());
+            let mut inserted = false;
+            for node in nodes {
+                // are these two ProbeReportEntry's the same variant?
+                // https://stackoverflow.com/questions/32554285/compare-enums-only-by-variant-not-value
+                if std::mem::discriminant(probe) == std::mem::discriminant(&node.probe_type) {
+                    use ProbeReportEntry::*;
+                    match probe {
+                        RouterReplyFound {
+                            ttl: _,
+                            out_timestamp_ms: _,
+                            rtt_ms,
+                            src_ip,
+                            comment,
+                        }
+                        | NatReplyFound {
+                            ttl: _,
+                            out_timestamp_ms: _,
+                            rtt_ms,
+                            src_ip,
+                            comment,
+                        } => {
+                            if src_ip == &node.ip.unwrap() {
+                                // these variants should always have an IP
+                                node.rtts.push(*rtt_ms);
+                                node.comments.push(comment.clone());
+                                inserted = true;
+                                break;
+                            }
+                            // else keep looking
+                        }
+                        EndHostReplyFound {
+                            ttl: _,
+                            out_timestamp_ms: _,
+                            rtt_ms,
+                            comment,
+                        } => {
+                            node.rtts.push(*rtt_ms);
+                            node.comments.push(comment.clone());
+                            inserted = true;
+                            break;
+                        }
+                        NoReply {
+                            ttl: _,
+                            out_timestamp_ms: _,
+                            comment,
+                        }
+                        | NoOutgoing { ttl: _, comment }
+                        | EndHostNoProbe {
+                            ttl: _,
+                            in_timestamp_ms: _,
+                            comment,
+                        } => {
+                            node.comments.push(comment.clone());
+                            inserted = true;
+                            break;
+                        }
+                        RouterReplyNoProbe {
+                            ttl: _,
+                            in_timestamp_ms: _,
+                            src_ip,
+                            comment,
+                        }
+                        | NatReplyNoProbe {
+                            ttl: _,
+                            in_timestamp_ms: _,
+                            src_ip,
+                            comment,
+                        } => {
+                            if src_ip == &node.ip.unwrap() {
+                                // these variants should always have an IP
+                                node.comments.push(comment.clone());
+                                inserted = true;
+                                break;
+                            }
+                            // else keep looking
+                        }
+                    }
+                }
+            }
+            if !inserted {
+                // need a new node
+                let node = ProbeReportSummaryNode {
+                    probe_type: probe.clone(),
+                    ttl: *ttl,
+                    ip: probe.get_ip(),
+                    rtts: Vec::new(),
+                    comments: Vec::from([probe.get_comment()]),
+                };
+                // get nodes again from the summary is it went into the above for loop's into_iter()
+                let nodes = self.summary.entry(*ttl).or_insert(Vec::new());
+                nodes.push(node);
+            }
+        }
+        self.raw_reports.push(report);
+    }
+
+    pub fn log(&self) {
+        for ttl in self.summary.keys().sorted() {
+            let nodes = self.summary.get(ttl).unwrap();
+            if nodes.len() == 1 {
+                // simple and hopefully common case
+                info!("TTL {:3} - {}", ttl, nodes.first().unwrap());
+            } else {
+                // multiple different replies for the same TTL
+                // this can happen with packet loss or route flapping
+                // it shouldn't happen often as all packets in a probe report should hit
+                // the same ECMP bucket
+                info!("TTL {:3} -------", ttl);
+                let n_nodes = self.raw_reports.len(); // each report should have 1 result per ttl
+                for node in nodes {
+                    let n_replies = node.comments.len(); // one comment per replu
+                    let percent = 100.0 * n_replies as f64 / n_nodes as f64;
+                    // TODO: sort by frequency?
+                    info!("     {:4}% - {} :: {}", percent, n_replies, node);
+                }
+            }
+        }
     }
 }
