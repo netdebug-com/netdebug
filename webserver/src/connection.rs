@@ -438,7 +438,9 @@ impl Connection {
                 // launch queued idle probes
                 self.send_probes_on_idle = false;
                 // unwrap is right as we should never send idle probes when self.local_data = None
-                tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock).unwrap();
+                tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock).unwrap_or_else(|e| {
+                    warn!("tcp_inband_probe() returned :: {}", e);
+                });
             }
         }
         // TODO: look for incoming selective acks (indicates packet loss)

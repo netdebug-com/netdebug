@@ -9,30 +9,6 @@
 
 Fix these:
 
-thread 'tokio-runtime-worker' panicked at 'called `Option::unwrap()` on a `None` value', webserver/src/connection.rs:441:59
-stack backtrace:
-   0: rust_begin_unwind
-             at /rustc/90c541806f23a127002de5b4038be731ba1458ca/library/std/src/panicking.rs:578:5
-   1: core::panicking::panic_fmt
-             at /rustc/90c541806f23a127002de5b4038be731ba1458ca/library/core/src/panicking.rs:67:14
-   2: core::panicking::panic
-             at /rustc/90c541806f23a127002de5b4038be731ba1458ca/library/core/src/panicking.rs:117:5
-   3: libwebserver::connection::Connection::update
-   4: libwebserver::connection::ConnectionTracker<R>::add
-   5: libwebserver::context::WebServerContext::new::{{closure}}
-   6: tokio::loom::std::unsafe_cell::UnsafeCell<T>::with_mut
-   7: tokio::runtime::task::core::Core<T,S>::poll
-   8: tokio::runtime::task::harness::Harness<T,S>::poll
-   9: tokio::runtime::scheduler::multi_thread::worker::Context::run_task
-  10: tokio::runtime::scheduler::multi_thread::worker::Context::run
-  11: tokio::macros::scoped_tls::ScopedKey<T>::set
-  12: tokio::runtime::scheduler::multi_thread::worker::run
-  13: tokio::loom::std::unsafe_cell::UnsafeCell<T>::with_mut
-  14: tokio::runtime::task::core::Core<T,S>::poll
-  15: tokio::runtime::task::harness::Harness<T,S>::poll
-  16: tokio::runtime::blocking::pool::Inner::run
-
-
 thread 'tokio-runtime-worker' panicked at 'not yet implemented', webserver/src/owned_packet.rs:248:28
 stack backtrace:
    0: rust_begin_unwind
