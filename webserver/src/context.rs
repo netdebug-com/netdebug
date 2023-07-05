@@ -23,6 +23,7 @@ pub struct WebServerContext {
     pub pcap_device: pcap::Device,  // which ethernet device are we capturing from?
     pub local_tcp_listen_port: u16, // what port are we listening on?
     pub local_ips: HashSet<IpAddr>, // which IP addresses do we listen on?
+    pub send_idle_probes: bool,     // should we also probe when the connection is idle?
     // communications channel to the connection_tracker
     // TODO: make a pool for multi-threading
     pub connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
@@ -60,6 +61,7 @@ impl WebServerContext {
             local_tcp_listen_port: args.listen_port,
             local_ips: local_ips,
             connection_tracker: tx,
+            send_idle_probes: args.send_idle_probes,
         };
         let context_clone = Arc::new(RwLock::new(context.clone()));
         // Spawn a ConnectionTracker task
@@ -102,6 +104,10 @@ pub struct Args {
     /// Web-server only - no libpcap probing
     #[arg(long, default_value_t = false)]
     pub web_server_only: bool,
+
+    /// Should we send extra probes when the connection is idle? BUGGY!
+    #[arg(long, default_value_t = false)]
+    pub send_idle_probes: bool,
 }
 
 pub type Context = Arc<RwLock<WebServerContext>>;
@@ -194,6 +200,7 @@ pub mod test {
             local_tcp_listen_port: 3030,
             local_ips: HashSet::new(),
             connection_tracker: tx,
+            send_idle_probes: false,
         }))
     }
 }

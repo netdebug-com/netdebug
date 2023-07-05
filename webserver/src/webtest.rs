@@ -53,7 +53,10 @@ pub async fn handle_websocket(
     info!("New websocket connection from {}", &addr_str);
     let (mut ws_tx, ws_rx) = websocket.split();
 
-    let connection_tracker = context.read().await.connection_tracker.clone();
+    let (connection_tracker, send_idle_probes) = {
+        let ctx = context.read().await;
+        (ctx.connection_tracker.clone(), ctx.send_idle_probes)
+    };
 
     // wrap the ws_tx with an unbounded mpsc channel because we can't clone it...
     let (tx, mut rx) = mpsc::unbounded_channel::<common::Message>();
@@ -90,6 +93,7 @@ pub async fn handle_websocket(
             &connection_key,
             &connection_tracker,
             &addr_str,
+            &send_idle_probes,
         )
         .await;
     }
@@ -102,6 +106,7 @@ async fn run_probe_round(
     connection_key: &Option<ConnectionKey>,
     connection_tracker: &mpsc::UnboundedSender<ConnectionTrackerMsg>,
     addr_str: &String,
+    send_idle_probes: &bool,
 ) {
     use common::Message::*;
     tx.send(Ping1FromServer {
@@ -129,8 +134,8 @@ async fn run_probe_round(
         "Collecting probe report for {} :: {}",
         addr_str, probe_round
     );
-    // first report we get, don't clear state b/c the idle probes need that state
-    match get_probe_report(connection_tracker, connection_key, false).await {
+    // first report we get, don't clear state if send_idle_probes is set
+    match get_probe_report(connection_tracker, connection_key, !send_idle_probes).await {
         // TODO: also log the report centrally - useful data!
         // if we got the report, send it to the remote WASM client
         Some(report) => tx
@@ -146,34 +151,36 @@ async fn run_probe_round(
             }),
         None => warn!("Got 'None' back from report_tx for {}", addr_str),
     }
-    // next, set for idle probes to get the endhost pings
-    connection_tracker
-        .send(ConnectionTrackerMsg::ProbeOnIdle {
-            key: connection_key.clone().unwrap(),
-        })
-        .unwrap_or_else(|e| {
-            warn!("connection_tracker::send() returned {}", e);
-            return;
-        });
-    // TODO: do a smarter RTT estimate
-    tokio::time::sleep(Duration::from_millis(rtt_estimate.round() as u64)).await;
-    // second report we get, do clear state
-    // TODO refactor duplicate code! signal idle report?
-    match get_probe_report(connection_tracker, connection_key, true).await {
-        // TODO: also log the report centrally - useful data!
-        // if we got the report, send it to the remote WASM client
-        Some(report) => tx
-            .send(common::Message::ProbeReport {
-                report,
-                probe_round,
+    if *send_idle_probes {
+        // next, set for idle probes to get the endhost pings
+        connection_tracker
+            .send(ConnectionTrackerMsg::ProbeOnIdle {
+                key: connection_key.clone().unwrap(),
             })
             .unwrap_or_else(|e| {
-                warn!(
-                    "Error while sending ProbeReport to client: {} :: {}",
-                    addr_str, e
-                );
-            }),
-        None => warn!("Got 'None' back from report_tx for {}", addr_str),
+                warn!("connection_tracker::send() returned {}", e);
+                return;
+            });
+        // TODO: do a smarter RTT estimate
+        tokio::time::sleep(Duration::from_millis(rtt_estimate.round() as u64)).await;
+        // second report we get, do clear state
+        // TODO refactor duplicate code! signal idle report?
+        match get_probe_report(connection_tracker, connection_key, true).await {
+            // TODO: also log the report centrally - useful data!
+            // if we got the report, send it to the remote WASM client
+            Some(report) => tx
+                .send(common::Message::ProbeReport {
+                    report,
+                    probe_round,
+                })
+                .unwrap_or_else(|e| {
+                    warn!(
+                        "Error while sending ProbeReport to client: {} :: {}",
+                        addr_str, e
+                    );
+                }),
+            None => warn!("Got 'None' back from report_tx for {}", addr_str),
+        }
     }
 }
 

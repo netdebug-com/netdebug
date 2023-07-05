@@ -1030,6 +1030,9 @@ mod test {
     /**
      * Verify that we can queue up a request to send probes when the connection is idle
      * that really only goes out once the connection goes idle
+     *
+     * NOTE: because this test manually triggers the idle probes, it ignores the
+     * context.send_idle_probes flag
      */
     #[tokio::test]
     async fn probe_on_idle_queued() {
@@ -1093,9 +1096,16 @@ mod test {
             PROBE_MAX_TTL as usize
         );
 
+        // NOTE: if we wanted to, we could pull the packets out of the mock raw_socket and
+        // feed them into the connection tracker so we test our EndHostReplyFound logic properly
+        // ... consider for later, but not important enough to mark as TODO
+
         // now process the SAME remote_data_ack packet five times: this is what EndHost probe
         // replies look like and verify the resulting ProbeReport
         // captured them correctly
+        //
+        // NOTE: it seems a real duplicate ACK will have selective acknowlegements set which will
+        // allow us to match the reply to the orignal probe; this test ACK doesn't have SACK
         for _ in 0..5 {
             connection_tracker.add(dup_ack.clone());
         }
