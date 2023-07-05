@@ -581,6 +581,20 @@ impl Connection {
      */
     async fn generate_probe_report(&mut self, clear: bool) -> ProbeReport {
         let mut report = Vec::new();
+        if self.outgoing_probe_timestamps.len() > PROBE_MAX_TTL as usize {
+            warn!(
+                "Extra probes {} in {:?}",
+                self.outgoing_probe_timestamps.len(),
+                self
+            );
+        }
+        if self.incoming_reply_timestamps.len() > PROBE_MAX_TTL as usize {
+            warn!(
+                "Extra replies {} in {:?}",
+                self.incoming_reply_timestamps.len(),
+                self
+            );
+        }
         for ttl in 1..=PROBE_MAX_TTL {
             let mut comment = String::new(); // no comment by default
             if let Some(probe_set) = self.outgoing_probe_timestamps.get(&ttl) {
@@ -1221,6 +1235,7 @@ mod test {
                 .find(|x| **x == probe_id as usize)
                 .is_some());
         }
+        assert_eq!(report.report.len(), all_probes.len());
         // now check that probes are correctly catergorized
         for ttl in no_replies {
             assert!(matches!(
