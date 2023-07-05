@@ -24,14 +24,18 @@ pub fn tcp_inband_probe(
         .map(|ttl| {
             let builder = etherparse::PacketBuilder::ethernet2(l2.source, l2.destination);
             let ip_header = packet.ip.as_ref().unwrap();
-            let builder = match &ip_header {
-                etherparse::IpHeader::Version4(ip4, _) => {
-                    builder.ipv4(ip4.source, ip4.destination, ttl)
+            let mut new_ip = ip_header.clone();
+            match new_ip {
+                etherparse::IpHeader::Version4(ref mut ip4, _) => {
+                    ip4.time_to_live = ttl;
+                    ip4.identification = ttl as u16; // redundant but useful!
                 }
-                etherparse::IpHeader::Version6(ip6, _) => {
-                    builder.ipv6(ip6.source, ip6.destination, ttl)
+                etherparse::IpHeader::Version6(ref mut ip6, _) => {
+                    ip6.hop_limit = ttl;
+                    // TODO: consider setting the flow_label BUT some ISPs might hash on it..
                 }
-            };
+            }
+            let builder = builder.ip(new_ip);
             let builder = match &packet.transport {
                 Some(TransportHeader::Tcp(tcp)) => {
                     let mut tcph = TcpHeader::new(
