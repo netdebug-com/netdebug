@@ -77,7 +77,16 @@ impl Display for ProbeReport {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ProbeReportEntry {
     // the notion of 'comment' might get abused - consider strongly typing everything(?)
-    ReplyFound {
+    RouterReplyFound {
+        // an ICMP message
+        ttl: u8,
+        out_timestamp_ms: f64,
+        rtt_ms: f64,
+        src_ip: IpAddr,
+        comment: String,
+    },
+    NatReplyFound {
+        // an ICMP message, but src_ip of the ICMP is the dst_ip of our original packet, implies NAT!
         ttl: u8,
         out_timestamp_ms: f64,
         rtt_ms: f64,
@@ -93,7 +102,13 @@ pub enum ProbeReportEntry {
         ttl: u8,
         comment: String,
     },
-    ReplyNoProbe {
+    RouterReplyNoProbe {
+        ttl: u8,
+        in_timestamp_ms: f64,
+        src_ip: IpAddr,
+        comment: String,
+    },
+    NatReplyNoProbe {
         ttl: u8,
         in_timestamp_ms: f64,
         src_ip: IpAddr,

@@ -169,6 +169,7 @@ where
         src_is_local: bool,
     ) {
         let mut connection = Connection {
+            connection_key: key.clone(),
             local_syn: None,
             remote_syn: None,
             local_seq: None,
@@ -227,6 +228,7 @@ where
 type ProbeId = u8;
 #[derive(Clone, Debug)]
 pub struct Connection {
+    pub connection_key: ConnectionKey,
     pub local_syn: Option<OwnedParsedPacket>,
     pub remote_syn: Option<OwnedParsedPacket>,
     pub local_seq: Option<u32>, // the most recent seq seen from local INCLUDING the TCP payload
@@ -633,13 +635,24 @@ impl Connection {
                         // else is an ICMP reply
                         // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
                         let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
-                        report.push(ProbeReportEntry::ReplyFound {
-                            ttl,
-                            out_timestamp_ms,
-                            rtt_ms,
-                            src_ip,
-                            comment,
-                        })
+                        // NAT check - does the dst of the connection key == this src_ip?
+                        if src_ip == self.connection_key.remote_ip {
+                            report.push(ProbeReportEntry::NatReplyFound {
+                                ttl,
+                                out_timestamp_ms,
+                                rtt_ms,
+                                src_ip,
+                                comment,
+                            })
+                        } else {
+                            report.push(ProbeReportEntry::RouterReplyFound {
+                                ttl,
+                                out_timestamp_ms,
+                                rtt_ms,
+                                src_ip,
+                                comment,
+                            })
+                        }
                     }
                 } else {
                     // missing reply - unfortunately common
@@ -674,12 +687,22 @@ impl Connection {
                     } else {
                         // ICMP reply
                         let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
-                        report.push(ProbeReportEntry::ReplyNoProbe {
-                            ttl,
-                            in_timestamp_ms,
-                            src_ip,
-                            comment,
-                        });
+                        // NAT check - does the dst of the connection key == this src_ip?
+                        if src_ip == self.connection_key.remote_ip {
+                            report.push(ProbeReportEntry::NatReplyNoProbe {
+                                ttl,
+                                in_timestamp_ms,
+                                src_ip,
+                                comment,
+                            });
+                        } else {
+                            report.push(ProbeReportEntry::RouterReplyNoProbe {
+                                ttl,
+                                in_timestamp_ms,
+                                src_ip,
+                                comment,
+                            });
+                        }
                     }
                 } else {
                     // missing both reply and probe - a bad day
@@ -1216,16 +1239,18 @@ mod test {
             .get_mut(&connection_key)
             .unwrap();
         let report = connection.generate_probe_report(false).await;
-        // println!("{}", report); // useful for debugging
+        println!("{}", report); // useful for debugging
 
         // hand analysis via wireshark = which TTL's got which reply types?
         let no_replies = [1, 3, 5, 6, 9, 16, 18];
-        let icmp_replies = [2, 4, 7, 8, 10, 11, 12, 13, 14, 15, 17];
+        let router_icmp_replies = [2, 4, 7, 8, 10, 11, 12, 13, 14, 15];
+        let nat_icmp_replies = [17];
         let endhost_replies = [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32];
 
         // sanity check to make sure we didn't miss something
         let mut all_probes = no_replies.clone().to_vec();
-        all_probes.append(&mut icmp_replies.clone().to_vec());
+        all_probes.append(&mut router_icmp_replies.clone().to_vec());
+        all_probes.append(&mut nat_icmp_replies.clone().to_vec());
         all_probes.append(&mut endhost_replies.clone().to_vec());
 
         // make sure all probes are accounted for
@@ -1247,10 +1272,22 @@ mod test {
                 }
             ));
         }
-        for ttl in icmp_replies {
+        for ttl in router_icmp_replies {
             assert!(matches!(
                 report.report[ttl - 1],
-                ProbeReportEntry::ReplyFound {
+                ProbeReportEntry::RouterReplyFound {
+                    ttl: _,
+                    out_timestamp_ms: _,
+                    rtt_ms: _,
+                    src_ip: _,
+                    comment: _
+                }
+            ));
+        }
+        for ttl in nat_icmp_replies {
+            assert!(matches!(
+                report.report[ttl - 1],
+                ProbeReportEntry::NatReplyFound {
                     ttl: _,
                     out_timestamp_ms: _,
                     rtt_ms: _,
