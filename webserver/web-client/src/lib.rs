@@ -40,13 +40,29 @@ pub fn main() -> Result<(), JsValue> {
     let document = window.document().expect("should have a document on window");
     let body = document.body().expect("document should have a body");
 
-    let div = document.create_element("div").unwrap();
-    div.set_inner_html("Build info:");
-    let list = document.create_element("ul")?;
-    let list_item = document.create_element("li")?;
-    list_item.set_inner_html(format!("GitHash = {}", common::get_git_hash_version()).as_str());
-    list.append_child(&list_item)?;
-    div.append_child(&list)?;
+    // the only thing in the HTML
+    let root_div = lookup_by_id("root_div").expect("Div 'root_div' not found!?");
+    root_div.set_class_name("tabs");
+    setup_main_tab(&document, &root_div)?;
+    setup_graph_tab(&document, &body, &root_div)?;
+    setup_probes_tab(&document, &root_div)?;
+    let div = build_info_div(&document)?;
+    body.append_child(&div)?;
+
+    // canvas example - https://rustwasm.github.io/docs/wasm-bindgen/examples/2d-canvas.html
+
+    Ok(())
+}
+
+fn setup_graph_tab(
+    document: &Document,
+    body: &HtmlElement,
+    root_div: &Element,
+) -> Result<(), JsValue> {
+    let tab_id = "graph_tab";
+    let button = create_tabs_button(document, tab_id, false)?;
+    let label = create_tabs_label(document, "Graph", tab_id)?;
+    let div = create_tabs_content(document)?;
 
     let canvas = document.create_element("canvas").unwrap();
     canvas.set_id("canvas"); // come back if we need manual double buffering
@@ -56,12 +72,94 @@ pub fn main() -> Result<(), JsValue> {
     console_log!("Setting height to {}, width to {}", height, width);
     canvas.set_attribute("width", format!("{}", width).as_str())?;
     canvas.set_attribute("height", format!("{}", height).as_str())?;
-    body.append_child(&canvas).unwrap();
-    body.append_child(&div).unwrap();
 
-    // canvas example - https://rustwasm.github.io/docs/wasm-bindgen/examples/2d-canvas.html
+    div.append_child(&canvas)?;
 
+    root_div.append_child(&button)?;
+    root_div.append_child(&label)?;
+    root_div.append_child(&div)?;
     Ok(())
+}
+
+fn setup_probes_tab(document: &Document, root_div: &Element) -> Result<(), JsValue> {
+    let tab_id = "probes_tab";
+    let button = create_tabs_button(document, tab_id, false)?;
+    let label = create_tabs_label(document, "Probes", tab_id)?;
+    let div = create_tabs_content(document)?;
+
+    div.set_inner_html("Waiting for probes!");
+    root_div.append_child(&button)?;
+    root_div.append_child(&label)?;
+    root_div.append_child(&div)?;
+    Ok(())
+}
+
+fn setup_main_tab(document: &Document, root_div: &Element) -> Result<(), JsValue> {
+    let tab_id = "main_tab";
+    let button = create_tabs_button(document, tab_id, true)?;
+    let label = create_tabs_label(document, "Summary", tab_id)?;
+    let div = create_tabs_content(document)?;
+
+    div.set_inner_html("Welcome!");
+    root_div.append_child(&button)?;
+    root_div.append_child(&label)?;
+    root_div.append_child(&div)?;
+    Ok(())
+}
+
+/**
+* The CSS magic for tabs REQUIRES that elements are declared in this order:
+*  1) radio button with class=tabs__radio
+*  2) tab lable    with class=tabs__label
+*  3) tab content  with class=tabs__content
+ <input type="radio" class="tabs__radio" name="tabs-example" id="tab1" checked>
+ <label for="tab1" class="tabs__label">Tab #1</label>
+ <div class="tabs__content">
+   CONTENT for Tab #1
+ </div>
+*/
+
+fn create_tabs_content(document: &Document) -> Result<Element, JsValue> {
+    let div = document.create_element("div")?;
+    div.set_class_name("tabs__content");
+    Ok(div)
+}
+
+fn create_tabs_label(document: &Document, text: &str, tab: &str) -> Result<Element, JsValue> {
+    let label = document.create_element("label")?;
+    label.set_class_name("tabs__label");
+    label.set_attribute("for", tab)?;
+    label.set_inner_html(text);
+    Ok(label)
+}
+
+fn create_tabs_button(document: &Document, id: &str, checked: bool) -> Result<Element, JsValue> {
+    let button = document.create_element("input")?;
+    button.set_attribute("type", "radio")?;
+    if checked {
+        // selected by default
+        button.set_attribute("checked", "true")?;
+    }
+    // all of the buttons in the same group need to share this name
+    button.set_attribute("name", "top-level-tabs")?;
+    button.set_class_name("tabs__radio");
+    button.set_id(id);
+    Ok(button)
+}
+
+fn build_info_div(document: &Document) -> Result<Element, JsValue> {
+    let div = document.create_element("div").unwrap();
+    div.set_inner_html("Build info:");
+    let list = document.create_element("ul")?;
+    let list_item = document.create_element("li")?;
+    // what date does this show?
+    list_item.set_inner_html(format!("Last Modified = {}", document.last_modified()).as_str());
+    list.append_child(&list_item)?;
+    let list_item = document.create_element("li")?;
+    list_item.set_inner_html(format!("GitHash = {}", common::get_git_hash_version()).as_str());
+    list.append_child(&list_item)?;
+    div.append_child(&list)?;
+    Ok(div)
 }
 
 // see https://stackoverflow.com/questions/1145850/how-to-get-height-of-entire-document-with-javascript
