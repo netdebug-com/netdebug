@@ -245,8 +245,7 @@ impl OwnedParsedPacket {
             DestinationUnreachable(_d) => {
                 self.to_icmp_payload_connection_key(local_addrs, local_tcp_ports)
             }
-            Redirect(_) => todo!(),
-            EchoRequest(_) => None,
+            Redirect(_) | EchoRequest(_) => None,
             TimeExceeded(_) => self.to_icmp_payload_connection_key(local_addrs, local_tcp_ports),
             ParameterProblem(_) => None,
             TimestampRequest(_) => None,
