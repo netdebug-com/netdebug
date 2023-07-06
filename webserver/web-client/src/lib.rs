@@ -32,6 +32,7 @@ const _TIME_LOG: &str = "time_log";
 const MAIN_TAB: &str = "main_tab";
 const GRAPH_TAB: &str = "graph_tab";
 const PROBE_TAB: &str = "probe_tab";
+const PROGRESS_METER: &str = "probe_progress_meter";
 
 #[wasm_bindgen(start)]
 pub fn main() -> Result<(), JsValue> {
@@ -100,7 +101,22 @@ fn setup_main_tab(document: &Document, root_div: &Element) -> Result<(), JsValue
     let label = create_tabs_label(document, "Summary", MAIN_TAB)?;
     let div = create_tabs_content(document, MAIN_TAB)?;
 
-    div.set_inner_html("Welcome!");
+    /*
+     * <label for="file">Downloading progress:</label>
+     * <progress id="file" value="32" max="100"> 32% </progress>
+     */
+
+    let progress_label = document.create_element("label")?;
+    progress_label.set_attribute("for", PROGRESS_METER)?;
+    progress_label.set_inner_html("Sending Probes:");
+
+    let progress = document.create_element("progress")?;
+    progress.set_id(PROGRESS_METER);
+    progress.set_attribute("value", "0")?;
+    progress.set_attribute("max", "100")?; // will get overwriten by update
+
+    div.append_child(&label)?;
+    div.append_child(&progress)?;
     root_div.append_child(&button)?;
     root_div.append_child(&label)?;
     root_div.append_child(&div)?;
@@ -262,6 +278,7 @@ impl Graph {
 
     fn add_data_probe_report(&mut self, probe_report: ProbeReport, probe_round: u32) {
         for (_ttl, probe) in &probe_report.probes {
+            // extract a name for the hop (e.g. "TTL=x" or "NAT") plus rtt, etc. info
             if let Some((key, rtt, ts)) = match probe {
                 ProbeReportEntry::RouterReplyFound {
                     ttl,
@@ -447,7 +464,13 @@ impl Graph {
     }
 
     fn set_max_rounds(&mut self, max_rounds: u32) {
-        self.max_rounds = Some(max_rounds);
+        if self.max_rounds.is_none() {
+            self.max_rounds = Some(max_rounds);
+            let progress = lookup_by_id(PROGRESS_METER).expect("No progress meter!?");
+            progress
+                .set_attribute("max", format!("{}", max_rounds).as_str())
+                .unwrap();
+        }
     }
 
     fn update_probe_report_summaries(&self) {
@@ -580,8 +603,9 @@ fn handle_ping3(
     Ok(())
 }
 
-fn update_probe_progress_meter(_probe_round: u32, _max_rounds: u32) -> Result<(), JsValue> {
-    // TODO - update actual progress meter
+fn update_probe_progress_meter(probe_round: u32, _max_rounds: u32) -> Result<(), JsValue> {
+    let progress = lookup_by_id(PROGRESS_METER).expect("No progress meter!?");
+    progress.set_attribute("value", format!("{}", probe_round).as_str())?;
     Ok(())
 }
 
