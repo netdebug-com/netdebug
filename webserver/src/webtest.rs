@@ -87,7 +87,7 @@ pub async fn handle_websocket(
     // send 100 rounds of pings to the client
     let mut probe_report_summary = ProbeReportSummary::new();
     let max_rounds = 100;
-    for probe_round in 0..max_rounds {
+    for probe_round in 1..=max_rounds {
         run_probe_round(
             probe_round,
             &tx,
