@@ -3,6 +3,7 @@ mod utils;
 use std::{collections::HashMap, vec};
 
 use common::{get_git_hash_version, Message, ProbeReport, ProbeReportEntry, ProbeReportSummary};
+use itertools::Itertools;
 use js_sys::Date;
 use plotters::coord::Shift;
 use plotters::prelude::*;
@@ -412,7 +413,7 @@ impl Graph {
                 PathElement::new(vec![(x, y - y_off), (x + 20, y - y_off)], &RED)
             });
         // Plot the data from each TTL's RTT's
-        for (idx, key) in self.data_probes.keys().enumerate() {
+        for (idx, key) in self.data_probes.keys().sorted().enumerate() {
             // TODO: pretty up the color selection algorithm
             let color = Palette99::pick(idx as usize).mix(0.9);
             if let Some(data_points) = self.data_probes.get(key) {
