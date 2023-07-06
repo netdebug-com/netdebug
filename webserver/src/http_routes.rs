@@ -18,6 +18,9 @@ pub async fn make_http_routes(
     let webtest = make_webtest_route(&context).with(log);
     let webclient = make_webclient_route(&context, &wasm_root).with(log);
     let ws = make_ws_route(&context).with(log);
+    let static_path = warp::path("static")
+        .and(warp::fs::dir(format!("{}/static", html_root)))
+        .with(log);
 
     // can only access if there's an auth cookie
     let root = make_root_route(&context).with(log);
@@ -30,6 +33,7 @@ pub async fn make_http_routes(
     let routes = webtest
         .or(ws)
         .or(webclient)
+        .or(static_path)
         .or(root)
         .or(login)
         .or(login_form);

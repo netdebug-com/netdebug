@@ -66,12 +66,14 @@ impl WebServerContext {
         let context_clone = Arc::new(RwLock::new(context.clone()));
         // Spawn a ConnectionTracker task
         // TODO Spawn lots for multi-processing
-        tokio::spawn(async move {
-            let raw_sock = bind_writable_pcap(&context_clone).await.unwrap();
-            let mut connection_tracker =
-                ConnectionTracker::new(context_clone, local_addrs, raw_sock).await;
-            connection_tracker.rx_loop(rx).await;
-        });
+        if !args.web_server_only {
+            tokio::spawn(async move {
+                let raw_sock = bind_writable_pcap(&context_clone).await.unwrap();
+                let mut connection_tracker =
+                    ConnectionTracker::new(context_clone, local_addrs, raw_sock).await;
+                connection_tracker.rx_loop(rx).await;
+            });
+        }
 
         Ok(context)
     }
