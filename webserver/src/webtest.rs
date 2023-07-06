@@ -99,7 +99,10 @@ pub async fn handle_websocket(
         )
         .await;
     }
-    probe_report_summary.log();
+    info!(
+        "ProbeReportSummary for {} ::\n{}",
+        addr_str, probe_report_summary
+    );
 }
 
 async fn run_probe_round(

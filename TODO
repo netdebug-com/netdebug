@@ -1,7 +1,7 @@
 * Plot the endhost and the nat datapoints!
-* Add summarization logic to ProbeReport - common to client and server
-* Figure out why we're seeing multiple hopcounts/pathsin the same TCP stream - route flaps?
+* Figure out why(if!?) we're seeing multiple hopcounts/pathsin the same TCP stream - route flaps?
   * make sure we're plotting the same points in the same ttl!
+* Seeing lost outbound probes - figure out how to get out of the stream and get pcap::Capture::stats access
 * deleting old connections after FIN/RST
 * move to LRUHashMap for connections in case they go away ungracefully
 * Add DNS lookups for ProbeReports
@@ -34,7 +34,7 @@ stack backtrace:
   15: tokio::runtime::task::harness::Harness<T,S>::poll
   16: tokio::runtime::blocking::pool::Inner::run
 note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
-thread 'tokio-runtime-worker' panicked at 'called `Result::unwrap()` on an `Err` value: SendError(Pkt(OwnedParsedPacket { pcap_header: PacketHeader { ts: 1688469654.051489, caplen: 86, len: 86 }, link: Some(Ethernet2Header { source: [6, 80, 62, 184, 207, 233], destination: [6, 149, 134, 32, 37, 65], ether_type: 2048 }), vlan: None, ip: Some(Version4(Ipv4Header { ihl: 5, differentiated_services_code_point: 10, explicit_congestion_notification: 0, payload_len: 52, identification: 16454, dont_fragment: false, more_fragments: false, fragments_offset: 0, time_to_live: 38, protocol: 1, header_checksum: 12268, source: [45, 83, 64, 1], destination: [172, 31, 10, 232], options: [] }, Ipv4Extensions { auth: None })), transport: Some(Icmpv4(Icmpv4Header { icmp_type: Redirect(RedirectHeader { code: RedirectForHost, gateway_internet_address: [93, 92, 133, 73] }), checksum: 23852 })), payload: [69, 0, 0, 44, 0, 0, 64, 0, 49, 6, 5, 24, 52, 53, 155, 175, 194, 187, 178, 20, 0, 22, 127, 21, 106, 5, 142, 153, 204, 177, 73, 19, 96, 18, 250, 240, 202, 225, 0, 0, 2, 4, 5, 180] }))', /home/ubuntu/netdebug/webserver/src/pcap.rs:75:61
+thread 'tokio-runtime-worker' panicked at 'called `Result::unwrap()` on an `Err` value: SendError(Pkt(OwnedParsedPacket { pcap_header: PacketHeader { ts: 1688571337.973896, caplen: 66, len: 66 }, link: Some(Ethernet2Header { source: [6, 80, 62, 184, 207, 233], destination: [6, 149, 134, 32, 37, 65], ether_type: 2048 }), vlan: None, ip: Some(Version4(Ipv4Header { ihl: 5, differentiated_services_code_point: 0, explicit_congestion_notification: 0, payload_len: 32, identification: 27089, dont_fragment: true, more_fragments: false, fragments_offset: 0, time_to_live: 45, protocol: 6, header_checksum: 61580, source: [81, 215, 234, 135], destination: [172, 31, 10, 232], options: [] }, Ipv4Extensions { auth: None })), transport: Some(Tcp(TcpHeader { source_port: 23336, destination_port: 443, sequence_number: 54298204, acknowledgment_number: 2261959062, data_offset: 8, ns: false, fin: false, syn: false, rst: false, psh: false, ack: true, urg: false, ece: false, cwr: false, window_size: 3922, checksum: 31435, urgent_pointer: 0, options: [Noop, Noop, Timestamp(516301047, 886724029)] })), payload: [] }))', /home/ubuntu/netdebug/webserver/src/pcap.rs:75:61
 stack backtrace:
    0: rust_begin_unwind
              at /rustc/90c541806f23a127002de5b4038be731ba1458ca/library/std/src/panicking.rs:578:5
@@ -56,4 +56,4 @@ stack backtrace:
   14: tokio::runtime::task::harness::Harness<T,S>::poll
   15: tokio::runtime::blocking::pool::Inner::run
 note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
-
+ INFO  http                     > 159.203.192.13:54600 "GET / HTTP/1.1" 404 "-" "Mozilla/5.0 zgrab/0.x" 15.662µs

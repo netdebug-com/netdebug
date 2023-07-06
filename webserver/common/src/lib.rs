@@ -1,5 +1,4 @@
 use itertools::Itertools;
-use log::info;
 use std::{collections::HashMap, fmt::Display, net::IpAddr}; // for .sorted()
 
 /**
@@ -259,11 +258,15 @@ impl Display for ProbeReportSummaryNode {
         }
         let avg = sum / self.rtts.len() as f64;
         // TODO: aggregate the comments
-        write!(
-            f,
-            "{:?} {:?} RTT(ms) min={} avg={} max={} ",
-            self.probe_type, self.ip, min, avg, max
-        )
+        if self.rtts.len() > 0 {
+            write!(
+                f,
+                "{:?} {:?} RTT(ms) min={} avg={} max={} ",
+                self.probe_type, self.ip, min, avg, max
+            )
+        } else {
+            write!(f, "{:?} {:?} ", self.probe_type, self.ip,)
+        }
     }
 }
 
@@ -383,27 +386,30 @@ impl ProbeReportSummary {
         }
         self.raw_reports.push(report);
     }
+}
 
-    pub fn log(&self) {
+impl Display for ProbeReportSummary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for ttl in self.summary.keys().sorted() {
             let nodes = self.summary.get(ttl).unwrap();
             if nodes.len() == 1 {
                 // simple and hopefully common case
-                info!("TTL {:3} - {}", ttl, nodes.first().unwrap());
+                writeln!(f, "TTL {:3} - {}", ttl, nodes.first().unwrap())?;
             } else {
                 // multiple different replies for the same TTL
                 // this can happen with packet loss or route flapping
                 // it shouldn't happen often as all packets in a probe report should hit
                 // the same ECMP bucket
-                info!("TTL {:3} -------", ttl);
+                writeln!(f, "TTL {:3} -------", ttl)?;
                 let n_nodes = self.raw_reports.len(); // each report should have 1 result per ttl
                 for node in nodes {
                     let n_replies = node.comments.len(); // one comment per replu
                     let percent = 100.0 * n_replies as f64 / n_nodes as f64;
                     // TODO: sort by frequency?
-                    info!("     {:4}% - {} :: {}", percent, n_replies, node);
+                    writeln!(f, "     {:4}% - {} :: {}", percent, n_replies, node)?;
                 }
             }
         }
+        Ok(())
     }
 }
