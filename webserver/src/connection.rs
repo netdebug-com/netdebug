@@ -452,7 +452,9 @@ impl Connection {
                                     .insert(probe_id, HashSet::from([packet.clone()]));
                             }
                             // make sure the next probe goes in the next nearer TTL's slot
-                            self.next_end_host_reply = Some(probe_id - 1);
+                            if probe_id > 1 {
+                                self.next_end_host_reply = Some(probe_id - 1);
+                            }
                         } else {
                             warn!("Looks like we got a inband ACK reply without next_end_host_reply set!? : {:?}", self);
                         }
