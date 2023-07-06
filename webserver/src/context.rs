@@ -1,6 +1,7 @@
 use std::{collections::HashSet, error::Error, net::IpAddr, sync::Arc};
 
 use clap::Parser;
+use log::info;
 use pwhash::{sha512_crypt, HashSetup};
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
@@ -68,6 +69,7 @@ impl WebServerContext {
         // TODO Spawn lots for multi-processing
         if !args.web_server_only {
             tokio::spawn(async move {
+                info!("Launching the connection tracker (single instance for now)");
                 let raw_sock = bind_writable_pcap(&context_clone).await.unwrap();
                 let mut connection_tracker =
                     ConnectionTracker::new(context_clone, local_addrs, raw_sock).await;

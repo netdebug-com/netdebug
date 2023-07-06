@@ -2,7 +2,9 @@ mod utils;
 
 use std::{collections::HashMap, vec};
 
-use common::{get_git_hash_version, Message, ProbeReport, ProbeReportEntry, PROBE_MAX_TTL};
+use common::{
+    get_git_hash_version, Message, ProbeReport, ProbeReportEntry, ProbeReportSummary, PROBE_MAX_TTL,
+};
 use js_sys::Date;
 use plotters::coord::Shift;
 use plotters::prelude::*;
@@ -29,6 +31,9 @@ extern "C" {
 }
 
 const _TIME_LOG: &str = "time_log";
+const MAIN_TAB: &str = "main_tab";
+const GRAPH_TAB: &str = "graph_tab";
+const PROBE_TAB: &str = "probe_tab";
 
 #[wasm_bindgen(start)]
 pub fn main() -> Result<(), JsValue> {
@@ -59,10 +64,9 @@ fn setup_graph_tab(
     body: &HtmlElement,
     root_div: &Element,
 ) -> Result<(), JsValue> {
-    let tab_id = "graph_tab";
-    let button = create_tabs_button(document, tab_id, false)?;
-    let label = create_tabs_label(document, "Graph", tab_id)?;
-    let div = create_tabs_content(document)?;
+    let button = create_tabs_button(document, GRAPH_TAB, false)?;
+    let label = create_tabs_label(document, "Graph", GRAPH_TAB)?;
+    let div = create_tabs_content(document, GRAPH_TAB)?;
 
     let canvas = document.create_element("canvas").unwrap();
     canvas.set_id("canvas"); // come back if we need manual double buffering
@@ -82,10 +86,9 @@ fn setup_graph_tab(
 }
 
 fn setup_probes_tab(document: &Document, root_div: &Element) -> Result<(), JsValue> {
-    let tab_id = "probes_tab";
-    let button = create_tabs_button(document, tab_id, false)?;
-    let label = create_tabs_label(document, "Probes", tab_id)?;
-    let div = create_tabs_content(document)?;
+    let button = create_tabs_button(document, PROBE_TAB, false)?;
+    let label = create_tabs_label(document, "Probes", PROBE_TAB)?;
+    let div = create_tabs_content(document, PROBE_TAB)?;
 
     div.set_inner_html("Waiting for probes!");
     root_div.append_child(&button)?;
@@ -95,10 +98,9 @@ fn setup_probes_tab(document: &Document, root_div: &Element) -> Result<(), JsVal
 }
 
 fn setup_main_tab(document: &Document, root_div: &Element) -> Result<(), JsValue> {
-    let tab_id = "main_tab";
-    let button = create_tabs_button(document, tab_id, true)?;
-    let label = create_tabs_label(document, "Summary", tab_id)?;
-    let div = create_tabs_content(document)?;
+    let button = create_tabs_button(document, MAIN_TAB, true)?;
+    let label = create_tabs_label(document, "Summary", MAIN_TAB)?;
+    let div = create_tabs_content(document, MAIN_TAB)?;
 
     div.set_inner_html("Welcome!");
     root_div.append_child(&button)?;
@@ -119,9 +121,10 @@ fn setup_main_tab(document: &Document, root_div: &Element) -> Result<(), JsValue
  </div>
 */
 
-fn create_tabs_content(document: &Document) -> Result<Element, JsValue> {
+fn create_tabs_content(document: &Document, name: &str) -> Result<Element, JsValue> {
     let div = document.create_element("div")?;
     div.set_class_name("tabs__content");
+    div.set_attribute("name", name)?;
     Ok(div)
 }
 
@@ -208,6 +211,8 @@ struct Graph {
     data_points_per_draw: usize,
     root: DrawingArea<CanvasBackend, Shift>,
     autoscale_max: f64,
+    probe_report_summary: ProbeReportSummary,
+    max_rounds: Option<u32>,
 }
 
 impl Graph {
@@ -221,7 +226,9 @@ impl Graph {
             data_ttl: HashMap::new(),
             data_points_per_draw,
             root,
+            probe_report_summary: ProbeReportSummary::new(),
             autoscale_max: f64::MIN,
+            max_rounds: None,
         }
     }
 
@@ -255,8 +262,8 @@ impl Graph {
      * data may not occur at the same time
      */
 
-    fn add_data_probe_report(&mut self, probe_report: ProbeReport) {
-        for (_ttl, probe) in probe_report.probes {
+    fn add_data_probe_report(&mut self, probe_report: ProbeReport, probe_round: u32) {
+        for (_ttl, probe) in &probe_report.probes {
             if let ProbeReportEntry::RouterReplyFound {
                 ttl,
                 out_timestamp_ms,
@@ -266,15 +273,25 @@ impl Graph {
             } = probe
             {
                 let d = PingData {
-                    rtt: rtt_ms,
-                    time_stamp: out_timestamp_ms,
+                    rtt: *rtt_ms,
+                    time_stamp: *out_timestamp_ms,
                 };
                 if let Some(probes) = self.data_ttl.get_mut(&ttl) {
                     probes.push(d);
                 } else {
-                    self.data_ttl.insert(ttl, SortedVec::from(vec![d]));
+                    self.data_ttl.insert(*ttl, SortedVec::from(vec![d]));
                 }
             }
+        }
+        self.probe_report_summary.update(probe_report);
+        if let Some(max_rounds) = self.max_rounds {
+            console_log!("Max rounds {} vs probe_round {}", max_rounds, probe_round);
+            if max_rounds <= probe_round {
+                // got all of the probe reports!
+                self.update_probe_report_summaries();
+            }
+        } else {
+            console_log!("Weird: called Graph::add_data_probe_report with a max_rounds");
         }
     }
 
@@ -393,6 +410,28 @@ impl Graph {
 
         self.root.present().unwrap();
     }
+
+    fn set_max_rounds(&mut self, max_rounds: u32) {
+        self.max_rounds = Some(max_rounds);
+    }
+
+    fn update_probe_report_summaries(&self) {
+        console_log!("Got all probes - updating summaries!");
+        let probes_div = lookup_by_id(PROBE_TAB).expect("Probes tab not setup!?");
+        let window = web_sys::window().expect("no global 'window' exists!?");
+        let document = window.document().expect("should have a document on window");
+        let pre_formated = document
+            .create_element("pre")
+            .expect("Failed to create a 'pre'");
+        // for now, just use the existing Display format
+        pre_formated.set_inner_html(format!("{}", self.probe_report_summary).as_str());
+        probes_div
+            .append_child(&pre_formated)
+            .expect("Failed to append pre to div!?");
+        let max_rounds = self.max_rounds.unwrap(); // needs to be populated before we can call this
+        probes_div
+            .set_inner_html(format!("Collected {} of {} probes", max_rounds, max_rounds).as_str());
+    }
 }
 
 #[wasm_bindgen]
@@ -417,7 +456,10 @@ pub fn run_webtest() -> Result<(), JsValue> {
     let mut graph = Graph::new(10); // this gets moved into the closure
     let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
         // double clone needed to match function prototypes - apparently(!?)
-        handle_ws_message(e, ws_clone.clone(), &mut graph).unwrap();
+        if let Err(js_value) = handle_ws_message(e, ws_clone.clone(), &mut graph) {
+            // TODO: reload whole document on JsValue("need to reload")
+            console_log!("Error! {:?}", js_value);
+        }
     });
 
     ws.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
@@ -471,7 +513,7 @@ fn handle_probe_report(
     graph: &mut Graph,
 ) -> Result<(), JsValue> {
     console_log!("Round {} -- report\n{}", probe_round, report);
-    graph.add_data_probe_report(report);
+    graph.add_data_probe_report(report, probe_round);
     Ok(())
 }
 
@@ -495,6 +537,7 @@ fn handle_ping3(
     // let list = document.get_element_by_id(TIME_LOG).unwrap();
     // let li = document.create_element("li")?;
     // let msg = format!("Server rtt {} ms client rtt {} ms", rtt, local_rtt);
+    graph.set_max_rounds(max_rounds); // should be constant the whole time
     graph.add_data(*rtt, local_rtt, now);
     update_probe_progress_meter(probe_round, max_rounds)?;
     // li.set_inner_html(&msg);
@@ -503,7 +546,7 @@ fn handle_ping3(
 }
 
 fn update_probe_progress_meter(_probe_round: u32, _max_rounds: u32) -> Result<(), JsValue> {
-    // TODO
+    // TODO - update actual progress meter
     Ok(())
 }
 
