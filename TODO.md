@@ -13,8 +13,11 @@ CTR+SHIFT+V to preview markdown in VSCODE!
 * Add DNS lookups for ProbeReports
 * build a "CLI Client" for testing and general usefulness
 
+# Nagging
+* need to do more IPv6 testing!  Just had a regression vs. localhost traffic with IPv6
+
 # Minor:
-* figure out why http GETs log four (!!) times for a single get!?
+* figure out why http GETs log four (!!) times for a single get!? Once per route? Which routes?  What results?
 ```
  INFO  http         > 127.0.0.1:41098 "GET /static/tabs.css HTTP/1.1" 404 "-" "curl/8.0.1" 36.972µs
  INFO  http         > 127.0.0.1:41098 "GET /static/tabs.css HTTP/1.1" 404 "-" "curl/8.0.1" 25.494µs

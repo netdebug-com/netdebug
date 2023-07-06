@@ -124,14 +124,14 @@ fn setup_main_tab(document: &Document, root_div: &Element) -> Result<(), JsValue
 fn create_tabs_content(document: &Document, name: &str) -> Result<Element, JsValue> {
     let div = document.create_element("div")?;
     div.set_class_name("tabs__content");
-    div.set_attribute("name", name)?;
+    div.set_id(name);
     Ok(div)
 }
 
 fn create_tabs_label(document: &Document, text: &str, tab: &str) -> Result<Element, JsValue> {
     let label = document.create_element("label")?;
     label.set_class_name("tabs__label");
-    label.set_attribute("for", tab)?;
+    label.set_attribute("for", format!("{}__id", tab).as_str())?;
     label.set_inner_html(text);
     Ok(label)
 }
@@ -146,7 +146,7 @@ fn create_tabs_button(document: &Document, id: &str, checked: bool) -> Result<El
     // all of the buttons in the same group need to share this name
     button.set_attribute("name", "top-level-tabs")?;
     button.set_class_name("tabs__radio");
-    button.set_id(id);
+    button.set_id(format!("{}__id", id).as_str());
     Ok(button)
 }
 
@@ -431,6 +431,7 @@ impl Graph {
         let max_rounds = self.max_rounds.unwrap(); // needs to be populated before we can call this
         probes_div
             .set_inner_html(format!("Collected {} of {} probes", max_rounds, max_rounds).as_str());
+        console_log!("Done update!");
     }
 }
 
