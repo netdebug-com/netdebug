@@ -460,6 +460,9 @@ impl Graph {
             .expect("Failed to create a 'pre'");
         // for now, just use the existing Display format
         pre_formated.set_inner_html(format!("{}", self.probe_report_summary).as_str());
+        probes_div.set_inner_html(
+            format!("Collected 100% of {} probes", self.max_rounds.unwrap()).as_str(),
+        );
         probes_div
             .append_child(&pre_formated)
             .expect("Failed to append pre to div!?");
