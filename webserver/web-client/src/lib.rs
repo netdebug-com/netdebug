@@ -2,9 +2,7 @@ mod utils;
 
 use std::{collections::HashMap, vec};
 
-use common::{
-    get_git_hash_version, Message, ProbeReport, ProbeReportEntry, ProbeReportSummary, PROBE_MAX_TTL,
-};
+use common::{get_git_hash_version, Message, ProbeReport, ProbeReportEntry, ProbeReportSummary};
 use js_sys::Date;
 use plotters::coord::Shift;
 use plotters::prelude::*;
@@ -207,7 +205,7 @@ impl Ord for PingData {
 struct Graph {
     data_server: SortedVec<PingData>,
     data_client: SortedVec<PingData>,
-    data_ttl: HashMap<u8, SortedVec<PingData>>,
+    data_probes: HashMap<String, SortedVec<PingData>>,
     data_points_per_draw: usize,
     root: DrawingArea<CanvasBackend, Shift>,
     autoscale_max: f64,
@@ -223,7 +221,7 @@ impl Graph {
         Graph {
             data_server: SortedVec::new(),
             data_client: SortedVec::new(),
-            data_ttl: HashMap::new(),
+            data_probes: HashMap::new(),
             data_points_per_draw,
             root,
             probe_report_summary: ProbeReportSummary::new(),
@@ -264,22 +262,59 @@ impl Graph {
 
     fn add_data_probe_report(&mut self, probe_report: ProbeReport, probe_round: u32) {
         for (_ttl, probe) in &probe_report.probes {
-            if let ProbeReportEntry::RouterReplyFound {
-                ttl,
-                out_timestamp_ms,
-                rtt_ms,
-                src_ip: _,
-                comment: _,
-            } = probe
-            {
+            if let Some((key, rtt, ts)) = match probe {
+                ProbeReportEntry::RouterReplyFound {
+                    ttl,
+                    out_timestamp_ms,
+                    rtt_ms,
+                    src_ip: _,
+                    comment: _,
+                } => Some((format!("ttl={}", ttl), rtt_ms, out_timestamp_ms)),
+                ProbeReportEntry::NatReplyFound {
+                    ttl: _,
+                    out_timestamp_ms,
+                    rtt_ms,
+                    src_ip: _,
+                    comment: _,
+                } => Some(("NAT".to_string(), rtt_ms, out_timestamp_ms)),
+                ProbeReportEntry::EndHostReplyFound {
+                    ttl: _,
+                    out_timestamp_ms,
+                    rtt_ms,
+                    comment: _,
+                } => Some(("EndHost".to_string(), rtt_ms, out_timestamp_ms)),
+                ProbeReportEntry::NoReply {
+                    ttl: _,
+                    out_timestamp_ms: _,
+                    comment: _,
+                }
+                | ProbeReportEntry::NoOutgoing { ttl: _, comment: _ }
+                | ProbeReportEntry::RouterReplyNoProbe {
+                    ttl: _,
+                    in_timestamp_ms: _,
+                    src_ip: _,
+                    comment: _,
+                }
+                | ProbeReportEntry::NatReplyNoProbe {
+                    ttl: _,
+                    in_timestamp_ms: _,
+                    src_ip: _,
+                    comment: _,
+                }
+                | ProbeReportEntry::EndHostNoProbe {
+                    ttl: _,
+                    in_timestamp_ms: _,
+                    comment: _,
+                } => None,
+            } {
                 let d = PingData {
-                    rtt: *rtt_ms,
-                    time_stamp: *out_timestamp_ms,
+                    rtt: *rtt,
+                    time_stamp: *ts,
                 };
-                if let Some(probes) = self.data_ttl.get_mut(&ttl) {
+                if let Some(probes) = self.data_probes.get_mut(&key) {
                     probes.push(d);
                 } else {
-                    self.data_ttl.insert(*ttl, SortedVec::from(vec![d]));
+                    self.data_probes.insert(key, SortedVec::from(vec![d]));
                 }
             }
         }
@@ -360,10 +395,10 @@ impl Graph {
                 PathElement::new(vec![(x, y - y_off), (x + 20, y - y_off)], &RED)
             });
         // Plot the data from each TTL's RTT's
-        for ttl in 1..=PROBE_MAX_TTL {
+        for (idx, key) in self.data_probes.keys().enumerate() {
             // TODO: pretty up the color selection algorithm
-            let color = Palette99::pick(ttl as usize).mix(0.9);
-            if let Some(data_points) = self.data_ttl.get(&(ttl)) {
+            let color = Palette99::pick(idx as usize).mix(0.9);
+            if let Some(data_points) = self.data_probes.get(key) {
                 let data: Vec<(f64, f64)> = data_points
                     .iter()
                     .enumerate()
@@ -377,7 +412,7 @@ impl Graph {
                 chart
                     .draw_series(LineSeries::new(data.iter().map(|v| (v.1, v.0)), &color))
                     .unwrap()
-                    .label(format!("TTL={} RTT CDF(% < Y)", ttl))
+                    .label(format!("{} RTT CDF(% < Y)", key))
                     .legend(move |(x, y)| {
                         PathElement::new(vec![(x, y - y_off), (x + 20, y - y_off)], &color)
                     });
