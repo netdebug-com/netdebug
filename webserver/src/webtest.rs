@@ -86,7 +86,8 @@ pub async fn handle_websocket(
 
     // send 100 rounds of pings to the client
     let mut probe_report_summary = ProbeReportSummary::new();
-    for probe_round in 1..100 {
+    let max_rounds = 100;
+    for probe_round in 0..max_rounds {
         run_probe_round(
             probe_round,
             &tx,
@@ -96,6 +97,7 @@ pub async fn handle_websocket(
             &addr_str,
             &send_idle_probes,
             &mut probe_report_summary,
+            max_rounds,
         )
         .await;
     }
@@ -114,10 +116,13 @@ async fn run_probe_round(
     addr_str: &String,
     send_idle_probes: &bool,
     probe_report_summary: &mut ProbeReportSummary,
+    max_rounds: u32,
 ) {
     use common::Message::*;
     tx.send(Ping1FromServer {
         server_timestamp_ms: make_time_ms(),
+        probe_round,
+        max_rounds,
     })
     .unwrap_or_else(|e| {
         warn!(
@@ -275,18 +280,31 @@ async fn handle_message(
         }
         | Ping1FromServer {
             server_timestamp_ms: _,
+            probe_round: _,
+            max_rounds: _,
         }
         | Ping3FromServer {
             server_rtt: _,
             client_timestamp_ms: _,
+            probe_round: _,
+            max_rounds: _,
         } => {
             warn!("Got Server messages from the client: ignoing {:?}", msg);
         }
         Ping2FromClient {
             server_timestamp_ms,
             client_timestamp_ms,
+            probe_round,
+            max_rounds,
         } => {
-            handle_ping2(server_timestamp_ms, client_timestamp_ms, tx, barrier_tx);
+            handle_ping2(
+                server_timestamp_ms,
+                client_timestamp_ms,
+                tx,
+                barrier_tx,
+                probe_round,
+                max_rounds,
+            );
         }
     }
 }
@@ -300,12 +318,16 @@ fn handle_ping2(
     client_timestamp_ms: f64,
     tx: &mpsc::UnboundedSender<Message>,
     barrier_tx: &mpsc::UnboundedSender<f64>,
+    probe_round: u32,
+    max_rounds: u32,
 ) {
     debug!("Got ping2 from client");
     let rtt = make_time_ms() - server_timestamp_ms;
     let reply = Message::Ping3FromServer {
         server_rtt: rtt,
         client_timestamp_ms: client_timestamp_ms,
+        probe_round,
+        max_rounds,
     };
     if let Err(e) = tx.send(reply) {
         warn!("Websocket write failed: {}", e);

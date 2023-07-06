@@ -440,10 +440,14 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, graph: &mut Graph) -> Resul
         VersionCheck { git_hash } => handle_version_check(git_hash, &ws),
         Ping1FromServer {
             server_timestamp_ms: t,
-        } => handle_ping1(&t, &ws),
+            probe_round,
+            max_rounds,
+        } => handle_ping1(&t, &ws, probe_round, max_rounds),
         Ping2FromClient {
             server_timestamp_ms: _,
             client_timestamp_ms: _,
+            probe_round: _,
+            max_rounds: _,
         } => {
             console_log!("Ignoring client msg from server: {:?}", msg);
             Ok(())
@@ -451,7 +455,9 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, graph: &mut Graph) -> Resul
         Ping3FromServer {
             server_rtt: rtt,
             client_timestamp_ms: t,
-        } => handle_ping3(&rtt, &t, &ws, graph),
+            probe_round,
+            max_rounds,
+        } => handle_ping3(&rtt, &t, &ws, graph, probe_round, max_rounds),
         ProbeReport {
             report,
             probe_round,
@@ -469,7 +475,14 @@ fn handle_probe_report(
     Ok(())
 }
 
-fn handle_ping3(rtt: &f64, t: &f64, _ws: &WebSocket, graph: &mut Graph) -> Result<(), JsValue> {
+fn handle_ping3(
+    rtt: &f64,
+    t: &f64,
+    _ws: &WebSocket,
+    graph: &mut Graph,
+    probe_round: u32,
+    max_rounds: u32,
+) -> Result<(), JsValue> {
     // console_log!("Got Ping3 from server");
     let window = web_sys::window().expect("window should be available");
     let performance = window
@@ -483,12 +496,18 @@ fn handle_ping3(rtt: &f64, t: &f64, _ws: &WebSocket, graph: &mut Graph) -> Resul
     // let li = document.create_element("li")?;
     // let msg = format!("Server rtt {} ms client rtt {} ms", rtt, local_rtt);
     graph.add_data(*rtt, local_rtt, now);
+    update_probe_progress_meter(probe_round, max_rounds)?;
     // li.set_inner_html(&msg);
     // list.append_child(&li)?;
     Ok(())
 }
 
-fn handle_ping1(t: &f64, ws: &WebSocket) -> Result<(), JsValue> {
+fn update_probe_progress_meter(_probe_round: u32, _max_rounds: u32) -> Result<(), JsValue> {
+    // TODO
+    Ok(())
+}
+
+fn handle_ping1(t: &f64, ws: &WebSocket, probe_round: u32, max_rounds: u32) -> Result<(), JsValue> {
     // console_log!("Got Ping1 from server");
     let window = web_sys::window().expect("window should be available");
     let performance = window
@@ -498,6 +517,8 @@ fn handle_ping1(t: &f64, ws: &WebSocket) -> Result<(), JsValue> {
     let reply = Message::Ping2FromClient {
         server_timestamp_ms: *t,
         client_timestamp_ms: client_ts,
+        probe_round,
+        max_rounds,
     };
     ws.send_with_str(serde_json::to_string(&reply).unwrap().as_str())
 }
