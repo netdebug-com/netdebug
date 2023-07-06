@@ -115,7 +115,7 @@ fn setup_main_tab(document: &Document, root_div: &Element) -> Result<(), JsValue
     progress.set_attribute("value", "0")?;
     progress.set_attribute("max", "100")?; // will get overwriten by update
 
-    div.append_child(&label)?;
+    div.append_child(&progress_label)?;
     div.append_child(&progress)?;
     root_div.append_child(&button)?;
     root_div.append_child(&label)?;
