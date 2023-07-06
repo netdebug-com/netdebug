@@ -29,10 +29,16 @@ extern "C" {
     fn log(s: &str);
 }
 
+#[wasm_bindgen(module = "/js/utils.js")]
+extern "C" {
+    fn plot_chart(element_id: &str);
+}
+
 const _TIME_LOG: &str = "time_log";
 const MAIN_TAB: &str = "main_tab";
 const GRAPH_TAB: &str = "graph_tab";
 const PROBE_TAB: &str = "probe_tab";
+const TEST_TAB: &str = "test_tab";
 const PROGRESS_METER: &str = "probe_progress_meter";
 
 #[wasm_bindgen(start)]
@@ -51,10 +57,39 @@ pub fn main() -> Result<(), JsValue> {
     setup_main_tab(&document, &root_div)?;
     setup_graph_tab(&document, &body, &root_div)?;
     setup_probes_tab(&document, &root_div)?;
+    setup_test_tab(&document, &body, &root_div)?;
     let div = build_info_div(&document)?;
     body.append_child(&div)?;
 
     // canvas example - https://rustwasm.github.io/docs/wasm-bindgen/examples/2d-canvas.html
+
+    Ok(())
+}
+
+fn setup_test_tab(
+    document: &Document,
+    body: &HtmlElement,
+    root_div: &Element,
+) -> Result<(), JsValue> {
+    let button = create_tabs_button(document, TEST_TAB, false)?;
+    let label = create_tabs_label(document, "Testing", TEST_TAB)?;
+    let div = create_tabs_content(document, TEST_TAB)?;
+
+    let canvas = document.create_element("canvas")?;
+    canvas.set_id("test_canvas"); // come back if we need manual double buffering
+    let (width, height) = calc_height(&document, &body);
+    let width = 9 * width / 10;
+    let height = 4 * height / 5;
+    canvas.set_attribute("width", format!("{}", width).as_str())?;
+    canvas.set_attribute("height", format!("{}", height).as_str())?;
+
+    div.append_child(&canvas)?;
+
+    root_div.append_child(&button)?;
+    root_div.append_child(&label)?;
+    root_div.append_child(&div)?;
+
+    plot_chart("test_canvas");
 
     Ok(())
 }

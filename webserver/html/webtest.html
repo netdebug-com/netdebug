@@ -5,9 +5,11 @@
         Network Debug WebTest Demo
     </title>
     <link rel="stylesheet" href="/static/tabs.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     </head>
     <body>
         <script type="module">
+
             import init, {run_webtest} from '/webclient/web_client.js'
             await init()
             await run_webtest()
