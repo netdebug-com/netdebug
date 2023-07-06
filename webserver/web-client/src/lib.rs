@@ -428,10 +428,6 @@ impl Graph {
         probes_div
             .append_child(&pre_formated)
             .expect("Failed to append pre to div!?");
-        let max_rounds = self.max_rounds.unwrap(); // needs to be populated before we can call this
-        probes_div
-            .set_inner_html(format!("Collected {} of {} probes", max_rounds, max_rounds).as_str());
-        console_log!("Done update!");
     }
 }
 
