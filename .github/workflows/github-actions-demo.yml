@@ -34,7 +34,7 @@ jobs:
           # but for now, just manually work around by doing both in same step
       - name: wasm-pack test
         run: |
-          wasm-pack test webserver/web-client --headless --chrome
+          wasm-pack test --headless --chrome webserver/web-client/
       - run: echo "🍏 This job's status is ${{ job.status }}."
 
 
