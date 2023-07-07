@@ -8,7 +8,6 @@ use js_sys::Date;
 use plotters::coord::Shift;
 use plotters::prelude::*;
 use plotters_canvas::CanvasBackend;
-use serde::{Deserialize, Serialize};
 use sorted_vec::SortedVec;
 use utils::set_panic_hook;
 use wasm_bindgen::prelude::*;
@@ -30,72 +29,33 @@ extern "C" {
     fn log(s: &str);
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChartDataSeries<T> {
-    pub data: Vec<T>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChartDataSets<T> {
-    // can have more than one dataset per graph
-    pub datasets: Vec<ChartDataSeries<T>>,
-    // labels.len() must be >= max(Vec.len())
-    pub labels: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChartConfig<T> {
-    /* Looks like:
-    {
-        type: 'bar',
-        data: {
-            datasets: [{
-            data: [20, 10],
-            }],
-            labels: ['a', 'b']
-        }
-    }
-     */
-    #[serde(rename = "type")] // 'type' is a keyword in rust, can't use it
-    pub chart_type: String,
-    pub data: ChartDataSets<T>,
-    pub options: Option<serde_json::Value>,
-}
-
-impl<T: serde::Serialize> ChartConfig<T> {
-    pub fn new(chart_type: String) -> ChartConfig<T> {
-        ChartConfig {
-            chart_type,
-            data: ChartDataSets {
-                datasets: Vec::new(),
-                labels: Vec::new(),
-            },
-            options: None,
-        }
-    }
-    pub fn json(&self) -> Result<JsValue, serde_wasm_bindgen::Error> {
-        serde_wasm_bindgen::to_value(self)
-    }
-
-    pub fn set_options(&mut self, options: &str) -> Result<(), serde_json::error::Error> {
-        let json = serde_json::from_str(options)?;
-        self.options = Some(json);
-        Ok(())
-    }
-}
-
 #[wasm_bindgen(module = "/js/utils.js")]
 extern "C" {
     // populate the cfg JsValue with a ChartConfig struct to JSON
     fn plot_chart(element_id: &str, cfg: JsValue, verbose: bool);
-    fn plot_chart_test(element_id: &str);
+    // lost too much time fuxzing with wasm2js stuff - just pass
+    // the nine variables explicitly - sigh
+    fn plot_latency_chart(
+        element_id: &str,
+        best_isp: f64,
+        best_home: f64,
+        best_app: f64,
+        typical_isp: f64,
+        typical_home: f64,
+        typical_app: f64,
+        worst_isp: f64,
+        worst_home: f64,
+        worst_app: f64,
+        verbose: bool,
+    );
+    pub fn json_parse(s: &str) -> JsValue;
 }
 
 const _TIME_LOG: &str = "time_log";
 const MAIN_TAB: &str = "main_tab";
 const GRAPH_TAB: &str = "graph_tab";
 const PROBE_TAB: &str = "probe_tab";
-const TEST_TAB: &str = "test_tab";
+const _TEST_TAB: &str = "test_tab";
 const PROGRESS_METER: &str = "probe_progress_meter";
 
 #[wasm_bindgen(start)]
@@ -114,7 +74,7 @@ pub fn run() -> Result<(), JsValue> {
     setup_main_tab(&document, &root_div)?;
     setup_graph_tab(&document, &body, &root_div)?;
     setup_probes_tab(&document, &root_div)?;
-    setup_test_tab(&document, &body, &root_div)?;
+    // setup_test_tab(&document, &body, &root_div)?;
     let div = build_info_div(&document)?;
     body.append_child(&div)?;
 
@@ -123,14 +83,14 @@ pub fn run() -> Result<(), JsValue> {
     Ok(())
 }
 
-fn setup_test_tab(
+fn _setup_test_tab(
     document: &Document,
     body: &HtmlElement,
     root_div: &Element,
 ) -> Result<(), JsValue> {
-    let button = create_tabs_button(document, TEST_TAB, false)?;
-    let label = create_tabs_label(document, "Testing", TEST_TAB)?;
-    let div = create_tabs_content(document, TEST_TAB)?;
+    let button = create_tabs_button(document, _TEST_TAB, false)?;
+    let label = create_tabs_label(document, "Testing", _TEST_TAB)?;
+    let div = create_tabs_content(document, _TEST_TAB)?;
 
     let canvas = document.create_element("canvas")?;
     canvas.set_id("test_canvas"); // come back if we need manual double buffering
@@ -146,23 +106,19 @@ fn setup_test_tab(
     root_div.append_child(&label)?;
     root_div.append_child(&div)?;
 
-    let test_data = ChartDataSets {
-        datasets: Vec::from([ChartDataSeries {
-            data: Vec::from([20, 10]),
-        }]),
-        labels: Vec::from(["a", "b"].map(|a| a.to_string())),
-    };
-
-    let test_chart = ChartConfig {
-        chart_type: "bar".to_string(),
-        data: test_data,
-        options: None,
-    };
-
-    let cfg = test_chart.json().unwrap();
-
-    plot_chart("test_canvas", cfg, false);
-    console_log!("Chart PLOTTED!");
+    plot_latency_chart(
+        "test_canvas",
+        100.0,
+        150.0,
+        155.0,
+        100.0,
+        250.0,
+        255.0,
+        100.0,
+        450.0,
+        455.0,
+        false,
+    );
 
     Ok(())
 }
@@ -370,6 +326,7 @@ impl Graph {
             rtt: client_rtt,
             time_stamp,
         });
+
         // did we get enough data to be worth redrawing the graph?
         if self.data_server.len() % self.data_points_per_draw == 0 {
             self.draw();
@@ -446,7 +403,6 @@ impl Graph {
         }
         self.probe_report_summary.update(probe_report);
         if let Some(max_rounds) = self.max_rounds {
-            console_log!("Max rounds {} vs probe_round {}", max_rounds, probe_round);
             if max_rounds <= probe_round {
                 // got all of the probe reports!
                 self.update_probe_report_summaries();
@@ -598,6 +554,196 @@ impl Graph {
         probes_div
             .append_child(&pre_formated)
             .expect("Failed to append pre to div!?");
+        // could just continue, but logically different to do a new function
+        self.draw_main_latencies_chart();
+    }
+
+    /***
+     * FIgure out the p1, p50, and p99 of the client data and then find the
+     * NAT ("ISP") and Endhost ("home network") probe reports that most closely
+     * match those in time.  Those become nine data points that we will plot
+     * on the main summary.
+     *
+     * NOTE: the plot_latency_chart() numbers are RELATIVE, so need to calc
+     * relative latencies from these absolute ones for the stacked bar chart
+     *
+     * TODO: de-fuglyfy this code with an enum {BEST, TYPICAL, WORST} and
+     * some better control structures; too tired now to do this right
+     * and this seems pretty low priority code to beautify
+     */
+
+    fn draw_main_latencies_chart(&self) {
+        let best_client_index = 1;
+        let typical_client_index = self.data_client.len() / 2;
+        let worst_client_index = self.data_client.len() - 1;
+
+        let best_client_time = self.data_client[best_client_index].time_stamp;
+        let typical_client_time = self.data_client[typical_client_index].time_stamp;
+        let worst_client_time = self.data_client[worst_client_index].time_stamp;
+        let best_client_rtt = self.data_client[best_client_index].rtt;
+        let typical_client_rtt = self.data_client[typical_client_index].rtt;
+        let worst_client_rtt = self.data_client[worst_client_index].rtt;
+
+        //  (time_delta, value)
+        let mut best_home = (
+            f64::MAX,
+            PingData {
+                rtt: 0.0,
+                time_stamp: 0.0,
+            },
+        );
+        let mut best_isp = (
+            f64::MAX,
+            PingData {
+                rtt: 0.0,
+                time_stamp: 0.0,
+            },
+        );
+        let mut typical_home = (
+            f64::MAX,
+            PingData {
+                rtt: 0.0,
+                time_stamp: 0.0,
+            },
+        );
+        let mut typical_isp = (
+            f64::MAX,
+            PingData {
+                rtt: 0.0,
+                time_stamp: 0.0,
+            },
+        );
+        let mut worst_home = (
+            f64::MAX,
+            PingData {
+                rtt: 0.0,
+                time_stamp: 0.0,
+            },
+        );
+        let mut worst_isp = (
+            f64::MAX,
+            PingData {
+                rtt: 0.0,
+                time_stamp: 0.0,
+            },
+        );
+        // the raw reports were inserted by/sorted by time
+        // step through and find the probes that are the closest in time to the app/client ones
+        for report in &self.probe_report_summary.raw_reports {
+            for probe in report.probes.values() {
+                // use 'if let' instead of match as there are a LOT of probe types!
+                use ProbeReportEntry::*;
+                if let EndHostReplyFound {
+                    ttl: _,
+                    out_timestamp_ms,
+                    rtt_ms,
+                    comment: _,
+                } = probe
+                {
+                    // an EndHostReply signifies the latency through the home network
+                    let best_home_delta = out_timestamp_ms - best_client_time;
+                    if best_home_delta < best_home.0 {
+                        best_home = (
+                            best_home_delta,
+                            PingData {
+                                rtt: *rtt_ms,
+                                time_stamp: *out_timestamp_ms,
+                            },
+                        );
+                    }
+                    let typical_home_delta = out_timestamp_ms - typical_client_time;
+                    if typical_home_delta < typical_home.0 {
+                        typical_home = (
+                            typical_home_delta,
+                            PingData {
+                                rtt: *rtt_ms,
+                                time_stamp: *out_timestamp_ms,
+                            },
+                        );
+                    }
+                    let worst_home_delta = out_timestamp_ms - worst_client_time;
+                    if worst_home_delta < worst_home.0 {
+                        worst_home = (
+                            worst_home_delta,
+                            PingData {
+                                rtt: *rtt_ms,
+                                time_stamp: *out_timestamp_ms,
+                            },
+                        );
+                    }
+                } else if let NatReplyFound {
+                    ttl: _,
+                    out_timestamp_ms,
+                    rtt_ms,
+                    src_ip: _,
+                    comment: _,
+                } = probe
+                {
+                    // an NatReply signifies the latency through the ISP network
+                    let best_isp_delta = out_timestamp_ms - best_client_time;
+                    if best_isp_delta < best_isp.0 {
+                        best_isp = (
+                            best_isp_delta,
+                            PingData {
+                                rtt: *rtt_ms,
+                                time_stamp: *out_timestamp_ms,
+                            },
+                        );
+                    }
+                    let typical_isp_delta = out_timestamp_ms - typical_client_time;
+                    if typical_isp_delta < typical_isp.0 {
+                        typical_isp = (
+                            typical_isp_delta,
+                            PingData {
+                                rtt: *rtt_ms,
+                                time_stamp: *out_timestamp_ms,
+                            },
+                        );
+                    }
+                    let worst_isp_delta = out_timestamp_ms - worst_client_time;
+                    if worst_isp_delta < worst_isp.0 {
+                        worst_isp = (
+                            worst_isp_delta,
+                            PingData {
+                                rtt: *rtt_ms,
+                                time_stamp: *out_timestamp_ms,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
+        let main_div = lookup_by_id(MAIN_TAB).unwrap();
+        let document = web_sys::window().unwrap().document().unwrap();
+        let body = document.body().unwrap();
+        let canvas = document.create_element("canvas").unwrap();
+        canvas.set_id("main_canvas"); // come back if we need manual double buffering
+        let (width, height) = calc_height(&document, &body);
+        let width = 9 * width / 10;
+        let height = 4 * height / 5;
+        canvas
+            .set_attribute("width", format!("{}", width).as_str())
+            .unwrap();
+        canvas
+            .set_attribute("height", format!("{}", height).as_str())
+            .unwrap();
+
+        main_div.set_inner_html("");
+        main_div.append_child(&canvas).unwrap();
+        plot_latency_chart(
+            "main_canvas",
+            best_isp.1.rtt,
+            best_home.1.rtt - best_isp.1.rtt,
+            best_client_rtt - best_home.1.rtt,
+            typical_isp.1.rtt,
+            typical_home.1.rtt - typical_isp.1.rtt,
+            typical_client_rtt - typical_home.1.rtt,
+            worst_isp.1.rtt,
+            worst_home.1.rtt - worst_isp.1.rtt,
+            worst_client_rtt - worst_home.1.rtt,
+            true,
+        );
     }
 }
 
