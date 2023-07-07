@@ -32,15 +32,15 @@ extern "C" {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChartDataSeries<T> {
-    data: Vec<T>,
+    pub data: Vec<T>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChartDataSets<T> {
     // can have more than one dataset per graph
-    datasets: Vec<ChartDataSeries<T>>,
+    pub datasets: Vec<ChartDataSeries<T>>,
     // labels.len() must be >= max(Vec.len())
-    labels: Vec<String>,
+    pub labels: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -57,12 +57,12 @@ pub struct ChartConfig<T> {
     }
      */
     #[serde(rename = "type")] // 'type' is a keyword in rust, can't use it
-    chart_type: String,
-    data: ChartDataSets<T>,
+    pub chart_type: String,
+    pub data: ChartDataSets<T>,
 }
 
 impl<T: serde::Serialize> ChartConfig<T> {
-    fn json(&self) -> Result<JsValue, serde_wasm_bindgen::Error> {
+    pub fn json(&self) -> Result<JsValue, serde_wasm_bindgen::Error> {
         serde_wasm_bindgen::to_value(self)
     }
 }

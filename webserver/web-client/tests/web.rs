@@ -3,7 +3,9 @@
 #![cfg(target_arch = "wasm32")]
 
 extern crate wasm_bindgen_test;
+use serde_json::Value;
 use wasm_bindgen_test::*;
+use web_client::{ChartConfig, ChartDataSeries, ChartDataSets};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -12,23 +14,37 @@ fn pass() {
     assert_eq!(1 + 1, 2);
 }
 
-/*
-use web_client::ChartConfig;
-use wasm_bindgen::JsValue;
-Test is broken, but the code we were testing works so ignore for now...
-
 #[wasm_bindgen_test]
 fn test_chart_config_json() {
-    let json_txt = "  type: 'bar',
-        data: {
-            datasets: [{
-            data: [20, 10],
-            }],
-            labels: ['a', 'b']
-        }"
-    .to_string();
-    let js = JsValue::from(json_txt);
-    let _chart_config: ChartConfig<u32> = serde_wasm_bindgen::from_value(js).unwrap();
-}
+    let test_data = ChartDataSets {
+        datasets: Vec::from([ChartDataSeries {
+            data: Vec::from([20, 10]),
+        }]),
+        labels: Vec::from(["a", "b"].map(|a| a.to_string())),
+    };
 
-*/
+    let test_chart = ChartConfig {
+        chart_type: "bar".to_string(),
+        data: test_data,
+    };
+
+    let input = test_chart.json().unwrap();
+    let _chart_config1: ChartConfig<u32> = serde_wasm_bindgen::from_value(input).unwrap();
+
+    let json: Value = serde_json::from_str(
+        r#"
+        {
+            "type": "bar",
+            "data": {
+                "datasets": [{
+                    "data": [20, 10]
+                }]
+            },
+            "labels": ["a", "b"]
+        }
+    "#,
+    )
+    .unwrap();
+    let js_value = serde_wasm_bindgen::to_value(&json).unwrap();
+    assert_eq!(js_value.is_object(), true);
+}
