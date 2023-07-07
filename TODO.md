@@ -4,9 +4,8 @@ CTR+SHIFT+V to preview markdown in VSCODE!
 
 # Features
 
-* Plot the endhost and the nat datapoints!
-* Figure out why(if!?) we're seeing multiple hopcounts/pathsin the same TCP stream - route flaps?
-  * make sure we're plotting the same points in the same ttl!
+* Fix the main plot - just use the data from the probe summaries... 
+  * Can calculate explicit processing time delays as well
 * Seeing lost outbound probes - figure out how to get out of the stream and get pcap::Capture::stats access
 * deleting old connections after FIN/RST
 * move to LRUHashMap for connections in case they go away ungracefully

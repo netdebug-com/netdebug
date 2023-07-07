@@ -252,8 +252,8 @@ pub struct ProbeReportSummaryNode {
     pub comments: Vec<String>,
 }
 
-impl Display for ProbeReportSummaryNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl ProbeReportSummaryNode {
+    pub fn stats(&self) -> Option<(f64, f64, f64)> {
         let mut min = f64::MAX;
         let mut max = f64::MIN;
         let mut sum = 0.0;
@@ -262,9 +262,19 @@ impl Display for ProbeReportSummaryNode {
             max = if max > *rtt { max } else { *rtt };
             sum += rtt;
         }
-        let avg = sum / self.rtts.len() as f64;
-        // TODO: aggregate the comments
         if self.rtts.len() > 0 {
+            let avg = sum / self.rtts.len() as f64;
+            Some((min, avg, max))
+        } else {
+            None
+        }
+    }
+}
+
+impl Display for ProbeReportSummaryNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // TODO: aggregate the comments
+        if let Some((min, avg, max)) = self.stats() {
             write!(
                 f,
                 "{:?} {:?} RTT(ms) min={} avg={} max={} ",

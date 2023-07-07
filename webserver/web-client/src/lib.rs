@@ -570,9 +570,14 @@ impl Graph {
      * TODO: de-fuglyfy this code with an enum {BEST, TYPICAL, WORST} and
      * some better control structures; too tired now to do this right
      * and this seems pretty low priority code to beautify
+     *
+     * THIS CODE IS HORRIBLY BORKEN - ONLY KEEPING it be it valiantly
+     * tries to compare times to get a true "this one time sample had these
+     * latencies"  - maybe fix later?
+     *
      */
 
-    fn draw_main_latencies_chart(&self) {
+    fn __garbage_draw_main_latencies_chart(&self) {
         let best_client_index = 1;
         let typical_client_index = self.data_client.len() / 2;
         let worst_client_index = self.data_client.len() - 1;
@@ -786,6 +791,138 @@ impl Graph {
             worst_client_rtt - worst_home.1.rtt,
             true,
         );
+    }
+
+    /**
+     * Try to find the p1, p50, and p99 (e.g., best, typical, and worst)
+     * latencies for the NAT, EndHost, and client (e.g., isp, home, and app)
+     * data.
+     *
+     * NOTE: this calculation can compare probes from different periods,e.g.,
+     * the 'worst' time for NAT may not be the same wallclock time for Endhost
+     */
+
+    fn draw_main_latencies_chart(&self) {
+        let best_client_index = 1;
+        let typical_client_index = self.data_client.len() / 2;
+        let worst_client_index = self.data_client.len() - 1;
+
+        // let best_client_time = self.data_client[best_client_index].time_stamp;
+        // let typical_client_time = self.data_client[typical_client_index].time_stamp;
+        // let worst_client_time = self.data_client[worst_client_index].time_stamp;
+        let best_client_rtt = self.data_client[best_client_index].rtt;
+        let typical_client_rtt = self.data_client[typical_client_index].rtt;
+        let worst_client_rtt = self.data_client[worst_client_index].rtt;
+
+        // pull data from probe summaries
+        let mut nat: Option<(f64, f64, f64)> = None;
+        let mut endhost: Option<(f64, f64, f64)> = None;
+        for (_ttl, probes) in &self.probe_report_summary.summary {
+            // use if let rather than match as there are a lot of different types of ProbeSummaries
+            for probe in probes {
+                if let ProbeReportEntry::NatReplyFound {
+                    ttl: _,
+                    out_timestamp_ms: _,
+                    rtt_ms: _,
+                    src_ip: _,
+                    comment: _,
+                } = probe.probe_type
+                {
+                    nat = probe.stats();
+                } else if let ProbeReportEntry::EndHostReplyFound {
+                    ttl: _,
+                    out_timestamp_ms: _,
+                    rtt_ms: _,
+                    comment: _,
+                } = probe.probe_type
+                {
+                    endhost = probe.stats();
+                    break; // just grab the first one for now - lowest in TTL
+                }
+            }
+        }
+        let nat = match nat {
+            None => {
+                console_log!("No NAT Probes found!?");
+                (0.0, 0.0, 0.0)
+            }
+            Some((min, avg, max)) => (min, avg, max),
+        };
+        let endhost = match endhost {
+            None => {
+                console_log!("No EndHost Probes found!?");
+                (0.0, 0.0, 0.0)
+            }
+            Some((min, avg, max)) => (min, avg, max),
+        };
+
+        // should be no reason to console_log these - just pulling them from ProbeReportSummary which
+        // is already logged
+
+        let main_div = lookup_by_id(MAIN_TAB).unwrap();
+        let document = web_sys::window().unwrap().document().unwrap();
+        let body = document.body().unwrap();
+        let canvas = document.create_element("canvas").unwrap();
+        canvas.set_id("main_canvas"); // come back if we need manual double buffering
+        let (width, height) = calc_height(&document, &body);
+        let width = 9 * width / 10;
+        let height = 4 * height / 5;
+        canvas
+            .set_attribute("width", format!("{}", width).as_str())
+            .unwrap();
+        canvas
+            .set_attribute("height", format!("{}", height).as_str())
+            .unwrap();
+
+        main_div.set_inner_html("");
+        main_div.append_child(&canvas).unwrap();
+
+        // now adjust everything to be relative time and catch when time seems to go backwards due to processing delays
+        let best_isp = nat.0;
+        let best_home = sane_subtract(endhost.0, nat.0, "best nat processing delay - adjust!");
+        let best_app = sane_subtract(
+            best_client_rtt,
+            endhost.0,
+            "best endhost processing delay - adjust!",
+        );
+        let typical_isp = nat.0;
+        let typical_home =
+            sane_subtract(endhost.0, nat.0, "typical nat processing delay - adjust!");
+        let typical_app = sane_subtract(
+            typical_client_rtt,
+            endhost.0,
+            "typical endhost processing delay - adjust!",
+        );
+        let worst_isp = nat.0;
+        let worst_home = sane_subtract(endhost.0, nat.0, "worst nat processing delay - adjust!");
+        let worst_app = sane_subtract(
+            worst_client_rtt,
+            endhost.0,
+            "worst endhost processing delay - adjust!",
+        );
+
+        plot_latency_chart(
+            "main_canvas",
+            best_isp,
+            best_home,
+            best_app,
+            typical_isp,
+            typical_home,
+            typical_app,
+            worst_isp,
+            worst_home,
+            worst_app,
+            true,
+        );
+    }
+}
+
+fn sane_subtract(bigger: f64, smaller: f64, text: &str) -> f64 {
+    if bigger > smaller {
+        bigger - smaller
+    } else {
+        console_log!("{}", text);
+        0.0
     }
 }
 
