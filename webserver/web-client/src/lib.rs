@@ -641,7 +641,7 @@ impl Graph {
                 } = probe
                 {
                     // an EndHostReply signifies the latency through the home network
-                    let best_home_delta = out_timestamp_ms - best_client_time;
+                    let best_home_delta = (out_timestamp_ms - best_client_time).abs();
                     if best_home_delta < best_home.0 {
                         best_home = (
                             best_home_delta,
@@ -651,7 +651,7 @@ impl Graph {
                             },
                         );
                     }
-                    let typical_home_delta = out_timestamp_ms - typical_client_time;
+                    let typical_home_delta = (out_timestamp_ms - typical_client_time).abs();
                     if typical_home_delta < typical_home.0 {
                         typical_home = (
                             typical_home_delta,
@@ -661,7 +661,7 @@ impl Graph {
                             },
                         );
                     }
-                    let worst_home_delta = out_timestamp_ms - worst_client_time;
+                    let worst_home_delta = (out_timestamp_ms - worst_client_time).abs();
                     if worst_home_delta < worst_home.0 {
                         worst_home = (
                             worst_home_delta,
@@ -680,7 +680,7 @@ impl Graph {
                 } = probe
                 {
                     // an NatReply signifies the latency through the ISP network
-                    let best_isp_delta = out_timestamp_ms - best_client_time;
+                    let best_isp_delta = (out_timestamp_ms - best_client_time).abs();
                     if best_isp_delta < best_isp.0 {
                         best_isp = (
                             best_isp_delta,
@@ -690,7 +690,7 @@ impl Graph {
                             },
                         );
                     }
-                    let typical_isp_delta = out_timestamp_ms - typical_client_time;
+                    let typical_isp_delta = (out_timestamp_ms - typical_client_time).abs();
                     if typical_isp_delta < typical_isp.0 {
                         typical_isp = (
                             typical_isp_delta,
@@ -700,7 +700,7 @@ impl Graph {
                             },
                         );
                     }
-                    let worst_isp_delta = out_timestamp_ms - worst_client_time;
+                    let worst_isp_delta = (out_timestamp_ms - worst_client_time).abs();
                     if worst_isp_delta < worst_isp.0 {
                         worst_isp = (
                             worst_isp_delta,
