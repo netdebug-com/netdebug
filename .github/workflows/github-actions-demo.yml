@@ -32,6 +32,9 @@ jobs:
           # FIXME 'cargo test' without 'cargo build' doesn't work as
           # it does not correctly depend on the wasm-pack tool
           # but for now, just manually work around by doing both in same step
+      - name: wasm-pack test
+        run: |
+          wasm-pack test webserver/web-client --headless --chrome
       - run: echo "🍏 This job's status is ${{ job.status }}."
 
 
