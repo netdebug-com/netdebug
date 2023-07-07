@@ -24,7 +24,9 @@ itertools = "0.10.5"
 js-sys = "0.3.46"
 plotters = "0.3.0"
 plotters-canvas = "0.3.0"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.96"
+serde-wasm-bindgen = "0.5.0"
 sorted-vec = "0.8.2"
 wasm-bindgen = "0.2.63"
 wasm-bindgen-futures = "0.4.36"
@@ -33,8 +35,8 @@ wasm-bindgen-futures = "0.4.36"
 # allocator, however.
 wee_alloc = { version = "0.4.5", optional = true }
 
-[dev-dependencies]
-wasm-bindgen-test = "0.3.13"
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3.36"
 
 ### TODO: figure out how to enable this in root workspace but only for
 ### this project - optimization we can ignore for now
