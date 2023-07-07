@@ -13,20 +13,19 @@ pub async fn make_http_routes(
     let wasm_root = context.read().await.wasm_root.clone();
     let html_root = context.read().await.html_root.clone();
 
-    let log = warp::log("http");
-    let login = make_login_route(&context).with(log);
-    let webtest = make_webtest_route(&context).with(log);
-    let webclient = make_webclient_route(&context, &wasm_root).with(log);
-    let ws = make_ws_route(&context).with(log);
+    let login = make_login_route(&context).with(warp::log("login"));
+    let webtest = make_webtest_route(&context).with(warp::log("webtest"));
+    let webclient = make_webclient_route(&context, &wasm_root).with(warp::log("webclient"));
+    let ws = make_ws_route(&context).with(warp::log("websocket"));
     let static_path = warp::path("static")
         .and(warp::fs::dir(format!("{}/static", html_root)))
-        .with(log);
+        .with(warp::log("static"));
 
     // can only access if there's an auth cookie
-    let root = make_root_route(&context).with(log);
+    let root = make_root_route(&context).with(warp::log("root"));
 
     // default where we direct people with no auth cookie to get one
-    let login_form = make_login_form_route(&context, &html_root).with(log);
+    let login_form = make_login_form_route(&context, &html_root).with(warp::log("login"));
 
     // this is the order that the filters try to match; it's important that
     // it's in this order to make sure the cookie auth works right
