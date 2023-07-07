@@ -1,0 +1,11 @@
+# https://rustwasm.github.io/wasm-bindgen/wasm-bindgen-test/usage.html#install-the-test-runner
+# If you're getting exec format OS error running 
+# cargo test --target wasm32-unknown-unknown
+
+# this should fix it
+# make sure you've also 'cargo install wasm-bindgen-cli'
+
+
+
+[target.wasm32-unknown-unknown]
+runner = 'wasm-bindgen-test-runner'

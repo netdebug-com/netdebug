@@ -8,6 +8,7 @@ use js_sys::Date;
 use plotters::coord::Shift;
 use plotters::prelude::*;
 use plotters_canvas::CanvasBackend;
+use serde::{Deserialize, Serialize};
 use sorted_vec::SortedVec;
 use utils::set_panic_hook;
 use wasm_bindgen::prelude::*;
@@ -29,9 +30,48 @@ extern "C" {
     fn log(s: &str);
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChartDataSeries<T> {
+    data: Vec<T>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChartDataSets<T> {
+    // can have more than one dataset per graph
+    datasets: Vec<ChartDataSeries<T>>,
+    // labels.len() must be >= max(Vec.len())
+    labels: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChartConfig<T> {
+    /* Looks like:
+    {
+        type: 'bar',
+        data: {
+            datasets: [{
+            data: [20, 10],
+            }],
+            labels: ['a', 'b']
+        }
+    }
+     */
+    #[serde(rename = "type")] // 'type' is a keyword in rust, can't use it
+    chart_type: String,
+    data: ChartDataSets<T>,
+}
+
+impl<T: serde::Serialize> ChartConfig<T> {
+    fn json(&self) -> Result<JsValue, serde_wasm_bindgen::Error> {
+        serde_wasm_bindgen::to_value(self)
+    }
+}
+
 #[wasm_bindgen(module = "/js/utils.js")]
 extern "C" {
-    fn plot_chart(element_id: &str);
+    // populate the cfg JsValue with a ChartConfig struct to JSON
+    fn plot_chart(element_id: &str, cfg: JsValue, verbose: bool);
+    fn plot_chart_test(element_id: &str);
 }
 
 const _TIME_LOG: &str = "time_log";
@@ -42,7 +82,7 @@ const TEST_TAB: &str = "test_tab";
 const PROGRESS_METER: &str = "probe_progress_meter";
 
 #[wasm_bindgen(start)]
-pub fn main() -> Result<(), JsValue> {
+pub fn run() -> Result<(), JsValue> {
     // setup better error messages
     console_error_panic_hook::set_once();
     set_panic_hook();
@@ -89,7 +129,22 @@ fn setup_test_tab(
     root_div.append_child(&label)?;
     root_div.append_child(&div)?;
 
-    plot_chart("test_canvas");
+    let test_data = ChartDataSets {
+        datasets: Vec::from([ChartDataSeries {
+            data: Vec::from([20, 10]),
+        }]),
+        labels: Vec::from(["a", "b"].map(|a| a.to_string())),
+    };
+
+    let test_chart = ChartConfig {
+        chart_type: "bar".to_string(),
+        data: test_data,
+    };
+
+    let cfg = test_chart.json().unwrap();
+
+    plot_chart("test_canvas", cfg, false);
+    console_log!("Chart PLOTTED!");
 
     Ok(())
 }
@@ -407,7 +462,7 @@ impl Graph {
                 )
             })
             .collect();
-        console_log!("data: {:?}", plot_server);
+        // console_log!("data: {:?}", plot_server);
         let font: FontDesc = ("sans-serif", 20.0).into();
 
         self.root.fill(&WHITE).unwrap();
@@ -606,7 +661,7 @@ fn handle_probe_report(
     probe_round: u32,
     graph: &mut Graph,
 ) -> Result<(), JsValue> {
-    console_log!("Round {} -- report\n{}", probe_round, report);
+    // console_log!("Round {} -- report\n{}", probe_round, report);
     graph.add_data_probe_report(report, probe_round);
     Ok(())
 }
