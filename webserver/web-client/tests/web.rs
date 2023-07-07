@@ -26,6 +26,7 @@ fn test_chart_config_json() {
     let test_chart = ChartConfig {
         chart_type: "bar".to_string(),
         data: test_data,
+        options: None,
     };
 
     let input = test_chart.json().unwrap();

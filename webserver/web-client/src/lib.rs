@@ -59,11 +59,28 @@ pub struct ChartConfig<T> {
     #[serde(rename = "type")] // 'type' is a keyword in rust, can't use it
     pub chart_type: String,
     pub data: ChartDataSets<T>,
+    pub options: Option<serde_json::Value>,
 }
 
 impl<T: serde::Serialize> ChartConfig<T> {
+    pub fn new(chart_type: String) -> ChartConfig<T> {
+        ChartConfig {
+            chart_type,
+            data: ChartDataSets {
+                datasets: Vec::new(),
+                labels: Vec::new(),
+            },
+            options: None,
+        }
+    }
     pub fn json(&self) -> Result<JsValue, serde_wasm_bindgen::Error> {
         serde_wasm_bindgen::to_value(self)
+    }
+
+    pub fn set_options(&mut self, options: &str) -> Result<(), serde_json::error::Error> {
+        let json = serde_json::from_str(options)?;
+        self.options = Some(json);
+        Ok(())
     }
 }
 
@@ -139,6 +156,7 @@ fn setup_test_tab(
     let test_chart = ChartConfig {
         chart_type: "bar".to_string(),
         data: test_data,
+        options: None,
     };
 
     let cfg = test_chart.json().unwrap();
