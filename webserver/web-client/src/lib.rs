@@ -731,6 +731,15 @@ impl Graph {
 
         main_div.set_inner_html("");
         main_div.append_child(&canvas).unwrap();
+        console_log!("Best ISP - {}", best_isp.1.rtt);
+        console_log!("Best HOME - {}", best_home.1.rtt);
+        console_log!("Best APP - {}", best_client_rtt);
+        console_log!("typical ISP - {}", typical_isp.1.rtt);
+        console_log!("typical HOME - {}", typical_home.1.rtt);
+        console_log!("typical APP - {}", typical_client_rtt);
+        console_log!("worst ISP - {}", worst_isp.1.rtt);
+        console_log!("worst HOME - {}", worst_home.1.rtt);
+        console_log!("worst APP - {}", worst_client_rtt);
         plot_latency_chart(
             "main_canvas",
             best_isp.1.rtt,
