@@ -731,14 +731,47 @@ impl Graph {
 
         main_div.set_inner_html("");
         main_div.append_child(&canvas).unwrap();
-        console_log!("Best ISP - {}", best_isp.1.rtt);
-        console_log!("Best HOME - {}", best_home.1.rtt);
+        console_log!("--- Best client time {}", best_client_time);
+        console_log!(
+            "Best ISP - {} {} {}",
+            best_isp.1.rtt,
+            best_isp.0,
+            best_isp.1.time_stamp
+        );
+        console_log!(
+            "Best HOME - {} {} {}",
+            best_home.1.rtt,
+            best_home.0,
+            best_home.1.time_stamp
+        );
         console_log!("Best APP - {}", best_client_rtt);
-        console_log!("typical ISP - {}", typical_isp.1.rtt);
-        console_log!("typical HOME - {}", typical_home.1.rtt);
+        console_log!("--- typical client time {}", typical_client_time);
+        console_log!(
+            "typical ISP - {} {} {}",
+            typical_isp.1.rtt,
+            typical_isp.0,
+            typical_isp.1.time_stamp
+        );
+        console_log!(
+            "typical HOME - {} {} {}",
+            typical_home.1.rtt,
+            typical_home.0,
+            typical_home.1.time_stamp
+        );
         console_log!("typical APP - {}", typical_client_rtt);
-        console_log!("worst ISP - {}", worst_isp.1.rtt);
-        console_log!("worst HOME - {}", worst_home.1.rtt);
+        console_log!("--- worst client time {}", worst_client_time);
+        console_log!(
+            "worst ISP - {} {} {}",
+            worst_isp.1.rtt,
+            worst_isp.0,
+            worst_isp.1.time_stamp
+        );
+        console_log!(
+            "worst HOME - {} {} {}",
+            worst_home.1.rtt,
+            worst_home.0,
+            worst_home.1.time_stamp
+        );
         console_log!("worst APP - {}", worst_client_rtt);
         plot_latency_chart(
             "main_canvas",
