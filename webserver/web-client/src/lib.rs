@@ -885,19 +885,19 @@ impl Graph {
             endhost.0,
             "best endhost processing delay - adjust!",
         );
-        let typical_isp = nat.0;
+        let typical_isp = nat.1;
         let typical_home =
-            sane_subtract(endhost.0, nat.0, "typical nat processing delay - adjust!");
+            sane_subtract(endhost.1, nat.1, "typical nat processing delay - adjust!");
         let typical_app = sane_subtract(
             typical_client_rtt,
-            endhost.0,
+            endhost.1,
             "typical endhost processing delay - adjust!",
         );
-        let worst_isp = nat.0;
-        let worst_home = sane_subtract(endhost.0, nat.0, "worst nat processing delay - adjust!");
+        let worst_isp = nat.2;
+        let worst_home = sane_subtract(endhost.2, nat.2, "worst nat processing delay - adjust!");
         let worst_app = sane_subtract(
             worst_client_rtt,
-            endhost.0,
+            endhost.2,
             "worst endhost processing delay - adjust!",
         );
 
