@@ -1,3 +1,6 @@
+# Top-level Cargo.toml - mostly just tells vscode to look into the subdirectories
+
+
 [workspace]
 members = [ "webserver", "webserver/web-client"]
 resolver = "2"

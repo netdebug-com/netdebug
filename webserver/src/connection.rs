@@ -96,8 +96,7 @@ where
     R: RawSocketWriter,
 {
     context: Context,
-    // TODO: change this to an LRUHashMap to avoid mem leaks!
-    connections: HashMap<ConnectionKey, Connection>,
+    connections: hashlru::Cache<ConnectionKey, Connection>,
     local_addrs: HashSet<IpAddr>,
     local_tcp_ports: HashSet<u16>,
     raw_sock: R,
@@ -112,10 +111,11 @@ where
         raw_sock: R,
     ) -> ConnectionTracker<R> {
         let mut local_tcp_ports = HashSet::new();
+        let max_connections_per_tracker = context.read().await.max_connections_per_tracker;
         local_tcp_ports.insert(context.read().await.local_tcp_listen_port);
         ConnectionTracker {
             context,
-            connections: HashMap::new(),
+            connections: hashlru::Cache::new(max_connections_per_tracker),
             local_addrs,
             local_tcp_ports,
             raw_sock,
@@ -942,7 +942,13 @@ pub mod test {
             connection_tracker.add(owned_pkt);
         }
         assert_eq!(connection_tracker.connections.len(), 1);
-        let connection = connection_tracker.connections.values_mut().next().unwrap();
+        // just grab the first connection .. the only connection
+        let mut connection = connection_tracker
+            .connections
+            .into_values()
+            .into_iter()
+            .next()
+            .unwrap();
         // TODO; verify more about these pkts
         let _local_syn = connection.local_syn.as_ref().unwrap();
         let _remote_syn = connection.remote_syn.as_ref().unwrap();

@@ -18,13 +18,14 @@ use crate::{
 // safety
 #[derive(Debug, Clone)]
 pub struct WebServerContext {
-    pub user_db: UserDb,            // only used for demo auth for now
-    pub html_root: String,          // path to "html" directory
-    pub wasm_root: String,          // path to wasm pkg directory
-    pub pcap_device: pcap::Device,  // which ethernet device are we capturing from?
-    pub local_tcp_listen_port: u16, // what port are we listening on?
-    pub local_ips: HashSet<IpAddr>, // which IP addresses do we listen on?
-    pub send_idle_probes: bool,     // should we also probe when the connection is idle?
+    pub user_db: UserDb,                    // only used for demo auth for now
+    pub html_root: String,                  // path to "html" directory
+    pub wasm_root: String,                  // path to wasm pkg directory
+    pub pcap_device: pcap::Device,          // which ethernet device are we capturing from?
+    pub local_tcp_listen_port: u16,         // what port are we listening on?
+    pub local_ips: HashSet<IpAddr>,         // which IP addresses do we listen on?
+    pub send_idle_probes: bool,             // should we also probe when the connection is idle?
+    pub max_connections_per_tracker: usize, // how big to make the LruCache
     // communications channel to the connection_tracker
     // TODO: make a pool for multi-threading
     pub connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
@@ -63,6 +64,7 @@ impl WebServerContext {
             local_ips: local_ips,
             connection_tracker: tx,
             send_idle_probes: args.send_idle_probes,
+            max_connections_per_tracker: args.max_connections_per_tracker,
         };
         let context_clone = Arc::new(RwLock::new(context.clone()));
         // Spawn a ConnectionTracker task
@@ -112,6 +114,10 @@ pub struct Args {
     /// Should we send extra probes when the connection is idle? BUGGY!
     #[arg(long, default_value_t = false)]
     pub send_idle_probes: bool,
+
+    /// How big to make the LRU Cache on each ConnectionTracker
+    #[arg(long, default_value_t = 4096)]
+    pub max_connections_per_tracker: usize,
 }
 
 pub type Context = Arc<RwLock<WebServerContext>>;
@@ -205,6 +211,7 @@ pub mod test {
             local_ips: HashSet::new(),
             connection_tracker: tx,
             send_idle_probes: false,
+            max_connections_per_tracker: 4096,
         }))
     }
 }

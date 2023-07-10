@@ -13,7 +13,6 @@ CTR+SHIFT+V to preview markdown in VSCODE!
 * Pretty up the probe report into nested tables
 * Seeing lost outbound probes - figure out how to get out of the stream and get pcap::Capture::stats access
 * deleting old connections after FIN/RST
-* move to LRUHashMap for connections in case they go away ungracefully
 * Add DNS lookups for ProbeReports
 * build a "CLI Client" for testing and general usefulness
 * multiple-parallel ws connections
