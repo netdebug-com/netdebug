@@ -6,6 +6,7 @@ use std::{
 use common::{ProbeId, ProbeReport, ProbeReportEntry, PROBE_MAX_TTL};
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader};
 use log::{info, warn};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     context::Context,
@@ -15,7 +16,7 @@ use crate::{
     utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timeval_to_ms},
 };
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ConnectionKey {
     pub local_ip: IpAddr,
     pub remote_ip: IpAddr,
@@ -225,7 +226,7 @@ where
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Connection {
     pub connection_key: ConnectionKey,
     pub local_syn: Option<OwnedParsedPacket>,
@@ -779,7 +780,7 @@ impl Connection {
     }
 }
 #[cfg(test)]
-mod test {
+pub mod test {
     use std::net::Ipv4Addr;
     use std::path::Path;
     use std::str::FromStr;
@@ -1043,7 +1044,7 @@ mod test {
     }
 
     // as copied from the first few packets of 'aws-sjc-ist-one-stream.pcap'
-    const TEST_1_LOCAL_SYN: [u8; 74] = [
+    pub const TEST_1_LOCAL_SYN: [u8; 74] = [
         0xc8, 0x54, 0x4b, 0x43, 0xda, 0x3e, 0x98, 0x8d, 0x46, 0xc5, 0x03, 0x82, 0x08, 0x00, 0x45,
         0x00, 0x00, 0x3c, 0xeb, 0x19, 0x40, 0x00, 0x40, 0x06, 0xbd, 0xf0, 0xc0, 0xa8, 0x01, 0x25,
         0x34, 0x35, 0x9b, 0xaf, 0x94, 0x62, 0x01, 0xbb, 0xd9, 0xe4, 0x72, 0xe2, 0x00, 0x00, 0x00,

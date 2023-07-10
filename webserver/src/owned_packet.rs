@@ -1,7 +1,11 @@
 use std::{collections::HashSet, error::Error, net::IpAddr};
 
-use etherparse::{IpHeader, IpNumber, TcpHeader, TransportHeader};
+use etherparse::{
+    Icmpv4Header, Icmpv6Header, IpHeader, IpNumber, TcpHeader, TransportHeader, UdpHeader,
+};
 use log::warn;
+use pcap::PacketHeader;
+use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
 
 use crate::connection::ConnectionKey;
 
@@ -437,5 +441,217 @@ impl OwnedParsedPacket {
         };
         let parsed = etherparse::PacketHeaders::from_ethernet_slice(&pkt)?;
         Ok(OwnedParsedPacket::new(parsed, pcap_header))
+    }
+}
+
+/**
+ * Grr - have to implement custom serialize/deserialize for OwnedParsedPacket
+ * because none of their underyingly #%(*@&$*(&@!)) third-party structs
+ * implement #[derive(Serialize,Deserialize)]
+ *
+ * NOTE that if the fields of OwnedParsedPacket change, this needs to be
+ * manually updated!
+ */
+
+impl Serialize for OwnedParsedPacket {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // the pcap header doesn't implement serialize - hack around that
+        let mut state = serializer.serialize_struct("struct OwnedParsedPacket", 6)?;
+        let pcap_header = (
+            self.pcap_header.ts.tv_sec,
+            self.pcap_header.ts.tv_usec,
+            self.pcap_header.caplen,
+            self.pcap_header.len,
+        );
+        state.serialize_field("pcapheader", &pcap_header)?;
+
+        if let Some(eth) = &self.link {
+            let mut buf = Vec::with_capacity(eth.header_len());
+            // TODO : unwrap's here are annoying but .map_err() fought me and I lost :-(
+            eth.write(&mut buf).unwrap();
+            state.serialize_field("eth", buf.as_slice())?;
+        }
+        if let Some(vlan) = &self.vlan {
+            let mut buf = Vec::with_capacity(vlan.header_len());
+            vlan.write(&mut buf).unwrap();
+            state.serialize_field("vlan", buf.as_slice())?;
+        }
+        if let Some(ip) = &self.ip {
+            let mut buf = Vec::with_capacity(ip.header_len());
+            ip.write(&mut buf).unwrap();
+            state.serialize_field("ip", buf.as_slice())?;
+        }
+        if let Some(transport) = &self.transport {
+            let mut buf = Vec::with_capacity(transport.header_len());
+            transport.write(&mut buf).unwrap();
+            // need to encode the transport type to decode easily
+            use TransportHeader::*;
+            let proto = match transport {
+                Udp(_) => "Udp",
+                Tcp(_) => "Tcp",
+                Icmpv4(_) => "Icmp4",
+                Icmpv6(_) => "Icmp6",
+            }
+            .to_string();
+            state.serialize_field("transport", &(proto, buf.as_slice()))?;
+        }
+        state.serialize_field("payload", &self.payload)?;
+        state.end()
+    }
+}
+
+// Copying from https://serde.rs/deserialize-struct.html
+impl<'de> Deserialize<'de> for OwnedParsedPacket {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "lowercase")]
+        enum Fields {
+            PcapHeader,
+            Eth,
+            Vlan,
+            Ip,
+            Transport,
+            Payload,
+        }
+        struct OwnedParsedPacketVisitor {}
+
+        impl<'de> Visitor<'de> for OwnedParsedPacketVisitor {
+            type Value = OwnedParsedPacket;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str(r#"failed to deserialize OwnedParsedPacket"#)
+            }
+
+            // TODO : see if we need to implement visit_seq()
+
+            /**
+             * Super permissive deserializer; return an OwnedParsedPacket under almost
+             * any circumstances
+             */
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let pcap_header = PacketHeader {
+                    ts: libc::timeval {
+                        tv_sec: 0,
+                        tv_usec: 0,
+                    },
+                    caplen: 0,
+                    len: 0,
+                };
+                let mut pkt = OwnedParsedPacket {
+                    pcap_header,
+                    link: None,
+                    vlan: None,
+                    ip: None,
+                    transport: None,
+                    payload: Vec::new(),
+                };
+
+                while let Some(key) = map.next_key::<Fields>()? {
+                    match key {
+                        Fields::PcapHeader => {
+                            let (sec, usec, caplen, len) =
+                                map.next_value::<(i64, i64, u32, u32)>()?;
+                            pkt.pcap_header = PacketHeader {
+                                ts: libc::timeval {
+                                    tv_sec: sec,
+                                    tv_usec: usec,
+                                },
+                                caplen,
+                                len,
+                            };
+                        }
+                        Fields::Eth => {
+                            let buf = map.next_value::<Vec<u8>>()?;
+                            let (hdr, _payload) =
+                                etherparse::Ethernet2Header::from_slice(&buf).unwrap();
+                            pkt.link = Some(hdr);
+                        }
+                        Fields::Vlan => {
+                            todo!() // stoopid way of reading vlan headers; not needed now - fix if actually needed
+                                    /*
+                                    let buf = map.next_value::<Vec<u8>>()?;
+                                    let (hdr, _payload) = etherparse::VlanHeader::(&buf).unwrap();
+                                    pkt.vlan = Some(hdr);
+                                    */
+                        }
+                        Fields::Ip => {
+                            let buf = map.next_value::<Vec<u8>>()?;
+                            let (hdr, _proto, _payload) =
+                                etherparse::IpHeader::from_slice(&buf).unwrap();
+                            pkt.ip = Some(hdr);
+                        }
+                        Fields::Transport => {
+                            let (proto, buf) = map.next_value::<(String, Vec<u8>)>()?;
+                            let hdr = match proto.as_str() {
+                                // if anything is messed up, just panic - fix later if it's an issue
+                                "Udp" => {
+                                    Ok(TransportHeader::Udp(UdpHeader::from_slice(&buf).unwrap().0))
+                                }
+                                "Tcp" => {
+                                    Ok(TransportHeader::Tcp(TcpHeader::from_slice(&buf).unwrap().0))
+                                }
+                                "Icmp4" => Ok(TransportHeader::Icmpv4(
+                                    Icmpv4Header::from_slice(&buf).unwrap().0,
+                                )),
+                                "Icmp6" => Ok(TransportHeader::Icmpv6(
+                                    Icmpv6Header::from_slice(&buf).unwrap().0,
+                                )),
+                                _ => Err(format!("Unknown transportheader {}", proto)),
+                            }
+                            .unwrap();
+                            pkt.transport = Some(hdr);
+                        }
+                        Fields::Payload => {
+                            pkt.payload = map.next_value::<Vec<u8>>()?;
+                        }
+                    }
+                }
+                Ok(pkt)
+            }
+        }
+        const FIELDS: &'static [&'static str] =
+            &["pcapheader", "eth", "vlan", "ip", "transport", "payload"];
+        deserializer.deserialize_struct(
+            "struct OwnedParsedPacket",
+            FIELDS,
+            OwnedParsedPacketVisitor {},
+        )
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::connection;
+
+    use super::*;
+
+    #[test]
+    fn serialize() {
+        let mut orig_pkt =
+            OwnedParsedPacket::try_from_fake_time(connection::test::TEST_1_LOCAL_SYN.to_vec())
+                .unwrap();
+        // put real data in the pcap_header, so we test that as well
+        orig_pkt.pcap_header = PacketHeader {
+            ts: libc::timeval {
+                tv_sec: 1,
+                tv_usec: 2,
+            },
+            caplen: 3,
+            len: 4,
+        };
+        let json = serde_json::to_string(&orig_pkt).unwrap();
+
+        let new_pkt = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(orig_pkt, new_pkt);
     }
 }
