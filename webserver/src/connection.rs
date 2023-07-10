@@ -3,9 +3,10 @@ use std::{
     net::{IpAddr, SocketAddr},
 };
 
+use chrono::Utc;
 use common::{ProbeId, ProbeReport, ProbeReportEntry, PROBE_MAX_TTL};
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader};
-use log::{info, warn};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -181,6 +182,11 @@ where
             outgoing_probe_timestamps: HashMap::new(),
             incoming_reply_timestamps: HashMap::new(),
             send_probes_on_idle: false,
+            #[cfg(test)]
+            needs_logging: false, // logging is off for testing, but on for production
+            #[cfg(not(test))]
+            needs_logging: true,
+            close_time: None,
         };
         info!("Tracking new connection: {}", &key);
 
@@ -239,6 +245,8 @@ pub struct Connection {
     pub outgoing_probe_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
     pub incoming_reply_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
     pub send_probes_on_idle: bool, // should we send probes when the connection is idle?
+    pub needs_logging: bool,       // on connection close, should we log state to disk?
+    pub close_time: Option<String>, // Grr! none of the time instants/DataTIme's implement Serialize!!
 }
 impl Connection {
     fn update<R>(
@@ -778,9 +786,72 @@ impl Connection {
         // track and add self.local_ack == self.remote_seq
         self.send_probes_on_idle && self.remote_ack == self.local_seq
     }
+
+    /**
+     * Generate the filename to log to
+     *
+     * If our close time isn't set, set it now.
+     *
+     * NOTE: it's important to cache the result of the close time because if we didn't, two
+     * subsequent calls to this file (e.g., like in our tests) will never generate the same
+     * file name because of subtle differences in the time.
+     */
+
+    fn generate_output_filename(&mut self) -> String {
+        if self.close_time.is_none() {
+            let now = Utc::now();
+            self.close_time = Some(now.to_rfc3339()); // seems convenient - <shrug>
+        }
+
+        format!(
+            "remote_{}____{}_{}____{}_{}_{}.log",
+            self.close_time.as_ref().unwrap(),
+            self.connection_key.remote_ip,
+            self.connection_key.remote_l4_port,
+            self.connection_key.local_ip,
+            self.connection_key.local_l4_port,
+            self.connection_key.ip_proto,
+        )
+    }
+
+    // Write Connection details and stats out to a logfile when it goes away
+    // NOTE this can go away by FIN/RST or also by HashLru eviction
+    // TODO: just write out to a file in JSON for now, but will ultimately need
+    // some sort of database... I think? SQL scheme may be a PITA
+    fn log_to_disk(&mut self) {
+        self.needs_logging = false;
+        let outfile = self.generate_output_filename();
+        debug!("Writing connection out to {}", outfile);
+        // write to $CWD for now... figure it out later
+        let json = serde_json::to_string(self);
+        match json {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&outfile, json) {
+                    warn!("Writing out to {} -- {}", outfile, e);
+                }
+            }
+            Err(e) => {
+                warn!("Error serializing connection {} -- {}", outfile, e);
+            }
+        }
+    }
 }
+
+/**
+ * This should only be called for Connections that are LRU evicted; all other
+ * connections (e.g., as closed by FIN/RST) should have this called through other means
+ */
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if self.needs_logging {
+            self.log_to_disk();
+        }
+    }
+}
+
 #[cfg(test)]
 pub mod test {
+    use std::env;
     use std::net::Ipv4Addr;
     use std::path::Path;
     use std::str::FromStr;
@@ -1258,6 +1329,7 @@ pub mod test {
         }
         let connection_key = connection_key.unwrap();
         assert_eq!(connection_tracker.connections.len(), 1);
+        // do all of the connection work in a block so it will go away when we exit the block
         let connection = connection_tracker
             .connections
             .get_mut(&connection_key)
@@ -1329,6 +1401,24 @@ pub mod test {
                 }
             ));
         }
+        // now test that the logfile is generated
+        let outfile = connection.generate_output_filename();
+        connection.needs_logging = true; // because we're going to test it
+                                         // make sure the file doesn't exist at first
+        println!(
+            "Checking that log exists: {} -- {} ",
+            env::current_dir().unwrap().display(),
+            outfile
+        );
+        assert_eq!(std::fs::metadata(&outfile).is_ok(), false);
+        // delete by hand for now; will eventually autodelete itself when we do FIN/RST tracking
+        // NOTE: reference checker here is smart; it will forget the connection reference b/c
+        // we don't use it anymore, which allows the connection_tracker to be mut borrowed for the
+        // .clear()
+        connection_tracker.connections.clear();
+        assert_eq!(std::fs::metadata(&outfile).is_ok(), true);
+        // clean it up
+        std::fs::remove_file(outfile).unwrap();
     }
 
     /**
