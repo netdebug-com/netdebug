@@ -938,8 +938,17 @@ impl Connection {
             self.close_time = Some(now.to_rfc3339()); // seems convenient - <shrug>
         }
 
+        let label = if self.user_annotation.is_some() {
+            "annotated"
+        } else if self.probe_report_summary.raw_reports.len() > 0 {
+            "report"
+        } else {
+            "simple"
+        };
+
         format!(
-            "remote_{}____{}_{}____{}_{}_{}.log",
+            "{}_{}____{}_{}____{}_{}_{}.log",
+            label,
             self.close_time.as_ref().unwrap(),
             self.connection_key.remote_ip,
             self.connection_key.remote_l4_port,
