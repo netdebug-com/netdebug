@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::Utc;
-use common::{ProbeId, ProbeReport, ProbeReportEntry, PROBE_MAX_TTL};
+use common::{ProbeId, ProbeReport, ProbeReportEntry, ProbeReportSummary, PROBE_MAX_TTL};
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
@@ -199,6 +199,7 @@ where
             remote_fin_seq: None,
             remote_rst: false,
             local_rst: false,
+            probe_report_summary: ProbeReportSummary::new(),
         };
         info!("Tracking new connection: {}", &key);
 
@@ -276,6 +277,7 @@ pub struct Connection {
     pub remote_fin_seq: Option<u32>,
     pub remote_rst: bool,
     pub local_rst: bool,
+    pub probe_report_summary: ProbeReportSummary,
 }
 impl Connection {
     fn update<R>(
@@ -848,7 +850,11 @@ impl Connection {
         if clear {
             self.clear_probe_data(true);
         }
-        ProbeReport::new(report)
+        let probe_report = ProbeReport::new(report);
+        // one copy for us and one for the caller
+        // the one for us will get logged to disk; the caller's will get sent to the remote client
+        self.probe_report_summary.update(probe_report.clone());
+        probe_report
     }
 
     /**

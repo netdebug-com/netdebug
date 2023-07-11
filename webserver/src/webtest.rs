@@ -18,7 +18,7 @@
  * More tests to be added with time
  */
 use chrono::Utc;
-use common::{Message, ProbeReport, ProbeReportSummary};
+use common::{Message, ProbeReport};
 use std::{net::SocketAddr, time::Duration};
 use tokio::sync::mpsc;
 use warp::ws::{self, WebSocket};
@@ -85,7 +85,6 @@ pub async fn handle_websocket(
         });
 
     // send 100 rounds of pings to the client
-    let mut probe_report_summary = ProbeReportSummary::new();
     let max_rounds = 100;
     for probe_round in 1..=max_rounds {
         run_probe_round(
@@ -96,15 +95,10 @@ pub async fn handle_websocket(
             &connection_tracker,
             &addr_str,
             &send_idle_probes,
-            &mut probe_report_summary,
             max_rounds,
         )
         .await;
     }
-    info!(
-        "ProbeReportSummary for {} ::\n{}",
-        addr_str, probe_report_summary
-    );
 }
 
 async fn run_probe_round(
@@ -115,7 +109,6 @@ async fn run_probe_round(
     connection_tracker: &mpsc::UnboundedSender<ConnectionTrackerMsg>,
     addr_str: &String,
     send_idle_probes: &bool,
-    probe_report_summary: &mut ProbeReportSummary,
     max_rounds: u32,
 ) {
     use common::Message::*;
@@ -151,7 +144,6 @@ async fn run_probe_round(
         // TODO: also log the report centrally - useful data!
         // if we got the report, send it to the remote WASM client
         Some(report) => {
-            probe_report_summary.update(report.clone());
             tx.send(common::Message::ProbeReport {
                 report,
                 probe_round,
@@ -184,7 +176,6 @@ async fn run_probe_round(
             // if we got the report, send it to the remote WASM client
             Some(report) => {
                 // if we do lots of idle probes, consider a separate probe report summary
-                probe_report_summary.update(report.clone());
                 tx.send(common::Message::ProbeReport {
                     report,
                     probe_round,
