@@ -149,13 +149,21 @@ where
             packet.to_connection_key(&self.local_addrs, &self.local_tcp_ports)
         {
             if let Some(connection) = self.connections.get_mut(&key) {
-                connection.update(
+                let action = connection.update(
                     &self.context,
                     packet,
                     &mut self.raw_sock,
                     &key,
                     src_is_local,
-                )
+                );
+                use ConnectionAction::*;
+                match action {
+                    Noop => (),
+                    Close => {
+                        info!("Deleting from connection tracker: {}", key);
+                        self.connections.remove(&key);
+                    }
+                }
             } else {
                 self.new_connection(packet, key, src_is_local)
             }
@@ -187,6 +195,10 @@ where
             #[cfg(not(test))]
             needs_logging: true,
             close_time: None,
+            local_fin_seq: None,
+            remote_fin_seq: None,
+            remote_rst: false,
+            local_rst: false,
         };
         info!("Tracking new connection: {}", &key);
 
@@ -232,6 +244,18 @@ where
     }
 }
 
+// after a Connection::update(), does the connection tracker need to change its state?
+enum ConnectionAction {
+    Noop,
+    Close,
+}
+
+/**
+ * Main connection tracking structure - one per connection.
+ *
+ * NOTE: everything in this struct will get serialized to a logfile on the connection's close
+ * for analysis, so be thoughtful what you add here.
+ */
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Connection {
     pub connection_key: ConnectionKey,
@@ -242,11 +266,16 @@ pub struct Connection {
     pub remote_ack: Option<u32>,
     pub local_data: Option<OwnedParsedPacket>, // data sent for retransmits
     pub next_end_host_reply: Option<ProbeId>,
+    // current probes: outgoing probes and incoming replies
     pub outgoing_probe_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
     pub incoming_reply_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
     pub send_probes_on_idle: bool, // should we send probes when the connection is idle?
     pub needs_logging: bool,       // on connection close, should we log state to disk?
     pub close_time: Option<String>, // Grr! none of the time instants/DataTIme's implement Serialize!!
+    pub local_fin_seq: Option<u32>, // used for tracking connection close
+    pub remote_fin_seq: Option<u32>,
+    pub remote_rst: bool,
+    pub local_rst: bool,
 }
 impl Connection {
     fn update<R>(
@@ -256,15 +285,16 @@ impl Connection {
         raw_sock: &mut R,
         key: &ConnectionKey,
         src_is_local: bool,
-    ) where
+    ) -> ConnectionAction
+    where
         R: RawSocketWriter,
     {
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
                 if src_is_local {
-                    self.update_tcp_local(context, &packet, tcp, raw_sock);
+                    self.update_tcp_local(context, &packet, tcp, raw_sock)
                 } else {
-                    self.update_tcp_remote(&packet, tcp, raw_sock);
+                    self.update_tcp_remote(&packet, tcp, raw_sock)
                 }
             }
             Some(TransportHeader::Icmpv4(icmp4)) => {
@@ -273,14 +303,18 @@ impl Connection {
                         "Ignoring weird ICMP4 from our selves but for this connection: {} : {:?}",
                         key, packet
                     );
+                    ConnectionAction::Noop
                 } else {
-                    self.update_icmp4_remote(context, &packet, icmp4);
+                    self.update_icmp4_remote(context, &packet, icmp4)
                 }
             }
             Some(TransportHeader::Icmpv6(_icmp6)) => {
                 todo!("Need to implement icmp6 handling")
             }
-            _ => warn!("Got Connection::update() for non-TCP/ICMPv4 packet - ignoring for now"),
+            _ => {
+                warn!("Got Connection::update() for non-TCP/ICMPv4 packet - ignoring for now");
+                ConnectionAction::Noop
+            }
         }
     }
 
@@ -326,9 +360,11 @@ impl Connection {
         packet: &OwnedParsedPacket,
         tcp: &TcpHeader,
         raw_sock: &mut R,
-    ) where
+    ) -> ConnectionAction
+    where
         R: RawSocketWriter,
     {
+        let mut action = ConnectionAction::Noop;
         // NOTE: we can't just use packet.payload.len() b/c we might have a partial capture
         let payload_len = match &packet.ip {
             None => 0,
@@ -344,6 +380,11 @@ impl Connection {
         // record the SYN to see which TCP options are negotiated
         if tcp.syn {
             self.local_syn = Some(packet.clone()); // memcpy() but doesn't happen that much or with much data
+        }
+
+        if tcp.rst {
+            self.local_rst = true;
+            action = ConnectionAction::Close;
         }
 
         // record how far the local side has acknowledged
@@ -376,8 +417,23 @@ impl Connection {
                 self.outgoing_probe_timestamps.insert(ttl, probes);
             }
         }
+        if tcp.fin {
+            // FIN's "use" a sequence number as if they sent a byte of data
+            if let Some(fin_seq) = self.local_fin_seq {
+                if fin_seq != tcp.sequence_number {
+                    warn!(
+                        "Weird: got multiple local FIN seqnos: {} != {}",
+                        fin_seq, tcp.sequence_number
+                    );
+                }
+                // else it's just a duplicate packet
+            }
+            self.local_fin_seq = Some(tcp.sequence_number);
+        } else {
+            action = self.check_three_way_close_done();
+        }
         // TODO: look for outgoing selective acks (indicates packet loss)
-        // TODO: track FIN and RST to feedback to connectiontracker when it's time to delete this state!
+        action
     }
 
     fn update_tcp_remote<R: RawSocketWriter>(
@@ -385,8 +441,15 @@ impl Connection {
         packet: &OwnedParsedPacket,
         tcp: &TcpHeader,
         raw_sock: &mut R,
-    ) {
+    ) -> ConnectionAction {
+        let mut action = ConnectionAction::Noop;
         if tcp.syn {
+            if self.remote_syn.is_some() {
+                warn!(
+                    "Weird - multiple SYNs on the same connection: {}",
+                    self.connection_key
+                );
+            }
             self.remote_syn = Some(packet.clone()); // memcpy() but doesn't happen that much or with much data
         }
         // record how far the remote side has acknowledged; check for old acks for outstanding probes
@@ -420,7 +483,7 @@ impl Connection {
                                     right - left // NOTE: hand verified that this doesn't have off-by-one issues
                                 } else {
                                     // SEQ wrapped!  (or maybe a malicious receiver?)
-                                    (u32::MAX - left) + right // TODO: write a test for this, as we will panic if this goes negative
+                                    (u32::MAX - left) + right
                                 };
                                 if probe_id <= PROBE_MAX_TTL as u32 {
                                     // record the reply
@@ -482,8 +545,52 @@ impl Connection {
                 });
             }
         }
+        if tcp.fin {
+            // FIN's "use" a sequence number as if they sent a byte of data
+            if let Some(fin_seq) = self.remote_fin_seq {
+                if fin_seq != tcp.sequence_number {
+                    warn!(
+                        "Weird: got multiple remote FIN seqnos: {} != {}",
+                        fin_seq, tcp.sequence_number
+                    );
+                }
+                // else it's just a duplicate packet
+            }
+            self.remote_fin_seq = Some(tcp.sequence_number);
+        } else {
+            action = self.check_three_way_close_done();
+        }
+        if tcp.rst {
+            self.remote_rst = true;
+            action = ConnectionAction::Close;
+        }
         // TODO: look for incoming selective acks (indicates packet loss)
-        // TODO: track FIN and RST to feedback to connectiontracker when it's time to delete this state!
+        action
+    }
+
+    // is this the final ACK of the threeway close?
+    // Three-way close is:
+    // 1) Alice send FIN for Alice_seq+1
+    // 2) Bob sends FIN for Bob_seq+1 and ACK for Alice_seq+1
+    // 3) Alice sends ACK (no FIN) for Bob_seq+1
+    //
+    // NOTE: rust allows us to compare two Option<u32>'s directly,
+    // but the way None compares to Some(u32) breaks my brain so this is more
+    // typing but IMHO clearer
+    fn check_three_way_close_done(&self) -> ConnectionAction {
+        // has everyone sent their FIN's? (e.g. are we at least at step 3?)
+        if self.local_fin_seq.is_some()
+            && self.remote_fin_seq.is_some()
+            && self.local_ack.is_some()
+            && self.remote_ack.is_some()
+        {
+            // if we are at step 3, has everyone ACK'd everyone's FIN's?
+            if self.remote_ack > self.local_fin_seq && self.local_ack > self.remote_fin_seq {
+                // mark the connection closed
+                return ConnectionAction::Close;
+            }
+        }
+        ConnectionAction::Noop
     }
 
     fn update_icmp4_remote(
@@ -491,7 +598,7 @@ impl Connection {
         _context: &Context,
         packet: &OwnedParsedPacket,
         icmp4: &etherparse::Icmpv4Header,
-    ) {
+    ) -> ConnectionAction {
         match icmp4.icmp_type {
             etherparse::Icmpv4Type::Unknown {
                 type_u8: _,
@@ -501,7 +608,7 @@ impl Connection {
             | etherparse::Icmpv4Type::EchoRequest(_)
             | etherparse::Icmpv4Type::EchoReply(_)
             | etherparse::Icmpv4Type::TimestampRequest(_)
-            | etherparse::Icmpv4Type::TimestampReply(_) => (),
+            | etherparse::Icmpv4Type::TimestampReply(_) => ConnectionAction::Noop,
             etherparse::Icmpv4Type::DestinationUnreachable(_)
             | etherparse::Icmpv4Type::Redirect(_)
             | etherparse::Icmpv4Type::TimeExceeded(_)
@@ -523,12 +630,14 @@ impl Connection {
                                     .insert(probe_id, HashSet::from([packet.clone()]));
                             }
                         }
+                        ConnectionAction::Noop
                     }
                     Err(e) => {
                         warn!(
                             "Failed to parsed update_icmp4_remote() {} for {:?}",
                             e, packet
                         );
+                        ConnectionAction::Noop
                     }
                 }
             }
@@ -938,6 +1047,7 @@ pub mod test {
         let mut connection_tracker = ConnectionTracker::new(context, local_addrs, raw_sock).await;
 
         let mut capture =
+            // NOTE: this capture has no FINs so contracker will not remove it
             pcap::Capture::from_file(test_dir("tests/simple_websocket_cleartxt_out_probes.pcap"))
                 .unwrap();
         // take all of the packets in the capture and pipe them into the connection tracker
@@ -997,6 +1107,7 @@ pub mod test {
 
         let mut connection_key: Option<ConnectionKey> = None;
         let mut capture = pcap::Capture::from_file(test_dir(
+            // NOTE: this capture has no FINs so contracker will not remove it
             "tests/simple_websocket_cleartext_remote_probe_replies.pcap",
         ))
         .unwrap();
@@ -1296,6 +1407,29 @@ pub mod test {
 
     /**
      * Walk through a captured tcpdump of a single TCP stream, read all traffic
+     * and make sure that we tear down the connection appropriately
+     */
+    #[tokio::test]
+    async fn three_way_fin_teardown() {
+        let context = make_test_context();
+        let raw_sock = MockRawSocketWriter::new();
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.37").unwrap()]);
+        let mut connection_tracker =
+            ConnectionTracker::new(context, local_addrs.clone(), raw_sock).await;
+
+        let mut capture =
+            pcap::Capture::from_file(test_dir("tests/simple_clear_text_with_fins.pcap")).unwrap();
+        // take all of the packets in the capture and pipe them into the connection tracker
+        while let Ok(pkt) = capture.next_packet() {
+            let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            connection_tracker.add(owned_pkt);
+        }
+        // after all of this, we should not be tracking any connections
+        assert_eq!(connection_tracker.connections.len(), 0);
+    }
+
+    /**
+     * Walk through a captured tcpdump of a single TCP stream, read all traffic
      * including the outgoing probes and incoming replies and make sure
      * that everything is read/processed correctly - including SACK from dup ACKs
      * to map replies back to probes
@@ -1311,6 +1445,7 @@ pub mod test {
 
         let mut connection_key: Option<ConnectionKey> = None;
         let mut capture = pcap::Capture::from_file(test_dir(
+            // NOTE: this capture has no FINs so contracker will not remove it
             "tests/aws-sfc-to-turkey-psh-dup-ack-sack-ones-stream.pcap",
         ))
         .unwrap();
