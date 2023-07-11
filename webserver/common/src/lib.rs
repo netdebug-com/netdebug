@@ -46,6 +46,9 @@ pub enum Message {
         report: ProbeReport,
         probe_round: u32,
     },
+    SetUserAnnotation {
+        annotation: String,
+    },
 }
 
 impl Message {

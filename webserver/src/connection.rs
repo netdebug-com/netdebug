@@ -200,6 +200,7 @@ where
             remote_rst: false,
             local_rst: false,
             probe_report_summary: ProbeReportSummary::new(),
+            user_annotation: None,
         };
         info!("Tracking new connection: {}", &key);
 
@@ -278,6 +279,7 @@ pub struct Connection {
     pub remote_rst: bool,
     pub local_rst: bool,
     pub probe_report_summary: ProbeReportSummary,
+    pub user_annotation: Option<String>, // an human supplied comment on this connection
 }
 impl Connection {
     fn update<R>(

@@ -297,7 +297,17 @@ async fn handle_message(
                 max_rounds,
             );
         }
+        SetUserAnnotation { annotation } => {
+            set_user_annotation(annotation, barrier_tx);
+        }
     }
+}
+
+fn set_user_annotation(annotation: String, _barrier_tx: &mpsc::UnboundedSender<f64>) {
+    warn!(
+        "Got annotation from socket - TODO storing it! :: {}",
+        annotation
+    );
 }
 
 fn make_time_ms() -> f64 {

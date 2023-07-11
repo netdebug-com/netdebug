@@ -11,7 +11,9 @@ use plotters_canvas::CanvasBackend;
 use sorted_vec::SortedVec;
 use utils::set_panic_hook;
 use wasm_bindgen::prelude::*;
-use web_sys::{Document, Element, HtmlElement, MessageEvent, WebSocket};
+use web_sys::{
+    Document, Element, HtmlButtonElement, HtmlElement, HtmlTextAreaElement, MessageEvent, WebSocket,
+};
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
 // allocator.
@@ -55,6 +57,9 @@ const _TIME_LOG: &str = "time_log";
 const MAIN_TAB: &str = "main_tab";
 const GRAPH_TAB: &str = "graph_tab";
 const PROBE_TAB: &str = "probe_tab";
+const ANNOTATE_TAB: &str = "annotate_tab";
+const ANNOTATE_INPUT_BUTTON: &str = "annotate_input_button";
+const ANNOTATE_TEXT_AREA: &str = "annotate_text_area";
 const _TEST_TAB: &str = "test_tab";
 const PROGRESS_METER: &str = "probe_progress_meter";
 
@@ -74,6 +79,7 @@ pub fn run() -> Result<(), JsValue> {
     setup_main_tab(&document, &root_div)?;
     setup_graph_tab(&document, &body, &root_div)?;
     setup_probes_tab(&document, &root_div)?;
+    setup_annotate_tab(&document, &root_div)?;
     // setup_test_tab(&document, &body, &root_div)?;
     let div = build_info_div(&document)?;
     body.append_child(&div)?;
@@ -123,6 +129,59 @@ fn _setup_test_tab(
     Ok(())
 }
 
+fn setup_annotate_tab(document: &Document, root_div: &Element) -> Result<(), JsValue> {
+    let button = create_tabs_button(document, ANNOTATE_TAB, false)?;
+    let label = create_tabs_label(document, "Annotate", ANNOTATE_TAB)?;
+    let div = create_tabs_content(document, ANNOTATE_TAB)?;
+
+    // from https://www.w3schools.com/tags/tryit.asp?filename=tryhtml_textarea
+    let form = document.create_element("form")?;
+    form.set_id("annotation_form");
+
+    let text_label = document.create_element("label")?;
+    text_label.set_inner_html("Tell us about anything you want about this connection");
+    text_label.set_attribute("for", "annotation_textarea")?;
+    let p = document.create_element("p")?;
+    p.append_child(&text_label)?;
+
+    let text_area = document.create_element("textarea")?;
+    text_area.set_id(ANNOTATE_TEXT_AREA);
+    text_area.set_attribute("name", "annotation_textarea")?;
+    text_area.set_attribute("rows", "10")?;
+    text_area.set_attribute("cols", "80")?;
+    text_area.set_inner_html(
+        r#"<optional but appreciated!>
+
+Please provide any information about your connection
+including location, type (wifi, cell phone, etc.), and 
+your perception of the performance ("Great!", "really slow!", etc.)
+
+We can guess a lot of this, but it's nice to validate our guesses!
+"#,
+    );
+
+    let p2 = document.create_element("p")?;
+
+    // NOTE: the 'onclick' function for the button will be setup once the websocket
+    // is created; until then it will do nothing
+    let input_button = document.create_element("button")?;
+    input_button.set_attribute("type", "button")?;
+    input_button.set_attribute("value", "Submit Annotation!")?;
+    input_button.set_id(ANNOTATE_INPUT_BUTTON);
+    input_button.set_inner_html("Submit");
+    p2.append_child(&input_button)?;
+
+    form.append_child(&p)?;
+    form.append_child(&text_area)?;
+    form.append_child(&p2)?;
+
+    div.append_child(&form)?;
+
+    root_div.append_child(&button)?;
+    root_div.append_child(&label)?;
+    root_div.append_child(&div)?;
+    Ok(())
+}
 fn setup_graph_tab(
     document: &Document,
     body: &HtmlElement,
@@ -926,6 +985,11 @@ fn sane_subtract(bigger: f64, smaller: f64, text: &str) -> f64 {
     }
 }
 
+/****
+ * This starts the actual webtest assuming run() has already set
+ * everything up
+ */
+
 #[wasm_bindgen]
 pub fn run_webtest() -> Result<(), JsValue> {
     let location = web_sys::window().unwrap().location();
@@ -945,6 +1009,8 @@ pub fn run_webtest() -> Result<(), JsValue> {
     let ws = WebSocket::new(url.as_str())?;
 
     let ws_clone = ws.clone();
+
+    setup_annotation_onclick_message(ws.clone())?;
     let mut graph = Graph::new(10); // this gets moved into the closure
     let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
         // double clone needed to match function prototypes - apparently(!?)
@@ -956,6 +1022,39 @@ pub fn run_webtest() -> Result<(), JsValue> {
 
     ws.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
     onmessage_callback.forget(); // MAGIC: tell rust not to deallocate this!
+
+    Ok(())
+}
+
+/**
+ * Now that we have a valid websocket, setup an 'onclick' callback
+ * for the annotation's submit button
+ */
+
+fn setup_annotation_onclick_message(ws: WebSocket) -> Result<(), JsValue> {
+    let button = lookup_by_id(ANNOTATE_INPUT_BUTTON)
+        .unwrap()
+        .dyn_into::<HtmlButtonElement>()?;
+
+    let button_clone = button.clone();
+
+    let onclick_callback = Closure::<dyn FnMut(_)>::new(move |_e: MessageEvent| {
+        let text_area = lookup_by_id(ANNOTATE_TEXT_AREA)
+            .unwrap()
+            .dyn_into::<HtmlTextAreaElement>()
+            .unwrap();
+        let annotation = text_area.value();
+        let msg = common::Message::SetUserAnnotation { annotation };
+        if let Err(e) = ws.send_with_str(&serde_json::to_string(&msg).unwrap()) {
+            console_log!("Error sending annotation: {:?}", e);
+        } else {
+            // change the button text to indicate we sent the annotation
+            button_clone.set_inner_html("Update Annotation");
+        }
+    });
+
+    button.set_onclick(Some(onclick_callback.as_ref().unchecked_ref()));
+    onclick_callback.forget(); // MAGIC: tell rust not to deallocate this!
 
     Ok(())
 }
@@ -977,7 +1076,8 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, graph: &mut Graph) -> Resul
             probe_round,
             max_rounds,
         } => handle_ping1(&t, &ws, probe_round, max_rounds),
-        Ping2FromClient {
+        SetUserAnnotation { annotation: _ }
+        | Ping2FromClient {
             server_timestamp_ms: _,
             client_timestamp_ms: _,
             probe_round: _,
