@@ -144,12 +144,14 @@ fn setup_annotate_tab(document: &Document, root_div: &Element) -> Result<(), JsV
     let p = document.create_element("p")?;
     p.append_child(&text_label)?;
 
-    let text_area = document.create_element("textarea")?;
+    let text_area = document
+        .create_element("textarea")?
+        .dyn_into::<HtmlTextAreaElement>()?;
     text_area.set_id(ANNOTATE_TEXT_AREA);
     text_area.set_attribute("name", "annotation_textarea")?;
     text_area.set_attribute("rows", "10")?;
     text_area.set_attribute("cols", "80")?;
-    text_area.set_inner_html(
+    text_area.set_placeholder(
         r#"<optional but appreciated!>
 
 Please provide any information about your connection
@@ -182,6 +184,7 @@ We can guess a lot of this, but it's nice to validate our guesses!
     root_div.append_child(&div)?;
     Ok(())
 }
+
 fn setup_graph_tab(
     document: &Document,
     body: &HtmlElement,
