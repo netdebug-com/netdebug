@@ -82,6 +82,10 @@ pub enum ConnectionTrackerMsg {
         // NOTE: idle is both remote_ack  == local_seq and a promise from the application not to send anymore data for a while
         key: ConnectionKey, // for this connection
     },
+    SetUserAnnotation {
+        annotation: String,
+        key: ConnectionKey,
+    },
 }
 
 /***
@@ -138,6 +142,9 @@ where
                 } => self.generate_report(key, clear_state, tx).await,
                 ProbeOnIdle { key } => {
                     self.set_probe_on_idle(key).await;
+                }
+                SetUserAnnotation { annotation, key } => {
+                    self.set_user_annotation(key, annotation).await;
                 }
             }
         }
@@ -242,6 +249,17 @@ where
             connection.probe_on_idle(&mut self.raw_sock).await;
         } else {
             warn!("Tried to set ProbeOnIdle for unknown connection {}", key);
+        }
+    }
+
+    async fn set_user_annotation(&mut self, key: ConnectionKey, annotation: String) {
+        if let Some(connection) = self.connections.get_mut(&key) {
+            connection.user_annotation = Some(annotation);
+        } else {
+            warn!(
+                "Tried to set_user_annotation for unknown connection {} -- {}",
+                key, annotation
+            );
         }
     }
 }

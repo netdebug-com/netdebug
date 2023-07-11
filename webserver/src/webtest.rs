@@ -75,9 +75,10 @@ pub async fn handle_websocket(
             }
         }
     });
-
-    let _ws_msg_handler_handle =
-        tokio::spawn(async move { handle_ws_message(context, ws_rx, tx_clone, barrier_tx).await });
+    let key_clone = connection_key.clone().unwrap();
+    let _ws_msg_handler_handle = tokio::spawn(async move {
+        handle_ws_message(context, ws_rx, tx_clone, barrier_tx, key_clone).await
+    });
     // Version check - is the client build from the same git hash as the server?
     tx.send(common::Message::make_version_check())
         .unwrap_or_else(|e| {
@@ -227,6 +228,7 @@ async fn handle_ws_message(
     mut rx: SplitStream<WebSocket>,
     tx: mpsc::UnboundedSender<Message>,
     barrier_tx: mpsc::UnboundedSender<f64>,
+    connection_key: ConnectionKey,
 ) {
     debug!("In handle_ws_message()");
     while let Some(raw_msg) = rx.next().await {
@@ -241,7 +243,7 @@ async fn handle_ws_message(
                 };
                 match serde_json::from_str(msg) {
                     Ok(msg) => {
-                        handle_message(&context, msg, &tx, &barrier_tx).await;
+                        handle_message(&context, msg, &tx, &barrier_tx, &connection_key).await;
                     }
                     Err(e) => {
                         warn!("Failed to parse json message {}", e);
@@ -257,10 +259,11 @@ async fn handle_ws_message(
 }
 
 async fn handle_message(
-    _context: &Context,
+    context: &Context,
     msg: Message,
     tx: &mpsc::UnboundedSender<Message>,
     barrier_tx: &mpsc::UnboundedSender<f64>,
+    connection_key: &ConnectionKey,
 ) {
     use Message::*;
     match msg {
@@ -298,16 +301,27 @@ async fn handle_message(
             );
         }
         SetUserAnnotation { annotation } => {
-            set_user_annotation(annotation, barrier_tx);
+            set_user_annotation(context, annotation, connection_key).await;
         }
     }
 }
 
-fn set_user_annotation(annotation: String, _barrier_tx: &mpsc::UnboundedSender<f64>) {
-    warn!(
-        "Got annotation from socket - TODO storing it! :: {}",
-        annotation
-    );
+async fn set_user_annotation(
+    context: &Context,
+    annotation: String,
+    connection_key: &ConnectionKey,
+) {
+    let connection_tracker = context.read().await.connection_tracker.clone();
+    let connection_msg = ConnectionTrackerMsg::SetUserAnnotation {
+        annotation,
+        key: connection_key.clone(),
+    };
+    if let Err(e) = connection_tracker.send(connection_msg) {
+        warn!(
+            "SetUserAnnotation: for connection {} - got {}",
+            connection_key, e
+        );
+    }
 }
 
 fn make_time_ms() -> f64 {
