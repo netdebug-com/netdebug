@@ -105,6 +105,7 @@ where
     local_addrs: HashSet<IpAddr>,
     local_tcp_ports: HashSet<u16>,
     raw_sock: R,
+    log_dir: String,
 }
 impl<R> ConnectionTracker<R>
 where
@@ -116,7 +117,10 @@ where
         raw_sock: R,
     ) -> ConnectionTracker<R> {
         let mut local_tcp_ports = HashSet::new();
-        let max_connections_per_tracker = context.read().await.max_connections_per_tracker;
+        let (log_dir, max_connections_per_tracker) = {
+            let ctx = context.read().await;
+            (ctx.log_dir.clone(), ctx.max_connections_per_tracker)
+        };
         local_tcp_ports.insert(context.read().await.local_tcp_listen_port);
         ConnectionTracker {
             context,
@@ -124,6 +128,7 @@ where
             local_addrs,
             local_tcp_ports,
             raw_sock,
+            log_dir,
         }
     }
 
@@ -208,6 +213,7 @@ where
             local_rst: false,
             probe_report_summary: ProbeReportSummary::new(),
             user_annotation: None,
+            log_dir: self.log_dir.clone(),
         };
         info!("Tracking new connection: {}", &key);
 
@@ -298,6 +304,7 @@ pub struct Connection {
     pub local_rst: bool,
     pub probe_report_summary: ProbeReportSummary,
     pub user_annotation: Option<String>, // an human supplied comment on this connection
+    pub log_dir: String, // need to cache it here as we need it during Destructor; fugly
 }
 impl Connection {
     fn update<R>(
@@ -947,7 +954,9 @@ impl Connection {
         };
 
         format!(
-            "{}_{}____{}_{}____{}_{}_{}.log",
+            "{}/{}_{}____{}_{}____{}_{}_{}.log", // this style path contruction will
+            // need to change if server runs on windows
+            self.log_dir,
             label,
             self.close_time.as_ref().unwrap(),
             self.connection_key.remote_ip,

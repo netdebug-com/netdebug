@@ -3,7 +3,7 @@ mod utils;
 use std::{collections::HashMap, vec};
 
 use common::{get_git_hash_version, Message, ProbeReport, ProbeReportEntry, ProbeReportSummary};
-// use itertools::Itertools;
+use itertools::Itertools;
 use sorted_vec::SortedVec;
 use utils::set_panic_hook;
 use wasm_bindgen::prelude::*;
@@ -511,7 +511,8 @@ impl Graph {
             "data": plot_client,
         }));
 
-        for (plot_label, probes) in &self.data_probes {
+        for plot_label in self.data_probes.keys().sorted() {
+            let probes = self.data_probes.get(plot_label).unwrap();
             let data: Vec<serde_json::Value> = probes
                 .iter()
                 .enumerate()
@@ -537,8 +538,19 @@ impl Graph {
             },
             "options": {
                 "showLine": true,
-                "parsing": {
-                    "yAxisKey": "y",
+                "scales": {
+                    "x": {
+                        "display": true,
+                        "title": {
+                            "text" : "% < Y (CDF)",
+                        }
+                    },
+                    "y": {
+                        "display": true,
+                        "title": {
+                            "text": "RTT (milliseconds)"
+                        }
+                    }
                 }
             }
         });
@@ -547,7 +559,7 @@ impl Graph {
             // update existing
             let data_json = &json["data"]["datasets"];
             let data_json = serde_json::to_string(&data_json).unwrap();
-            plot_json_chart_update(chart.clone(), data_json.as_str(), true);
+            plot_json_chart_update(chart.clone(), data_json.as_str(), false);
         } else {
             // create fresh chart the first time
             let json = serde_json::to_string(&json).unwrap();

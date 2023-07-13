@@ -26,6 +26,7 @@ pub struct WebServerContext {
     pub local_ips: HashSet<IpAddr>,         // which IP addresses do we listen on?
     pub send_idle_probes: bool,             // should we also probe when the connection is idle?
     pub max_connections_per_tracker: usize, // how big to make the LruCache
+    pub log_dir: String,                    // where to put connection logfiles
     // communications channel to the connection_tracker
     // TODO: make a pool for multi-threading
     pub connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
@@ -65,7 +66,13 @@ impl WebServerContext {
             connection_tracker: tx,
             send_idle_probes: args.send_idle_probes,
             max_connections_per_tracker: args.max_connections_per_tracker,
+            log_dir: args.log_dir.clone(),
         };
+
+        if let Err(e) = check_log_dir(&context.log_dir) {
+            log::error!("Failed to create log_dir {} :: {}", context.log_dir, e);
+            std::process::exit(1); // fatal error
+        }
         let context_clone = Arc::new(RwLock::new(context.clone()));
         // Spawn a ConnectionTracker task
         // TODO Spawn lots for multi-processing
@@ -80,6 +87,19 @@ impl WebServerContext {
         }
 
         Ok(context)
+    }
+}
+
+/**
+ * Try to create if it doesn't exist
+ */
+
+fn check_log_dir(log_dir: &str) -> Result<(), std::io::Error> {
+    let path = std::path::Path::new(log_dir);
+    if !path.is_dir() {
+        std::fs::create_dir(log_dir)
+    } else {
+        Ok(())
     }
 }
 
@@ -114,6 +134,10 @@ pub struct Args {
     /// Should we send extra probes when the connection is idle? BUGGY!
     #[arg(long, default_value_t = false)]
     pub send_idle_probes: bool,
+
+    /// Where to write connection log files?  Will create if doesn't exist
+    #[arg(long, default_value = "logs")]
+    pub log_dir: String,
 
     /// How big to make the LRU Cache on each ConnectionTracker
     #[arg(long, default_value_t = 4096)]
@@ -212,6 +236,7 @@ pub mod test {
             connection_tracker: tx,
             send_idle_probes: false,
             max_connections_per_tracker: 4096,
+            log_dir: ".".to_string(),
         }))
     }
 }

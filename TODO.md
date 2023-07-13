@@ -20,6 +20,8 @@ CTR+SHIFT+V to preview markdown in VSCODE!
 * Add ARIA/Accessiblilty features to the GUI, ala https://www.chartjs.org/docs/latest/general/accessibility.html
 * Re-test app with Oracle cloud to see if new packets get past the connection tracking damage
 * Calculate explicit per-hop processing time delays to deconfuse data
+* Lots of polish on the GUI
+  * chartjs resists (vigerously!) adding x + y labels - fix!
 
 # Minor:
 * too many to count
