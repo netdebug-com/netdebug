@@ -56,6 +56,7 @@ pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
 
     info!("Starting pcap capture on {}", &device.name);
     let mut capture = Capture::from_device(device)?
+        .buffer_size(64_000_000) // try to prevent any packet loss
         .immediate_mode(true)
         .open()?
         .setnonblock()?;
