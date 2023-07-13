@@ -8,7 +8,6 @@ CTR+SHIFT+V to preview markdown in VSCODE!
     * no NAT, weak end-host probe replies - no SACK!?
 * Track drop packets and expose to GUI
 * Pretty up the probe report into nested tables
-* Seeing lost outbound probes - figure out how to get out of the stream and get pcap::Capture::stats access
 * Add DNS lookups for ProbeReports
 * build a "CLI Client" for testing and general usefulness
 * multiple-parallel ws connections
@@ -21,7 +20,6 @@ CTR+SHIFT+V to preview markdown in VSCODE!
 * Re-test app with Oracle cloud to see if new packets get past the connection tracking damage
 * Calculate explicit per-hop processing time delays to deconfuse data
 * Lots of polish on the GUI
-  * chartjs resists (vigerously!) adding x + y labels - fix!
 
 # Minor:
 * too many to count
