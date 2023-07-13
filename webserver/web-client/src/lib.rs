@@ -540,14 +540,14 @@ impl Graph {
                 "showLine": true,
                 "scales": {
                     "x": {
-                        "display": true,
                         "title": {
+                            "display": true,
                             "text" : "% < Y (CDF)",
                         }
                     },
                     "y": {
-                        "display": true,
                         "title": {
+                            "display": true,
                             "text": "RTT (milliseconds)"
                         }
                     }
