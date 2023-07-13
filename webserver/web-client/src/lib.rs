@@ -141,7 +141,7 @@ fn setup_annotate_tab(document: &Document, root_div: &Element) -> Result<(), JsV
 
     let text_label = document.create_element("label")?;
     text_label.set_inner_html("Tell us about anything you want about this connection");
-    text_label.set_attribute("for", "annotation_textarea")?;
+    text_label.set_attribute("for", ANNOTATE_TEXT_AREA)?;
     let p = document.create_element("p")?;
     p.append_child(&text_label)?;
 

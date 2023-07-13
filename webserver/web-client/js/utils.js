@@ -31,7 +31,7 @@ export function plot_json_chart_update(chart, data_json, verbose) {
     });
     // this is where I'd love to have some type checking
     chart.data.datasets = data
-    chart.update()
+    chart.update('none')     // 'none' says don't re-annimate with each update
 }
 
 export function plot_latency_chart(chart, 
