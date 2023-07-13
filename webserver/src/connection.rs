@@ -1077,7 +1077,12 @@ pub mod test {
             let p = p.into_os_string().to_str().unwrap().to_string();
             return p;
         } else {
-            panic!("Couldn't find a test_dir for {}", f);
+            let cwd = env::current_dir().unwrap();
+            panic!(
+                "Couldn't find a test_dir for {} from cwd={}",
+                f,
+                cwd.display()
+            );
         }
     }
 

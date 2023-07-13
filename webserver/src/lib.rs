@@ -1,3 +1,4 @@
+pub mod analyze;
 pub mod connection;
 pub mod context;
 pub mod http_routes;

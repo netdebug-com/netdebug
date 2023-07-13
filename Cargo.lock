@@ -1722,6 +1722,7 @@ dependencies = [
  "futures",
  "futures-util",
  "hashlru",
+ "itertools",
  "libc",
  "log",
  "pcap",
