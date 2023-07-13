@@ -2,22 +2,36 @@
 // NOTE: that even though this is javascript, it is *compile time* included
 // into the .wasm object file so you need to recompile if you change this
 
-export function json_parse(s) {
-    return JSON.parse(s)
-}
-
 export function plot_chart(chart, cfg, verbose) {
     try {
-        console.log("Creating Chart on canvas " + chart + " :: " + JSON.stringify(cfg, undefined, 2))
-        const ctx = document.getElementById(chart);
-        let chart_obj = new Chart(ctx, cfg );
         if (verbose) {
-            console.log(chart_obj)
+            console.log("Creating Chart on canvas " + chart + " :: " + JSON.stringify(cfg, undefined, 2))
         }
+        const ctx = document.getElementById(chart);
+        return new Chart(ctx, cfg );
     }
     catch(err) {
         console.error("Error creating Chart() with cfg=" + cfg + " :: " + err)
     }
+}
+
+export function plot_json_chart(chart, json, verbose) {
+    let cfg = JSON.parse(json)
+    return plot_chart(chart, cfg, verbose)
+}
+
+export function plot_json_chart_update(chart, data_json, verbose) {
+    let data = JSON.parse(data_json)
+    if (verbose) {
+        console.log("Setting new data to :: " + JSON.stringify(data, undefined, 2))
+    }
+    // clear out the old data
+    chart.data.datasets.forEach((dataset) => {
+        dataset.data = [];
+    });
+    // this is where I'd love to have some type checking
+    chart.data.datasets = data
+    chart.update()
 }
 
 export function plot_latency_chart(chart, 

@@ -3,11 +3,7 @@ mod utils;
 use std::{collections::HashMap, vec};
 
 use common::{get_git_hash_version, Message, ProbeReport, ProbeReportEntry, ProbeReportSummary};
-use itertools::Itertools;
-use js_sys::Date;
-use plotters::coord::Shift;
-use plotters::prelude::*;
-use plotters_canvas::CanvasBackend;
+// use itertools::Itertools;
 use sorted_vec::SortedVec;
 use utils::set_panic_hook;
 use wasm_bindgen::prelude::*;
@@ -33,8 +29,14 @@ extern "C" {
 
 #[wasm_bindgen(module = "/js/utils.js")]
 extern "C" {
+    // each return the chart so that subsequent calls must clear the chart before
+    // re-plotting
+
     // populate the cfg JsValue with a ChartConfig struct to JSON
-    fn plot_chart(element_id: &str, cfg: JsValue, verbose: bool);
+    fn plot_chart(element_id: &str, cfg: JsValue, verbose: bool) -> JsValue;
+    // Above is a PITA to get working, just pass the JSON as a string
+    pub fn plot_json_chart(s: &str, json: &str, verbose: bool) -> JsValue;
+    pub fn plot_json_chart_update(chat: JsValue, data_json: &str, verbose: bool);
     // lost too much time fuxzing with wasm2js stuff - just pass
     // the nine variables explicitly - sigh
     fn plot_latency_chart(
@@ -49,8 +51,7 @@ extern "C" {
         worst_home: f64,
         worst_app: f64,
         verbose: bool,
-    );
-    pub fn json_parse(s: &str) -> JsValue;
+    ) -> JsValue;
 }
 
 const _TIME_LOG: &str = "time_log";
@@ -350,26 +351,25 @@ struct Graph {
     data_client: SortedVec<PingData>,
     data_probes: HashMap<String, SortedVec<PingData>>,
     data_points_per_draw: usize,
-    root: DrawingArea<CanvasBackend, Shift>,
+    canvas: String,
     autoscale_max: f64,
     probe_report_summary: ProbeReportSummary,
     max_rounds: Option<u32>,
+    chart: Option<JsValue>,
 }
 
 impl Graph {
-    fn new(data_points_per_draw: usize) -> Graph {
-        let backend = CanvasBackend::new("canvas").expect("cannot find canvas");
-        let root = backend.into_drawing_area();
-
+    fn new(data_points_per_draw: usize, canvas: String) -> Graph {
         Graph {
             data_server: SortedVec::new(),
             data_client: SortedVec::new(),
             data_probes: HashMap::new(),
             data_points_per_draw,
-            root,
+            canvas,
             probe_report_summary: ProbeReportSummary::new(),
             autoscale_max: f64::MIN,
             max_rounds: None,
+            chart: None,
         }
     }
 
@@ -475,119 +475,84 @@ impl Graph {
     }
 
     fn draw(&mut self) {
-        // put into a commulative distribution function
-        let plot_server: Vec<(f64, f64)> = self
+        let mut datasets = Vec::new();
+        let plot_server: Vec<serde_json::Value> = self
             .data_server
             .iter()
             .enumerate()
             .map(|(idx, ping)| {
-                (
-                    ping.rtt,
-                    100.0 * (idx as f64 + 1.0) / (self.data_server.len() as f64),
+                serde_json::json!(
+                    {
+                        "y": ping.rtt,
+                        "x": 100.0 * (idx as f64 + 1.0) / (self.data_client.len() as f64),
+                    }
                 )
             })
             .collect();
-        let plot_client: Vec<(f64, f64)> = self
+        datasets.push(serde_json::json!({
+            "label": "App Latency (from server)",
+            "data": plot_server,
+        }));
+        let plot_client: Vec<serde_json::Value> = self
             .data_client
             .iter()
             .enumerate()
             .map(|(idx, ping)| {
-                (
-                    ping.rtt,
-                    100.0 * (idx as f64 + 1.0) / (self.data_client.len() as f64),
+                serde_json::json!(
+                    {
+                        "y": ping.rtt,
+                        "x": 100.0 * (idx as f64 + 1.0) / (self.data_client.len() as f64),
+                    }
                 )
             })
             .collect();
-        // console_log!("data: {:?}", plot_server);
-        let font: FontDesc = ("sans-serif", 20.0).into();
+        datasets.push(serde_json::json!({
+            "label": "App Latency (from client)",
+            "data": plot_client,
+        }));
 
-        self.root.fill(&WHITE).unwrap();
-        // draw a new chart
-        let mut chart = ChartBuilder::on(&self.root)
-            .margin(20)
-            .caption(
-                format!(
-                    "CDF (% < Y) of Client-Server Application RTT: {:?}",
-                    Date::new_0().to_time_string()
-                ),
-                font,
-            )
-            .x_label_area_size(60)
-            .y_label_area_size(60)
-            .build_cartesian_2d(0f64..100.0, 0.0..self.autoscale_max)
-            .unwrap();
-
-        let y_off = 8; // !? need a fudge factor to get the legend to line up with the series label text
-        chart
-            .draw_series(LineSeries::new(
-                plot_server.iter().map(|v| (v.1, v.0)),
-                &BLACK,
-            ))
-            .unwrap()
-            .label("Application S->C->S RTT CDF(% < Y)")
-            .legend(move |(x, y)| {
-                PathElement::new(vec![(x, y - y_off), (x + 20, y - y_off)], &BLACK)
-            });
-        chart
-            .draw_series(LineSeries::new(
-                plot_client.iter().map(|v| (v.1, v.0)),
-                &RED,
-            ))
-            .unwrap()
-            .label("Application C->S->C RTT CDF(% < Y)")
-            .legend(move |(x, y)| {
-                PathElement::new(vec![(x, y - y_off), (x + 20, y - y_off)], &RED)
-            });
-        // Plot the data from each TTL's RTT's
-        for (idx, key) in self.data_probes.keys().sorted().enumerate() {
-            // TODO: pretty up the color selection algorithm
-            let color = Palette99::pick(idx as usize).mix(0.9);
-            if let Some(data_points) = self.data_probes.get(key) {
-                let data: Vec<(f64, f64)> = data_points
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, ping)| {
-                        (
-                            ping.rtt,
-                            100.0 * (idx as f64 + 1.0) / (data_points.len() as f64),
-                        )
+        for (plot_label, probes) in &self.data_probes {
+            let data: Vec<serde_json::Value> = probes
+                .iter()
+                .enumerate()
+                .map(|(idx, ping)| {
+                    serde_json::json!({
+                        "y": ping.rtt,
+                        "x": 100.0 * (idx as f64 + 1.0) / (probes.len() as f64),
                     })
-                    .collect();
-                chart
-                    .draw_series(LineSeries::new(data.iter().map(|v| (v.1, v.0)), &color))
-                    .unwrap()
-                    .label(format!("{} RTT CDF(% < Y)", key))
-                    .legend(move |(x, y)| {
-                        PathElement::new(vec![(x, y - y_off), (x + 20, y - y_off)], &color)
-                    });
+                })
+                .collect();
+
+            let ttl_data = serde_json::json!({
+                "label": plot_label,
+                "data": data,
+            });
+            datasets.push(ttl_data);
+        }
+
+        let json = serde_json::json!({
+            "type": "scatter",
+            "data": {
+                "datasets": datasets,
+            },
+            "options": {
+                "showLine": true,
+                "parsing": {
+                    "yAxisKey": "y",
+                }
             }
+        });
+
+        if let Some(chart) = &self.chart {
+            // update existing
+            let data_json = &json["data"]["datasets"];
+            let data_json = serde_json::to_string(&data_json).unwrap();
+            plot_json_chart_update(chart.clone(), data_json.as_str(), true);
+        } else {
+            // create fresh chart the first time
+            let json = serde_json::to_string(&json).unwrap();
+            self.chart = Some(plot_json_chart(self.canvas.as_str(), json.as_str(), true));
         }
-
-        // quick sanity check
-        if plot_client.len() != plot_server.len() {
-            console_log!(
-                "Weird: client data points {} != server {}",
-                plot_client.len(),
-                plot_server.len()
-            );
-        }
-
-        chart
-            .configure_mesh()
-            .y_desc("RTT (milliseconds)")
-            .x_desc("% < Y (CDF)")
-            .draw()
-            .unwrap();
-
-        chart
-            .configure_series_labels()
-            .position(SeriesLabelPosition::UpperLeft)
-            .border_style(&BLACK)
-            .background_style(&WHITE.mix(0.8))
-            .draw()
-            .unwrap();
-
-        self.root.present().unwrap();
     }
 
     fn set_max_rounds(&mut self, max_rounds: u32) {
@@ -618,241 +583,6 @@ impl Graph {
             .expect("Failed to append pre to div!?");
         // could just continue, but logically different to do a new function
         self.draw_main_latencies_chart();
-    }
-
-    /***
-     * FIgure out the p1, p50, and p99 of the client data and then find the
-     * NAT ("ISP") and Endhost ("home network") probe reports that most closely
-     * match those in time.  Those become nine data points that we will plot
-     * on the main summary.
-     *
-     * NOTE: the plot_latency_chart() numbers are RELATIVE, so need to calc
-     * relative latencies from these absolute ones for the stacked bar chart
-     *
-     * TODO: de-fuglyfy this code with an enum {BEST, TYPICAL, WORST} and
-     * some better control structures; too tired now to do this right
-     * and this seems pretty low priority code to beautify
-     *
-     * THIS CODE IS HORRIBLY BORKEN - ONLY KEEPING it be it valiantly
-     * tries to compare times to get a true "this one time sample had these
-     * latencies"  - maybe fix later?
-     *
-     */
-
-    fn __garbage_draw_main_latencies_chart(&self) {
-        let best_client_index = 1;
-        let typical_client_index = self.data_client.len() / 2;
-        let worst_client_index = self.data_client.len() - 1;
-
-        let best_client_time = self.data_client[best_client_index].time_stamp;
-        let typical_client_time = self.data_client[typical_client_index].time_stamp;
-        let worst_client_time = self.data_client[worst_client_index].time_stamp;
-        let best_client_rtt = self.data_client[best_client_index].rtt;
-        let typical_client_rtt = self.data_client[typical_client_index].rtt;
-        let worst_client_rtt = self.data_client[worst_client_index].rtt;
-
-        //  (time_delta, value)
-        let mut best_home = (
-            f64::MAX,
-            PingData {
-                rtt: 0.0,
-                time_stamp: 0.0,
-            },
-        );
-        let mut best_isp = (
-            f64::MAX,
-            PingData {
-                rtt: 0.0,
-                time_stamp: 0.0,
-            },
-        );
-        let mut typical_home = (
-            f64::MAX,
-            PingData {
-                rtt: 0.0,
-                time_stamp: 0.0,
-            },
-        );
-        let mut typical_isp = (
-            f64::MAX,
-            PingData {
-                rtt: 0.0,
-                time_stamp: 0.0,
-            },
-        );
-        let mut worst_home = (
-            f64::MAX,
-            PingData {
-                rtt: 0.0,
-                time_stamp: 0.0,
-            },
-        );
-        let mut worst_isp = (
-            f64::MAX,
-            PingData {
-                rtt: 0.0,
-                time_stamp: 0.0,
-            },
-        );
-        // the raw reports were inserted by/sorted by time
-        // step through and find the probes that are the closest in time to the app/client ones
-        for report in &self.probe_report_summary.raw_reports {
-            for probe in report.probes.values() {
-                // use 'if let' instead of match as there are a LOT of probe types!
-                use ProbeReportEntry::*;
-                if let EndHostReplyFound {
-                    ttl: _,
-                    out_timestamp_ms,
-                    rtt_ms,
-                    comment: _,
-                } = probe
-                {
-                    // an EndHostReply signifies the latency through the home network
-                    let best_home_delta = (out_timestamp_ms - best_client_time).abs();
-                    if best_home_delta < best_home.0 {
-                        best_home = (
-                            best_home_delta,
-                            PingData {
-                                rtt: *rtt_ms,
-                                time_stamp: *out_timestamp_ms,
-                            },
-                        );
-                    }
-                    let typical_home_delta = (out_timestamp_ms - typical_client_time).abs();
-                    if typical_home_delta < typical_home.0 {
-                        typical_home = (
-                            typical_home_delta,
-                            PingData {
-                                rtt: *rtt_ms,
-                                time_stamp: *out_timestamp_ms,
-                            },
-                        );
-                    }
-                    let worst_home_delta = (out_timestamp_ms - worst_client_time).abs();
-                    if worst_home_delta < worst_home.0 {
-                        worst_home = (
-                            worst_home_delta,
-                            PingData {
-                                rtt: *rtt_ms,
-                                time_stamp: *out_timestamp_ms,
-                            },
-                        );
-                    }
-                } else if let NatReplyFound {
-                    ttl: _,
-                    out_timestamp_ms,
-                    rtt_ms,
-                    src_ip: _,
-                    comment: _,
-                } = probe
-                {
-                    // an NatReply signifies the latency through the ISP network
-                    let best_isp_delta = (out_timestamp_ms - best_client_time).abs();
-                    if best_isp_delta < best_isp.0 {
-                        best_isp = (
-                            best_isp_delta,
-                            PingData {
-                                rtt: *rtt_ms,
-                                time_stamp: *out_timestamp_ms,
-                            },
-                        );
-                    }
-                    let typical_isp_delta = (out_timestamp_ms - typical_client_time).abs();
-                    if typical_isp_delta < typical_isp.0 {
-                        typical_isp = (
-                            typical_isp_delta,
-                            PingData {
-                                rtt: *rtt_ms,
-                                time_stamp: *out_timestamp_ms,
-                            },
-                        );
-                    }
-                    let worst_isp_delta = (out_timestamp_ms - worst_client_time).abs();
-                    if worst_isp_delta < worst_isp.0 {
-                        worst_isp = (
-                            worst_isp_delta,
-                            PingData {
-                                rtt: *rtt_ms,
-                                time_stamp: *out_timestamp_ms,
-                            },
-                        );
-                    }
-                }
-            }
-        }
-
-        let main_div = lookup_by_id(MAIN_TAB).unwrap();
-        let document = web_sys::window().unwrap().document().unwrap();
-        let body = document.body().unwrap();
-        let canvas = document.create_element("canvas").unwrap();
-        canvas.set_id("main_canvas"); // come back if we need manual double buffering
-        let (width, height) = calc_height(&document, &body);
-        let width = 9 * width / 10;
-        let height = 4 * height / 5;
-        canvas
-            .set_attribute("width", format!("{}", width).as_str())
-            .unwrap();
-        canvas
-            .set_attribute("height", format!("{}", height).as_str())
-            .unwrap();
-
-        main_div.set_inner_html("");
-        main_div.append_child(&canvas).unwrap();
-        console_log!("--- Best client time {}", best_client_time);
-        console_log!(
-            "Best ISP - {} {} {}",
-            best_isp.1.rtt,
-            best_isp.0,
-            best_isp.1.time_stamp
-        );
-        console_log!(
-            "Best HOME - {} {} {}",
-            best_home.1.rtt,
-            best_home.0,
-            best_home.1.time_stamp
-        );
-        console_log!("Best APP - {}", best_client_rtt);
-        console_log!("--- typical client time {}", typical_client_time);
-        console_log!(
-            "typical ISP - {} {} {}",
-            typical_isp.1.rtt,
-            typical_isp.0,
-            typical_isp.1.time_stamp
-        );
-        console_log!(
-            "typical HOME - {} {} {}",
-            typical_home.1.rtt,
-            typical_home.0,
-            typical_home.1.time_stamp
-        );
-        console_log!("typical APP - {}", typical_client_rtt);
-        console_log!("--- worst client time {}", worst_client_time);
-        console_log!(
-            "worst ISP - {} {} {}",
-            worst_isp.1.rtt,
-            worst_isp.0,
-            worst_isp.1.time_stamp
-        );
-        console_log!(
-            "worst HOME - {} {} {}",
-            worst_home.1.rtt,
-            worst_home.0,
-            worst_home.1.time_stamp
-        );
-        console_log!("worst APP - {}", worst_client_rtt);
-        plot_latency_chart(
-            "main_canvas",
-            best_isp.1.rtt,
-            best_home.1.rtt - best_isp.1.rtt,
-            best_client_rtt - best_home.1.rtt,
-            typical_isp.1.rtt,
-            typical_home.1.rtt - typical_isp.1.rtt,
-            typical_client_rtt - typical_home.1.rtt,
-            worst_isp.1.rtt,
-            worst_home.1.rtt - worst_isp.1.rtt,
-            worst_client_rtt - worst_home.1.rtt,
-            true,
-        );
     }
 
     /**
@@ -974,7 +704,7 @@ impl Graph {
             worst_isp,
             worst_home,
             worst_app,
-            true,
+            false,
         );
     }
 }
@@ -1014,7 +744,7 @@ pub fn run_webtest() -> Result<(), JsValue> {
     let ws_clone = ws.clone();
 
     setup_annotation_onclick_message(ws.clone())?;
-    let mut graph = Graph::new(10); // this gets moved into the closure
+    let mut graph = Graph::new(10, "canvas".to_string()); // this gets moved into the closure
     let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
         // double clone needed to match function prototypes - apparently(!?)
         if let Err(js_value) = handle_ws_message(e, ws_clone.clone(), &mut graph) {
