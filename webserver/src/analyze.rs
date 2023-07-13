@@ -208,4 +208,16 @@ mod test {
             .find(|i| matches!(i, AnalysisInsights::NoRouterReplies { .. }),)
             .is_some());
     }
+
+    #[test]
+    fn validate_latency_turkey() {
+        let test_log = r"tests/logs/annotated_rob_linux_wifi_turkey.log";
+        let connection = connection_from_log(test_dir(test_log).as_str()).unwrap();
+
+        let insights = analyze(&connection).unwrap();
+        assert!(insights
+            .iter()
+            .find(|i| matches!(i, AnalysisInsights::LastHopNatLatencyVariance { .. }),)
+            .is_some());
+    }
 }
