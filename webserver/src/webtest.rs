@@ -141,7 +141,15 @@ async fn run_probe_round(
         addr_str, probe_round
     );
     // first report we get, don't clear state if send_idle_probes is set
-    match get_probe_report(connection_tracker, connection_key, !send_idle_probes).await {
+    match get_probe_report(
+        connection_tracker,
+        connection_key,
+        probe_round,
+        rtt_estimate,
+        !send_idle_probes,
+    )
+    .await
+    {
         // TODO: also log the report centrally - useful data!
         // if we got the report, send it to the remote WASM client
         Some(report) => {
@@ -172,7 +180,15 @@ async fn run_probe_round(
         tokio::time::sleep(Duration::from_millis(rtt_estimate.round() as u64)).await;
         // second report we get, do clear state
         // TODO refactor duplicate code! signal idle report?
-        match get_probe_report(connection_tracker, connection_key, true).await {
+        match get_probe_report(
+            connection_tracker,
+            connection_key,
+            probe_round,
+            rtt_estimate,
+            true,
+        )
+        .await
+        {
             // TODO: also log the report centrally - useful data!
             // if we got the report, send it to the remote WASM client
             Some(report) => {
@@ -196,6 +212,8 @@ async fn run_probe_round(
 async fn get_probe_report(
     connection_tracker: &mpsc::UnboundedSender<ConnectionTrackerMsg>,
     connection_key: &Option<ConnectionKey>,
+    probe_round: u32,
+    application_rtt: f64,
     clear_state: bool,
 ) -> Option<ProbeReport> {
     if let Some(key) = &connection_key {
@@ -206,6 +224,8 @@ async fn get_probe_report(
             key,
             clear_state,
             tx: report_tx,
+            probe_round,
+            application_rtt,
         }) {
             warn!("Error talking to connection tracker: {}", e);
             None

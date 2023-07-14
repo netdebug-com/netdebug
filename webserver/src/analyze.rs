@@ -130,6 +130,8 @@ fn latency_analysis(connection: &Connection) -> Vec<AnalysisInsights> {
                     last_hop_max,
                     last_hop_avg_fraction,
                     last_hop_max_fraction,
+                    endhost_avg,
+                    endhost_max,
                 });
             }
         } else {
@@ -170,6 +172,8 @@ fn latency_analysis(connection: &Connection) -> Vec<AnalysisInsights> {
                         last_hop_max,
                         last_hop_avg_fraction,
                         last_hop_max_fraction,
+                        endhost_avg,
+                        endhost_max,
                     });
                 }
             } else {
@@ -215,9 +219,13 @@ mod test {
         let connection = connection_from_log(test_dir(test_log).as_str()).unwrap();
 
         let insights = analyze(&connection).unwrap();
-        assert!(insights
+        let last_hop = insights
             .iter()
-            .find(|i| matches!(i, AnalysisInsights::LastHopNatLatencyVariance { .. }),)
-            .is_some());
+            .find(|i| matches!(i, AnalysisInsights::LastHopNatLatencyVariance { .. }));
+        assert!(last_hop.is_some());
+        use AnalysisInsights::*;
+        if let Some(LastHopNatLatencyVariance { goodness, .. }) = last_hop {
+            assert_eq!(*goodness, Goodness::Bad);
+        }
     }
 }

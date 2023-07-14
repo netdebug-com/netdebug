@@ -73,6 +73,8 @@ pub fn get_git_hash_version() -> String {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProbeReport {
     pub probes: HashMap<ProbeId, ProbeReportEntry>,
+    pub probe_round: u32,
+    pub application_rtt: f64,
 }
 
 impl Display for ProbeReport {
@@ -241,8 +243,16 @@ impl ProbeReportEntry {
 }
 
 impl ProbeReport {
-    pub fn new(report: HashMap<ProbeId, ProbeReportEntry>) -> ProbeReport {
-        ProbeReport { probes: report }
+    pub fn new(
+        report: HashMap<ProbeId, ProbeReportEntry>,
+        probe_round: u32,
+        application_rtt: f64,
+    ) -> ProbeReport {
+        ProbeReport {
+            probes: report,
+            probe_round,
+            application_rtt,
+        }
     }
 }
 

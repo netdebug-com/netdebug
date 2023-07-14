@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, PartialEq, PartialOrd)]
 pub enum AnalysisInsights {
     LatencyNatWeirdData {
         nat_avg: f64,
@@ -15,6 +15,8 @@ pub enum AnalysisInsights {
     LastHopNatLatencyVariance {
         last_hop_avg: f64,
         last_hop_max: f64,
+        endhost_avg: f64,
+        endhost_max: f64,
         last_hop_avg_fraction: f64,
         last_hop_max_fraction: f64,
         goodness: Goodness,
@@ -22,6 +24,8 @@ pub enum AnalysisInsights {
     LastHopRouterLatencyVariance {
         last_hop_avg: f64,
         last_hop_max: f64,
+        endhost_avg: f64,
+        endhost_max: f64,
         last_hop_avg_fraction: f64,
         last_hop_max_fraction: f64,
         goodness: Goodness,
@@ -41,7 +45,7 @@ impl std::fmt::Display for AnalysisInsights {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 
 pub enum Goodness {
     VeryBad,

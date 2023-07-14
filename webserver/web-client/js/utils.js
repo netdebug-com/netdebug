@@ -83,7 +83,11 @@ export function plot_latency_chart(chart,
                     stacked: true
                 },
                 y: {
-                    stacked: true
+                    stacked: true,
+                    "title": {
+                        "display": true,
+                        "text": "RTT (milliseconds)"
+                    }
                 }
             },
         },

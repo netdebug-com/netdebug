@@ -75,6 +75,8 @@ pub enum ConnectionTrackerMsg {
     ProbeReport {
         key: ConnectionKey,
         clear_state: bool,
+        probe_round: u32,
+        application_rtt: f64,
         tx: tokio::sync::mpsc::Sender<ProbeReport>,
     },
     ProbeOnIdle {
@@ -144,7 +146,12 @@ where
                     key,
                     clear_state,
                     tx,
-                } => self.generate_report(key, clear_state, tx).await,
+                    probe_round,
+                    application_rtt,
+                } => {
+                    self.generate_report(key, probe_round, application_rtt, clear_state, tx)
+                        .await
+                }
                 ProbeOnIdle { key } => {
                     self.set_probe_on_idle(key).await;
                 }
@@ -236,11 +243,15 @@ where
     async fn generate_report(
         &mut self,
         key: ConnectionKey,
+        probe_round: u32,
+        application_rtt: f64,
         clear_state: bool,
         tx: tokio::sync::mpsc::Sender<ProbeReport>,
     ) {
         if let Some(connection) = self.connections.get_mut(&key) {
-            let report = connection.generate_probe_report(clear_state).await;
+            let report = connection
+                .generate_probe_report(probe_round, application_rtt, clear_state)
+                .await;
             if let Err(e) = tx.send(report).await {
                 warn!("Error sending back report: {}", e);
             }
@@ -724,7 +735,12 @@ impl Connection {
      * report.  If 'clear' is set, reset the connection's state so we can do a new set
      * of probes on the next data packet
      */
-    async fn generate_probe_report(&mut self, clear: bool) -> ProbeReport {
+    async fn generate_probe_report(
+        &mut self,
+        probe_round: u32,
+        application_rtt: f64,
+        clear: bool,
+    ) -> ProbeReport {
         let mut report = HashMap::new();
         if self.outgoing_probe_timestamps.len() > PROBE_MAX_TTL as usize {
             warn!(
@@ -877,7 +893,7 @@ impl Connection {
         if clear {
             self.clear_probe_data(true);
         }
-        let probe_report = ProbeReport::new(report);
+        let probe_report = ProbeReport::new(report, probe_round, application_rtt);
         // one copy for us and one for the caller
         // the one for us will get logged to disk; the caller's will get sent to the remote client
         self.probe_report_summary.update(probe_report.clone());
@@ -1195,7 +1211,8 @@ pub mod test {
             assert_eq!(probes.len(), 1);
         }
 
-        let report = connection.generate_probe_report(false).await;
+        // fake probe_report data; round=1, rtt=100ms
+        let report = connection.generate_probe_report(1, 100.0, false).await;
         println!("Report:\n{}", report);
     }
 
@@ -1436,7 +1453,10 @@ pub mod test {
         }
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
-        connection_tracker.generate_report(key, false, tx).await;
+        // fake data for probe_round=1, rtt=100ms
+        connection_tracker
+            .generate_report(key, 1, 100.0, false, tx)
+            .await;
         let report = rx.recv().await.unwrap();
 
         // NOTE: because we didn't feed any outgoing probes into the connection_tracker, we will only get
@@ -1518,7 +1538,7 @@ pub mod test {
             .connections
             .get_mut(&connection_key)
             .unwrap();
-        let report = connection.generate_probe_report(false).await;
+        let report = connection.generate_probe_report(1, 100.0, false).await;
         println!("{}", report); // useful for debugging
 
         // hand analysis via wireshark = which TTL's got which reply types?
