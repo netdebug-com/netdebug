@@ -60,6 +60,10 @@ features = [
     'HtmlButtonElement',
     'HtmlCanvasElement',
     'HtmlElement',
+# Just use the raw element access... 
+#    'HtmlTableElement',
+#    'HtmlTableRowElement',
+#    'HtmlTableSectionElement',
     'HtmlTextAreaElement',
     'Location',
     'MessageEvent',

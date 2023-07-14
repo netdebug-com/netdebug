@@ -199,9 +199,46 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, graph: &mut Graph) -> Resul
 }
 
 fn handle_insights(
-    _insights: Vec<common::analysis_messages::AnalysisInsights>,
+    insights: Vec<common::analysis_messages::AnalysisInsights>,
 ) -> Result<(), JsValue> {
-    todo!()
+    let document = web_sys::window().unwrap().document().unwrap();
+    let tab_div = lookup_by_id(INSIGHTS_TAB).unwrap();
+    let table = document.create_element("table").unwrap();
+    tab_div.set_inner_html(""); // delete old value
+    tab_div.append_child(&table).unwrap();
+    let header = document.create_element("tr").unwrap();
+    for th in ["Result", "Insight", "Details", "Raw"] {
+        let e = document.create_element("th").unwrap();
+        e.set_inner_html(th);
+        header.append_child(&e).unwrap();
+    }
+    table.append_child(&header).unwrap();
+
+    for insight in insights {
+        let row = document.create_element("tr").unwrap();
+        let good = document.create_element("td").unwrap();
+        if let Some(goodness) = insight.goodness() {
+            good.set_inner_html(goodness.to_string().as_str());
+        } else {
+            good.set_inner_html("-");
+        }
+        row.append_child(&good).unwrap();
+
+        let insight_td = document.create_element("td").unwrap();
+        let insight_name = insight.name();
+        insight_td.set_inner_html(insight_name.as_str());
+        row.append_child(&insight_td).unwrap();
+
+        let comment = document.create_element("td").unwrap();
+        comment.set_inner_html(insight.comment().as_str());
+        row.append_child(&comment).unwrap();
+
+        let raw = document.create_element("td").unwrap();
+        raw.set_inner_html(format!("{:?}", insight).as_str());
+        row.append_child(&raw).unwrap();
+        table.append_child(&row).unwrap();
+    }
+    Ok(())
 }
 
 fn handle_probe_report(

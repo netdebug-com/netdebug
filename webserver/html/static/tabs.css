@@ -39,3 +39,14 @@ body {
   display: initial;
 }
 
+/* wedge this in here ... not really for tabs */
+table, th, td {
+  border: 1px solid black;
+}
+
+
+/*
+th {
+  display: table-header-group;
+}
+*/

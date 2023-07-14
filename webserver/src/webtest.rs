@@ -18,9 +18,9 @@
  * More tests to be added with time
  */
 use chrono::Utc;
-use common::{Message, ProbeReport};
+use common::{analysis_messages::AnalysisInsights, Message, ProbeReport};
 use std::{net::SocketAddr, time::Duration};
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, UnboundedSender};
 use warp::ws::{self, WebSocket};
 
 use crate::{
@@ -99,6 +99,38 @@ pub async fn handle_websocket(
             max_rounds,
         )
         .await;
+    }
+    if let Some(connection_key) = connection_key {
+        send_insights(connection_key, tx, connection_tracker).await;
+    }
+}
+
+async fn send_insights(
+    connection_key: ConnectionKey,
+    tx: UnboundedSender<Message>,
+    connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
+) {
+    let (insights_tx, mut insights_rx) = tokio::sync::mpsc::channel::<Vec<AnalysisInsights>>(10);
+    if let Err(e) = connection_tracker.send(ConnectionTrackerMsg::GetInsights {
+        key: connection_key.clone(),
+        tx: insights_tx,
+    }) {
+        warn!(
+            "Error sending to connection tracker: {}:: {}",
+            connection_key, e
+        );
+    }
+
+    match insights_rx.recv().await {
+        Some(insights) => {
+            if let Err(e) = tx.send(Message::Insights { insights }) {
+                warn!("Error sending to webclient: {}", e);
+            }
+        }
+        None => warn!(
+            "Connection lookup failed for insights connection {}",
+            connection_key
+        ),
     }
 }
 

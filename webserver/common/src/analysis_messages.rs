@@ -60,13 +60,54 @@ pub enum AnalysisInsights {
     NoProbes,
 }
 
+impl AnalysisInsights {
+    pub fn goodness(&self) -> Option<Goodness> {
+        match self {
+            AnalysisInsights::LatencyNatWeirdData { .. }
+            | AnalysisInsights::ApplicationLatencyWeirdVariance { .. }
+            | AnalysisInsights::NoEndhostReplies
+            | AnalysisInsights::NoRouterReplies
+            | AnalysisInsights::NoProbes
+            | AnalysisInsights::LatencyRouterWeirdData { .. } => None,
+            AnalysisInsights::LastHopRouterLatencyVariance { goodness, .. }
+            | AnalysisInsights::ApplicationLatencyVariance { goodness, .. }
+            | AnalysisInsights::MissingOutgoingProbes { goodness, .. }
+            | AnalysisInsights::LastHopNatLatencyVariance { goodness, .. } => Some(*goodness),
+        }
+    }
+
+    pub fn name(&self) -> String {
+        match self {
+            AnalysisInsights::LatencyNatWeirdData { .. } => "Latency w/ NAT (weird)",
+            AnalysisInsights::LatencyRouterWeirdData { .. } => "Latency w/ Router (weird)",
+            AnalysisInsights::LastHopNatLatencyVariance { .. } => "Last-Hop Latency (w/ NAT)",
+            AnalysisInsights::LastHopRouterLatencyVariance { .. } => {
+                "Last-Mile Latency (w/ Router)"
+            }
+            AnalysisInsights::ApplicationLatencyVariance { .. } => "Application Latency",
+            AnalysisInsights::ApplicationLatencyWeirdVariance { .. } => {
+                "Application Latency (weird)"
+            }
+            AnalysisInsights::MissingOutgoingProbes { .. } => "Missing Test Probes",
+            AnalysisInsights::NoEndhostReplies => "No Replies from Endhost (test problem)",
+            AnalysisInsights::NoRouterReplies => "No Replies from Routers (test problem)",
+            AnalysisInsights::NoProbes => "No probes found at all!? (test problem)",
+        }
+        .to_string()
+    }
+
+    pub fn comment(&self) -> String {
+        "TODO".to_string()
+    }
+}
+
 impl std::fmt::Display for AnalysisInsights {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Copy, Clone)]
 
 pub enum Goodness {
     VeryBad,
