@@ -6,48 +6,7 @@ use web_sys::{Document, Element, HtmlElement};
 
 use crate::consts::*;
 
-use crate::plot_latency_chart;
 use crate::{console_log, log};
-
-pub fn _setup_test_tab(
-    document: &Document,
-    body: &HtmlElement,
-    root_div: &Element,
-) -> Result<(), JsValue> {
-    let button = create_tabs_button(document, _TEST_TAB, false)?;
-    let label = create_tabs_label(document, "Testing", _TEST_TAB)?;
-    let div = create_tabs_content(document, _TEST_TAB)?;
-
-    let canvas = document.create_element("canvas")?;
-    canvas.set_id("test_canvas"); // come back if we need manual double buffering
-    let (width, height) = calc_height(&document, &body);
-    let width = 9 * width / 10;
-    let height = 4 * height / 5;
-    canvas.set_attribute("width", format!("{}", width).as_str())?;
-    canvas.set_attribute("height", format!("{}", height).as_str())?;
-
-    div.append_child(&canvas)?;
-
-    root_div.append_child(&button)?;
-    root_div.append_child(&label)?;
-    root_div.append_child(&div)?;
-
-    plot_latency_chart(
-        "test_canvas",
-        100.0,
-        150.0,
-        155.0,
-        100.0,
-        250.0,
-        255.0,
-        100.0,
-        450.0,
-        455.0,
-        false,
-    );
-
-    Ok(())
-}
 
 pub fn setup_annotate_tab(document: &Document, root_div: &Element) -> Result<(), JsValue> {
     let button = create_tabs_button(document, ANNOTATE_TAB, false)?;
