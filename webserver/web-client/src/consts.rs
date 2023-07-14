@@ -2,6 +2,7 @@ pub const _TIME_LOG: &str = "time_log";
 pub const MAIN_TAB: &str = "main_tab";
 pub const GRAPH_TAB: &str = "graph_tab";
 pub const PROBE_TAB: &str = "probe_tab";
+pub const INSIGHTS_TAB: &str = "insights_tab";
 pub const ANNOTATE_TAB: &str = "annotate_tab";
 pub const ANNOTATE_INPUT_BUTTON: &str = "annotate_input_button";
 pub const ANNOTATE_TEXT_AREA: &str = "annotate_text_area";

@@ -71,16 +71,17 @@ pub fn run() -> Result<(), JsValue> {
     // the only thing in the HTML
     let root_div = lookup_by_id("root_div").expect("Div 'root_div' not found!?");
     root_div.set_class_name("tabs");
+    // tabs are listed left to right in this order
     setup_main_tab(&document, &root_div)?;
+    setup_insights_tab(&document, &root_div)?;
     setup_graph_tab(&document, &body, &root_div)?;
     setup_probes_tab(&document, &root_div)?;
     setup_annotate_tab(&document, &root_div)?;
-    // setup_test_tab(&document, &body, &root_div)?;
+    // put build info at the bottom of the page
     let div = build_info_div(&document)?;
     body.append_child(&div)?;
 
-    // canvas example - https://rustwasm.github.io/docs/wasm-bindgen/examples/2d-canvas.html
-
+    // more dynamic things are setup by run_webtest()
     Ok(())
 }
 #[derive(Debug, PartialEq, PartialOrd)]

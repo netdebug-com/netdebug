@@ -8,6 +8,18 @@ use crate::consts::*;
 
 use crate::{console_log, log};
 
+pub fn setup_insights_tab(document: &Document, root_div: &Element) -> Result<(), JsValue> {
+    let button = create_tabs_button(document, INSIGHTS_TAB, false)?;
+    let label = create_tabs_label(document, "Insights", INSIGHTS_TAB)?;
+    let div = create_tabs_content(document, INSIGHTS_TAB)?;
+
+    div.set_inner_html("Waiting for probes to finish");
+
+    root_div.append_child(&button)?;
+    root_div.append_child(&label)?;
+    root_div.append_child(&div)?;
+    Ok(())
+}
 pub fn setup_annotate_tab(document: &Document, root_div: &Element) -> Result<(), JsValue> {
     let button = create_tabs_button(document, ANNOTATE_TAB, false)?;
     let label = create_tabs_label(document, "Annotate", ANNOTATE_TAB)?;
