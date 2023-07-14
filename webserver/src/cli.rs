@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.print_probe_summary {
         println!("Probe Report Summary:\n{}", connection.probe_report_summary);
     } else {
-        let insights = analyze::analyze(&connection)?;
+        let insights = analyze::analyze(&connection);
         for insight in insights {
             println!("{}", insight);
         }

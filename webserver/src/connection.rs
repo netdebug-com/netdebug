@@ -4,12 +4,16 @@ use std::{
 };
 
 use chrono::Utc;
-use common::{ProbeId, ProbeReport, ProbeReportEntry, ProbeReportSummary, PROBE_MAX_TTL};
+use common::{
+    analysis_messages::AnalysisInsights, ProbeId, ProbeReport, ProbeReportEntry,
+    ProbeReportSummary, PROBE_MAX_TTL,
+};
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    analyze::analyze,
     context::Context,
     in_band_probe::tcp_inband_probe,
     owned_packet::OwnedParsedPacket,
@@ -88,6 +92,10 @@ pub enum ConnectionTrackerMsg {
         annotation: String,
         key: ConnectionKey,
     },
+    GetInsights {
+        key: ConnectionKey,
+        tx: tokio::sync::mpsc::Sender<Vec<AnalysisInsights>>,
+    },
 }
 
 /***
@@ -158,6 +166,7 @@ where
                 SetUserAnnotation { annotation, key } => {
                     self.set_user_annotation(key, annotation).await;
                 }
+                GetInsights { key, tx } => self.get_insights(key, tx).await,
             }
         }
         info!("ConnectionTracker exiting rx_loop()");
@@ -277,6 +286,21 @@ where
                 "Tried to set_user_annotation for unknown connection {} -- {}",
                 key, annotation
             );
+        }
+    }
+
+    async fn get_insights(
+        &mut self,
+        key: ConnectionKey,
+        tx: tokio::sync::mpsc::Sender<Vec<AnalysisInsights>>,
+    ) {
+        if let Some(connection) = self.connections.get_mut(&key) {
+            let insights = analyze(connection);
+            if let Err(e) = tx.send(insights).await {
+                warn!("get_insights: {} :: {}", key, e);
+            }
+        } else {
+            warn!("Tried to get_insights for unknown connection {}", key,);
         }
     }
 }

@@ -17,7 +17,7 @@ use common::{
 
 use crate::connection::Connection;
 
-pub fn analyze(connection: &Connection) -> Result<Vec<AnalysisInsights>, Box<dyn Error>> {
+pub fn analyze(connection: &Connection) -> Vec<AnalysisInsights> {
     let mut insights = Vec::new();
 
     if connection.probe_report_summary.raw_reports.is_empty() {
@@ -33,7 +33,7 @@ pub fn analyze(connection: &Connection) -> Result<Vec<AnalysisInsights>, Box<dyn
 
     insights.append(&mut latency_analysis(connection));
 
-    Ok(insights)
+    insights
 }
 
 #[allow(dead_code)] // we'll probably use these extra fields later
@@ -302,7 +302,7 @@ mod test {
         let test_log = r"tests/logs/annotated_connection1_localhost.log";
         let connection = connection_from_log(test_dir(test_log).as_str()).unwrap();
 
-        let insights = analyze(&connection).unwrap();
+        let insights = analyze(&connection);
         assert!(insights
             .iter()
             .find(|i| matches!(i, AnalysisInsights::NoRouterReplies { .. }),)
@@ -314,7 +314,7 @@ mod test {
         let test_log = r"tests/logs/annotated_rob_linux_wifi_turkey.log";
         let connection = connection_from_log(test_dir(test_log).as_str()).unwrap();
 
-        let insights = analyze(&connection).unwrap();
+        let insights = analyze(&connection);
         let last_hop = insights
             .iter()
             .find(|i| matches!(i, AnalysisInsights::LastHopNatLatencyVariance { .. }));
