@@ -225,7 +225,7 @@ mod test {
         assert!(last_hop.is_some());
         use AnalysisInsights::*;
         if let Some(LastHopNatLatencyVariance { goodness, .. }) = last_hop {
-            assert_eq!(*goodness, Goodness::Bad);
+            assert_eq!(*goodness, Goodness::Meh);
         }
     }
 }
