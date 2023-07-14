@@ -288,21 +288,7 @@ async fn handle_message(
     use Message::*;
     match msg {
         VersionCheck { git_hash } => handle_version_check(git_hash, tx),
-        ProbeReport {
-            report: _,
-            probe_round: _,
-        }
-        | Ping1FromServer {
-            server_timestamp_ms: _,
-            probe_round: _,
-            max_rounds: _,
-        }
-        | Ping3FromServer {
-            server_rtt: _,
-            client_timestamp_ms: _,
-            probe_round: _,
-            max_rounds: _,
-        } => {
+        Insights { .. } | ProbeReport { .. } | Ping1FromServer { .. } | Ping3FromServer { .. } => {
             warn!("Got Server messages from the client: ignoing {:?}", msg);
         }
         Ping2FromClient {

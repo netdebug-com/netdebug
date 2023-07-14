@@ -1,4 +1,6 @@
-#[derive(Debug, PartialEq, PartialOrd)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum AnalysisInsights {
     LatencyNatWeirdData {
         nat_avg: f64,
@@ -30,6 +32,25 @@ pub enum AnalysisInsights {
         last_hop_max_fraction: f64,
         goodness: Goodness,
     },
+    ApplicationLatencyVariance {
+        endhost_avg: f64,
+        endhost_max: f64,
+        application_avg: f64,
+        application_max: f64,
+        delta_avg: f64,
+        delta_max: f64,
+        fraction_avg: f64,
+        fraction_max: f64,
+        goodness: Goodness,
+    },
+    ApplicationLatencyWeirdVariance {
+        endhost_avg: f64,
+        endhost_max: f64,
+        application_avg: f64,
+        application_max: f64,
+        delta_avg: f64,
+        delta_max: f64,
+    },
     MissingOutgoingProbes {
         out_drop_count: usize,
         goodness: Goodness,
@@ -45,7 +66,7 @@ impl std::fmt::Display for AnalysisInsights {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Clone)]
 
 pub enum Goodness {
     VeryBad,

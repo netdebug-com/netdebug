@@ -36,6 +36,50 @@ pub fn analyze(connection: &Connection) -> Result<Vec<AnalysisInsights>, Box<dyn
     Ok(insights)
 }
 
+#[allow(dead_code)] // we'll probably use these extra fields later
+struct ApplicationLatencyAnalysis {
+    pub min: f64,
+    pub max: f64,
+    pub avg: f64,
+    pub max_probe_round: u32,
+}
+
+fn compute_application_latency(
+    connection: &Connection,
+) -> Result<ApplicationLatencyAnalysis, Box<dyn Error>> {
+    let mut min = f64::MAX;
+    let mut max = f64::MIN;
+    let mut sum = 0.0;
+    let mut max_probe_round = 0;
+
+    for (probe_round, report) in connection
+        .probe_report_summary
+        .raw_reports
+        .iter()
+        .enumerate()
+    {
+        sum += report.application_rtt;
+        if min > report.application_rtt {
+            min = report.application_rtt;
+        }
+        if max < report.application_rtt {
+            max = report.application_rtt;
+            max_probe_round = probe_round as u32;
+        }
+    }
+    let avg = if connection.probe_report_summary.raw_reports.len() > 0 {
+        sum / connection.probe_report_summary.raw_reports.len() as f64
+    } else {
+        0.0 // no data, can't take average
+    };
+    Ok(ApplicationLatencyAnalysis {
+        min,
+        max,
+        avg,
+        max_probe_round,
+    })
+}
+
 fn latency_analysis(connection: &Connection) -> Vec<AnalysisInsights> {
     let mut latency_insights = Vec::new();
     let mut out_drop_count = 0;
@@ -97,6 +141,11 @@ fn latency_analysis(connection: &Connection) -> Vec<AnalysisInsights> {
             }
         }
         let endhost_avg = sum / count;
+        latency_insights.append(&mut analyze_application_latency(
+            connection,
+            endhost_avg,
+            endhost_max,
+        ));
         if let Some(nat) = nat {
             // Good news - we found a NAT device so we can be reasonably certain that's near the EndHost
             // How true is this assumption?
@@ -186,6 +235,53 @@ fn latency_analysis(connection: &Connection) -> Vec<AnalysisInsights> {
     }
 
     latency_insights
+}
+
+fn analyze_application_latency(
+    connection: &Connection,
+    endhost_avg: f64,
+    endhost_max: f64,
+) -> Vec<AnalysisInsights> {
+    let mut insights = Vec::new();
+    let application_latency = compute_application_latency(connection).unwrap();
+    let application_avg = application_latency.avg;
+    let application_max = application_latency.max;
+    let delta_avg = application_avg - endhost_avg;
+    let delta_max = application_max - endhost_max;
+    if endhost_avg > application_latency.avg || endhost_max > application_latency.max {
+        insights.push(AnalysisInsights::ApplicationLatencyWeirdVariance {
+            endhost_avg,
+            endhost_max,
+            application_avg,
+            application_max,
+            delta_avg,
+            delta_max,
+        });
+    } else {
+        let fraction_avg = delta_avg / application_avg;
+        let fraction_max = delta_max / application_max;
+        // what fraction of end2end latency should be due to in-host processing?
+        use Goodness::*;
+        let goodness = match fraction_max {
+            x if x < 0.05 => VeryGood,
+            x if x < 0.10 => Good,
+            x if x < 0.40 => Meh,
+            x if x < 0.7 => Bad,
+            _ => VeryBad, // worse than 70% of end2end latency makes this VeryBad
+        };
+        insights.push(AnalysisInsights::ApplicationLatencyVariance {
+            endhost_avg,
+            endhost_max,
+            application_avg,
+            application_max,
+            delta_avg,
+            delta_max,
+            fraction_avg,
+            fraction_max,
+            goodness,
+        });
+    }
+    insights
 }
 
 pub fn connection_from_log(file: &str) -> Result<Connection, Box<dyn Error>> {

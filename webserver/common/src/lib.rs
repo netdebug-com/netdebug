@@ -1,3 +1,4 @@
+use analysis_messages::AnalysisInsights;
 use itertools::Itertools;
 use std::{collections::HashMap, fmt::Display, net::IpAddr}; // for .sorted()
 
@@ -48,6 +49,9 @@ pub enum Message {
     },
     SetUserAnnotation {
         annotation: String,
+    },
+    Insights {
+        insights: Vec<AnalysisInsights>,
     },
 }
 
