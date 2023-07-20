@@ -32,6 +32,7 @@ use log::{debug, info, warn};
 
 pub async fn handle_websocket(
     context: Context,
+    user_agent: String,
     websocket: warp::ws::WebSocket,
     addr: Option<SocketAddr>,
 ) {
@@ -50,7 +51,10 @@ pub async fn handle_websocket(
         ),
     };
     let _addr = addr.expect("We weren't passed a valid SocketAddr!?");
-    info!("New websocket connection from {}", &addr_str);
+    info!(
+        "New websocket connection from {} ; user agent {} ",
+        &addr_str, &user_agent
+    );
     let (mut ws_tx, ws_rx) = websocket.split();
 
     let (connection_tracker, send_idle_probes) = {
@@ -79,6 +83,15 @@ pub async fn handle_websocket(
     let _ws_msg_handler_handle = tokio::spawn(async move {
         handle_ws_message(context, ws_rx, tx_clone, barrier_tx, key_clone).await
     });
+    // set the user agent
+    if let Some(key) = &connection_key {
+        if let Err(e) = connection_tracker.send(ConnectionTrackerMsg::SetUserAgent {
+            user_agent,
+            key: key.clone(),
+        }) {
+            warn!("SetUserAgent failed for {}: {}", key, e);
+        }
+    }
     // Version check - is the client build from the same git hash as the server?
     tx.send(common::Message::make_version_check())
         .unwrap_or_else(|e| {

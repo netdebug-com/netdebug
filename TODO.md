@@ -4,6 +4,7 @@ CTR+SHIFT+V to preview markdown in VSCODE!
 
 # Features
 
+* track user-agent on request
 * Look at cellphone sourced traffic
     * no NAT, weak end-host probe replies - no SACK!?
 * Track drop packets and expose to GUI
@@ -13,6 +14,10 @@ CTR+SHIFT+V to preview markdown in VSCODE!
 * multiple-parallel ws connections
 * HTTPS! to try to improve performance:now() time
   * blocks Geolocation
+
+# Coverage
+* By OS: Linux, MacOS, Windows, IOS, Android
+* By network: cell, home wifi, vpn, direct
 
 # Nagging
 * need to do more IPv6 testing!  Just had a regression vs. localhost traffic with IPv6

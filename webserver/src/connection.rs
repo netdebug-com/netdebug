@@ -92,6 +92,10 @@ pub enum ConnectionTrackerMsg {
         annotation: String,
         key: ConnectionKey,
     },
+    SetUserAgent {
+        user_agent: String,
+        key: ConnectionKey,
+    },
     GetInsights {
         key: ConnectionKey,
         tx: tokio::sync::mpsc::Sender<Vec<AnalysisInsights>>,
@@ -167,6 +171,9 @@ where
                     self.set_user_annotation(key, annotation).await;
                 }
                 GetInsights { key, tx } => self.get_insights(key, tx).await,
+                SetUserAgent { user_agent, key } => {
+                    self.set_user_agent(key, user_agent).await;
+                }
             }
         }
         info!("ConnectionTracker exiting rx_loop()");
@@ -230,6 +237,7 @@ where
             probe_report_summary: ProbeReportSummary::new(),
             user_annotation: None,
             log_dir: self.log_dir.clone(),
+            user_agent: None,
         };
         info!("Tracking new connection: {}", &key);
 
@@ -289,6 +297,17 @@ where
         }
     }
 
+    async fn set_user_agent(&mut self, key: ConnectionKey, user_agent: String) {
+        if let Some(connection) = self.connections.get_mut(&key) {
+            connection.user_agent = Some(user_agent);
+        } else {
+            warn!(
+                "Tried to set_user_agent for unknown connection {} -- {}",
+                key, user_agent
+            );
+        }
+    }
+
     async fn get_insights(
         &mut self,
         key: ConnectionKey,
@@ -340,6 +359,7 @@ pub struct Connection {
     pub probe_report_summary: ProbeReportSummary,
     pub user_annotation: Option<String>, // an human supplied comment on this connection
     pub log_dir: String, // need to cache it here as we need it during Destructor; fugly
+    pub user_agent: Option<String>, // when created via a web request, store the user-agent header
 }
 impl Connection {
     fn update<R>(

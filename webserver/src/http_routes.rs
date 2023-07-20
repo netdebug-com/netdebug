@@ -44,6 +44,7 @@ fn make_ws_route(
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::path("ws")
         .and(with_context(&context))
+        .and(warp::header("user-agent"))
         .and(warp::ws())
         .and(warp::filters::addr::remote())
         .and_then(websocket)
@@ -189,10 +190,13 @@ async fn login_handler(
 
 pub async fn websocket(
     context: Context,
+    user_agent: String,
     ws: warp::ws::Ws,
     addr: Option<SocketAddr>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    Ok(ws.on_upgrade(move |websocket| webtest::handle_websocket(context, websocket, addr)))
+    Ok(ws.on_upgrade(move |websocket| {
+        webtest::handle_websocket(context, user_agent, websocket, addr)
+    }))
 }
 
 /*
