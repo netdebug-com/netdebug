@@ -4,6 +4,8 @@ CTR+SHIFT+V to preview markdown in VSCODE!
 
 # Features
 
+* figure out BSD-compat endhost probing
+* add RR and find place to run it from - can ping IPs found to fake latency info for non-ttl exceeded sourcing routers
 * track user-agent on request
 * Look at cellphone sourced traffic
     * no NAT, weak end-host probe replies - no SACK!?
