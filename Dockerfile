@@ -9,7 +9,7 @@ RUN --mount=type=cache,target=/root/.cargo cargo install wasm-pack && \
     rustup target add wasm32-unknown-unknown
 COPY . .
 RUN cargo build --release
-RUN wasm-pack build webserver/web-client
+RUN wasm-pack build --target=web webserver/web-client
 
 
 # start from a recent stable debian for a small container
