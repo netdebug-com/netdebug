@@ -10,13 +10,18 @@
 ```
 # install rustup
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# get cargo into the path
+. ~/.bashrc
 # update system to current
 sudo apt-get update
-sudo apt-get upgrade
+sudo apt-get upgrade -y
 # install build deps - TODO - just publish a built image
 sudo apt-get install -y build-essential libpcap-dev cmake libfontconfig-dev tmux
 # Install required rust tools
 cargo install wasm-pack
+git clone git@github.com:netdebug-com/netdebug
+cd netdebug
+./build.sh
 ```
 7. You can manage multiple ssh-keys into github ala a special ssh config
     and then add the actual repo as:
