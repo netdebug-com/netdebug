@@ -1,0 +1,20 @@
+# flyctl launch added from .gitignore
+**/target/release/build
+**/target/release/deps
+**/target/debug
+**/.*.swp
+**/*.log
+**/logs
+
+# flyctl launch added from webserver/.gitignore
+webserver/**/target
+webserver/**/*.log
+
+# flyctl launch added from webserver/web-client/.gitignore
+webserver/web-client/target
+webserver/web-client/**/**/*.rs.bk
+webserver/web-client/**/bin
+webserver/web-client/**/wasm-pack.log
+webserver/web-client/**/.cargo-ok
+
+fly.toml
