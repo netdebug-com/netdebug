@@ -488,7 +488,7 @@ impl Connection {
             if first_time {
                 // reset the probe state
                 self.next_end_host_reply = Some(PROBE_MAX_TTL - 1);
-                tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock).unwrap();
+                tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock, false).unwrap();
             }
         }
         if let Some(ttl) = Connection::is_probe_heuristic(true, packet) {
@@ -624,9 +624,10 @@ impl Connection {
                 // launch queued idle probes
                 self.send_probes_on_idle = false;
                 // unwrap is right as we should never send idle probes when self.local_data = None
-                tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock).unwrap_or_else(|e| {
-                    warn!("tcp_inband_probe() returned :: {}", e);
-                });
+                tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock, false)
+                    .unwrap_or_else(|e| {
+                        warn!("tcp_inband_probe() returned :: {}", e);
+                    });
             }
         }
         if tcp.fin {
@@ -952,7 +953,7 @@ impl Connection {
             // are we idle now?
             self.clear_probe_data(false);
             self.next_end_host_reply = Some(PROBE_MAX_TTL - 1);
-            tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock).unwrap();
+            tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock, false).unwrap();
         } else {
             self.send_probes_on_idle = true; // queue up that we want to send the probes
                                              // next time we're idle

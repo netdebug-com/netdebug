@@ -17,6 +17,7 @@ use crate::{owned_packet::OwnedParsedPacket, pcap::RawSocketWriter};
 pub fn tcp_inband_probe(
     packet: &OwnedParsedPacket,
     raw_sock: &mut dyn RawSocketWriter, // used with testing
+    _bsd_hack: bool,
 ) -> Result<(), Box<dyn Error>> {
     let l2 = packet.link.as_ref().unwrap();
     // build up probes
@@ -140,7 +141,7 @@ pub mod test {
             IpAddr::from_str("192.168.1.2").unwrap(),
         );
 
-        tcp_inband_probe(&packet, &mut mock_raw_sock).unwrap();
+        tcp_inband_probe(&packet, &mut mock_raw_sock, false).unwrap();
 
         assert_eq!(mock_raw_sock.captured.len(), PROBE_MAX_TTL as usize);
 
