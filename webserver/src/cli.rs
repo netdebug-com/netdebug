@@ -4,7 +4,6 @@ use clap::Parser;
 use libwebserver::analyze::{self, connection_from_log};
 
 #[derive(Parser, Debug)]
-
 /// NetDebug CLI
 struct Args {
     /// Analyze a Connection log
@@ -14,6 +13,10 @@ struct Args {
     /// Print Probe Summary Report
     #[arg(long, default_value_t = false)]
     print_probe_summary: bool,
+
+    /// Print a single probe run
+    #[arg(long, default_value = None)]
+    print_probe_report: Option<u32>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -32,6 +35,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     if args.print_probe_summary {
         println!("Probe Report Summary:\n{}", connection.probe_report_summary);
+    } else if let Some(probe_run) = args.print_probe_report {
+        if let Some(probe_report) = connection
+            .probe_report_summary
+            .raw_reports
+            .get(probe_run as usize)
+        {
+            println!("{}", probe_report);
+        } else {
+            println!("Probe report {} not found", probe_run);
+        }
     } else {
         let insights = analyze::analyze(&connection);
         for insight in insights {
