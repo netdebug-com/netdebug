@@ -298,7 +298,7 @@ fn extract_latencies(
         endhost_sum / endhost_rtts.len() as f64
     } else {
         // complete packet loss!?  what should we do?  Return a large constant for now
-        1.0 // 1 second!
+        1000.0 // 1 second!
     };
 
     let (net_is_nat, net_rtt) = if let Some(nat_rtt) = nat_rtt {
@@ -323,6 +323,7 @@ fn extract_latencies(
         percent_endhost,
         percent_processing,
         processing_delay,
+        probe_round,
     }
 }
 
@@ -616,7 +617,7 @@ mod test {
         }) = spike
         {
             assert_eq!(*goodness, Goodness::VeryBad);
-            assert_eq!(*blame, Blame::HostStack);
+            assert_eq!(*blame, Blame::LastMile);
         } else {
             panic!("Failed to destructure LatencySpike")
         }

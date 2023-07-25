@@ -153,6 +153,7 @@ pub struct ProbeReportLatencies {
     pub percent_net: f64,
     pub percent_endhost: f64,
     pub percent_processing: f64,
+    pub probe_round: u32,
 }
 
 impl std::fmt::Display for Goodness {
