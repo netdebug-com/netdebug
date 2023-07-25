@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .raw_reports
             .get(probe_run as usize)
         {
-            println!("{}", probe_report);
+            println!("Probe report {} -- {}", probe_run, probe_report);
         } else {
             println!("Probe report {} not found", probe_run);
         }

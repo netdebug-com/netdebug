@@ -603,6 +603,15 @@ mod test {
     fn validate_latency_spike() {
         // super useful for manually exploring the data:
         // jq '.probe_report_summary.raw_reports[].application_rtt'  webserver/tests/logs/annotated_macos1.log  | sort -n | less
+
+        /*
+         * Also:
+         *
+         * for i in `seq 100`; do
+         *  ./target/debug/netdebug_cli \
+         *          --print-probe-report $i \
+         *          --analyze-log ./webserver/tests/logs/annotated_macos_ed.log | grep appl ; done | sort -n -k 9
+         */
         let test_log = r"tests/logs/annotated_macos_gregor.log";
         let connection = connection_from_log(test_dir(test_log).as_str()).unwrap();
 
