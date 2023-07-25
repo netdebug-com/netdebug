@@ -4,7 +4,10 @@ CTR+SHIFT+V to preview markdown in VSCODE!
 
 # Features
 
-* figure out BSD-compat endhost probing
+* Look at Gregor's plots
+* use insight data to plot summary graph
+* plot summary graph from consistent same-probe-round data
+* figure out iOS-compat endhost probing
 * add RR and find place to run it from - can ping IPs found to fake latency info for non-ttl exceeded sourcing routers
 * track user-agent on request
 * Look at cellphone sourced traffic
@@ -20,6 +23,7 @@ CTR+SHIFT+V to preview markdown in VSCODE!
 # Coverage
 * By OS: Linux, MacOS, Windows, IOS, Android
 * By network: cell, home wifi, vpn, direct
+* By capability: w/ w/o TTL Exceeded
 
 # Nagging
 * need to do more IPv6 testing!  Just had a regression vs. localhost traffic with IPv6

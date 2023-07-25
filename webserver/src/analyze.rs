@@ -324,4 +324,26 @@ mod test {
             assert_eq!(*goodness, Goodness::Meh);
         }
     }
+
+    #[test]
+    fn validate_macos() {
+        let test_log = r"tests/logs/annotated_macos1.log";
+        let connection = connection_from_log(test_dir(test_log).as_str()).unwrap();
+
+        assert!(connection.user_agent.is_some());
+
+        let user_agent = connection.user_agent.as_deref().unwrap();
+
+        assert!(user_agent.contains("Mac OS X"));
+
+        let insights = analyze(&connection);
+        let last_hop = insights
+            .iter()
+            .find(|i| matches!(i, AnalysisInsights::LastHopNatLatencyVariance { .. }));
+        assert!(last_hop.is_some());
+        use AnalysisInsights::*;
+        if let Some(LastHopNatLatencyVariance { goodness, .. }) = last_hop {
+            assert_eq!(*goodness, Goodness::Good);
+        }
+    }
 }
