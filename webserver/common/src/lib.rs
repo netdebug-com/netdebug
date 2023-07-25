@@ -83,6 +83,11 @@ pub struct ProbeReport {
 
 impl Display for ProbeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "Probe report: application delay {}",
+            self.application_rtt
+        )?;
         for probe_id in self.probes.keys().sorted() {
             let e = self.probes.get(probe_id).unwrap();
             writeln!(f, "Probe {:3} - {:?}", probe_id, e)?;
