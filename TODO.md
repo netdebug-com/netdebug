@@ -4,8 +4,8 @@ CTR+SHIFT+V to preview markdown in VSCODE!
 
 # Features
 
-* Look at Gregor's plots
 * use insight data to plot summary graph
+* figure out if we really want to prune on NATs given rate limiting (probably not)
 * plot summary graph from consistent same-probe-round data
 * figure out iOS-compat endhost probing
 * add RR and find place to run it from - can ping IPs found to fake latency info for non-ttl exceeded sourcing routers
