@@ -175,17 +175,26 @@ fn compute_application_latency(
  * had NATS in them. NOTE that NATs can be heavily rate limited (~1 reply/second) so this might throw away
  * a lot (too much?) of our data
  *
- * This algorithm is a little complicated because for reach probe round, in theory we have three measurements
+ * This algorithm is a little complicated because for each probe round, in theory we have three measurements
  * we want to compare: a reply from a NAT device indidicating the start of the home network, probably many replies
  * from the endhost - indicating a reply from the kernel, and an application level reply.  But we might not have a
  * reply from the NAT, so do we ignore non-NAT replies?  Also, how do we compare the many endhost replies to the
  * at most one application reply?  Make some best guesses here and come back if it looks too weird.
+ *
+ * When we have a lot of endhost replies for a specific probe round, which one do we use?  The avg?  min? max?
+ * Since we're really using the endhost pings to test the latency of the last-hop (presumably the hop after the NAT)
+ * then the min would be best as it minimizes the kernel stack processing variance, but also adds potential
+ * measurement error.
+ *
+ * Also a "NAT" may show up at many hops if there's an interior network on the other side of the NAT.  What
+ * we really want is to partition regions of concern, e.g, ISP's part of the network vs. the endhost's network
+ * vs. the endhost's processing delay.
  */
 
 fn explain_latency(connection: &Connection, nats: Vec<u32>) -> Vec<AnalysisInsights> {
     let mut insights = Vec::new();
 
-    const MIN_NATS_FOR_ANALYSIS: usize = 10; // made up number, e.g. at least 10% of 100 probe rounds
+    const MIN_NATS_FOR_ANALYSIS: usize = 50; // made up number, e.g. at least 50% of 100 probe rounds
     let application_latency = if nats.len() < MIN_NATS_FOR_ANALYSIS {
         debug!("Found NATs, but not enough to narrowly analyze just the nats");
         compute_application_latency(connection, None)
@@ -277,8 +286,6 @@ fn extract_latencies(
             | EndHostNoProbe { .. } => (),
         }
     }
-    // never call this unless there's at least one endhost probe
-    assert!(endhost_rtts.len() > 0);
     let mut endhost_sum = 0.0;
     let mut endhost_max = f64::MIN;
     for endhost_rtt in &endhost_rtts {
@@ -287,7 +294,12 @@ fn extract_latencies(
             endhost_max = **endhost_rtt;
         }
     }
-    let endhost_avg = endhost_sum / endhost_rtts.len() as f64;
+    let endhost_avg = if endhost_rtts.len() > 0 {
+        endhost_sum / endhost_rtts.len() as f64
+    } else {
+        // complete packet loss!?  what should we do?  Return a large constant for now
+        1.0 // 1 second!
+    };
 
     let (net_is_nat, net_rtt) = if let Some(nat_rtt) = nat_rtt {
         (true, *nat_rtt)
@@ -566,7 +578,7 @@ mod test {
 
     #[test]
     fn validate_macos() {
-        let test_log = r"tests/logs/annotated_macos1.log";
+        let test_log = r"tests/logs/annotated_macos_gregor.log";
         let connection = connection_from_log(test_dir(test_log).as_str()).unwrap();
 
         assert!(connection.user_agent.is_some());
@@ -590,7 +602,7 @@ mod test {
     fn validate_latency_spike() {
         // super useful for manually exploring the data:
         // jq '.probe_report_summary.raw_reports[].application_rtt'  webserver/tests/logs/annotated_macos1.log  | sort -n | less
-        let test_log = r"tests/logs/annotated_macos1.log";
+        let test_log = r"tests/logs/annotated_macos_gregor.log";
         let connection = connection_from_log(test_dir(test_log).as_str()).unwrap();
 
         let insights = analyze(&connection);
