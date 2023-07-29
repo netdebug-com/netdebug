@@ -7,7 +7,6 @@ use futures_util::StreamExt;
 use log::{info, warn};
 use pcap::Capture;
 
-use crate::context::Context;
 use crate::owned_packet::OwnedParsedPacket;
 struct PacketParserCodec {}
 
@@ -42,18 +41,16 @@ impl pcap::PacketCodec for PacketParserCodec {
  * This is setup to have many parallel connection trackers to achieve
  * parallelism with the hash/sloppy_hash(), but it's not implemented
  * yet.
+ *
+ * ONLY works on Linux/MacOS - need to do something different for windows
  */
 
-pub async fn start_pcap_stream(context: Context) -> Result<(), Box<dyn Error>> {
-    let (device, tx, local_tcp_port) = {
-        let ctx = context.read().await;
-        (
-            ctx.pcap_device.clone(),
-            ctx.connection_tracker.clone(),
-            ctx.local_tcp_listen_port,
-        )
-    };
-
+#[cfg(not(windows))]
+pub async fn start_pcap_stream(
+    device: pcap::Device,
+    local_tcp_port: u16,
+    tx: tokio::sync::mpsc::UnboundedSender<ConnectionTrackerMsg>,
+) -> Result<(), Box<dyn Error>> {
     info!("Starting pcap capture on {}", &device.name);
     let mut capture = Capture::from_device(device)?
         .buffer_size(64_000_000) // try to prevent any packet loss
@@ -178,8 +175,9 @@ impl RawSocketWriter for MockRawSocketWriter {
  * that same instance does NOT actually see the outgoing packet.  We get around this by
  * binding a different instance for reading vs. writing packets.
  */
-pub async fn bind_writable_pcap(context: &Context) -> Result<impl RawSocketWriter, Box<dyn Error>> {
-    let device = context.read().await.pcap_device.clone();
+pub async fn bind_writable_pcap(
+    device: pcap::Device,
+) -> Result<impl RawSocketWriter, Box<dyn Error>> {
     let cap = Capture::from_device(device)?.open()?;
     Ok(PcapRawSocketWriter::new(cap))
 }

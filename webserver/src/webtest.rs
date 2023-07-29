@@ -23,11 +23,9 @@ use std::{net::SocketAddr, time::Duration};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use warp::ws::{self, WebSocket};
 
-use crate::{
-    connection::{ConnectionKey, ConnectionTrackerMsg},
-    context::Context,
-};
+use crate::context::Context;
 use futures_util::{stream::SplitStream, SinkExt, StreamExt};
+use libconntrack::connection::{ConnectionKey, ConnectionTrackerMsg};
 use log::{debug, info, warn};
 
 pub async fn handle_websocket(
@@ -36,6 +34,7 @@ pub async fn handle_websocket(
     websocket: warp::ws::WebSocket,
     addr: Option<SocketAddr>,
 ) {
+    let local_l4_port = context.read().await.local_tcp_listen_port;
     let (addr_str, connection_key) = match &addr {
         None => {
             if cfg!(tests) {
@@ -47,7 +46,7 @@ pub async fn handle_websocket(
         }
         Some(a) => (
             a.to_string(),
-            Some(ConnectionKey::new(&context, a, etherparse::ip_number::TCP).await),
+            Some(ConnectionKey::new(local_l4_port, a, etherparse::ip_number::TCP).await),
         ),
     };
     let _addr = addr.expect("We weren't passed a valid SocketAddr!?");

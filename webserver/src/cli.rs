@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use clap::Parser;
-use libwebserver::analyze::{self, connection_from_log};
+use libconntrack::analyze::{self, connection_from_log};
 
 #[derive(Parser, Debug)]
 /// NetDebug CLI

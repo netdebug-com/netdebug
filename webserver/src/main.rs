@@ -1,8 +1,8 @@
 use std::error::Error;
 use std::sync::Arc;
 
+use libconntrack::pcap::start_pcap_stream;
 use libwebserver::context::{Args, WebServerContext};
-use libwebserver::pcap::start_pcap_stream;
 
 use clap::Parser;
 use libwebserver::http_routes::make_http_routes;
@@ -28,8 +28,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let context_clone = context.clone();
     if !args.web_server_only {
         tokio::spawn(async move {
+            let (device, local_tcp_port, tx) = {
+                let ctx = context_clone.read().await;
+                (
+                    ctx.pcap_device.clone(),
+                    ctx.local_tcp_listen_port,
+                    ctx.connection_tracker.clone(),
+                )
+            };
             // unwrap() should be fine here as we should panic if this fails
-            if let Err(e) = start_pcap_stream(context_clone).await {
+            if let Err(e) = start_pcap_stream(device, local_tcp_port, tx).await {
                 log::error!("start_pcap_stream() returned {} -- exiting", e);
                 // this is fatal, just exit
                 std::process::exit(1);

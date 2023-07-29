@@ -7,7 +7,7 @@ use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc::UnboundedSender, RwLock};
 
-use crate::{
+use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg},
     pcap::{bind_writable_pcap, lookup_pcap_device_by_name},
 };
@@ -38,7 +38,7 @@ impl WebServerContext {
             Some(d) => lookup_pcap_device_by_name(&d)?,
             None => {
                 if args.production {
-                    crate::pcap::lookup_egress_device()?
+                    libconntrack::pcap::lookup_egress_device()?
                 } else {
                     // if we're not in production mode, just capture
                     // loopback traffic.
@@ -79,9 +79,25 @@ impl WebServerContext {
         if !args.web_server_only {
             tokio::spawn(async move {
                 info!("Launching the connection tracker (single instance for now)");
-                let raw_sock = bind_writable_pcap(&context_clone).await.unwrap();
-                let mut connection_tracker =
-                    ConnectionTracker::new(context_clone, local_addrs, raw_sock).await;
+                let (log_dir, max_connections_per_tracker, local_tcp_port, device) = {
+                    let ctx = context_clone.read().await;
+                    (
+                        ctx.log_dir.clone(),
+                        ctx.max_connections_per_tracker,
+                        ctx.local_tcp_listen_port,
+                        ctx.pcap_device.clone(),
+                    )
+                };
+                let local_tcp_ports = HashSet::from([local_tcp_port]);
+                let raw_sock = bind_writable_pcap(device).await.unwrap();
+                let mut connection_tracker = ConnectionTracker::new(
+                    log_dir,
+                    max_connections_per_tracker,
+                    local_tcp_ports,
+                    local_addrs,
+                    raw_sock,
+                )
+                .await;
                 connection_tracker.rx_loop(rx).await;
             });
         }
@@ -230,7 +246,7 @@ pub mod test {
             user_db: UserDb::testing_demo(test_hash),
             html_root: "html".to_string(),
             wasm_root: "web-client/pkg".to_string(),
-            pcap_device: crate::pcap::lookup_egress_device().unwrap(),
+            pcap_device: libconntrack::pcap::lookup_egress_device().unwrap(),
             local_tcp_listen_port: 3030,
             local_ips: HashSet::new(),
             connection_tracker: tx,

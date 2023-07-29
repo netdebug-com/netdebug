@@ -14,13 +14,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     analyze::analyze,
-    context::Context,
     in_band_probe::tcp_inband_probe,
     owned_packet::OwnedParsedPacket,
     pcap::RawSocketWriter,
     utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timeval_to_ms},
 };
-
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ConnectionKey {
     pub local_ip: IpAddr,
@@ -45,7 +43,7 @@ impl ConnectionKey {
     /**
      * Create a ConnectionKey from a remote socket addr and the global context
      */
-    pub async fn new(context: &Context, addr: &SocketAddr, ip_proto: u8) -> Self {
+    pub async fn new(local_l4_port: u16, addr: &SocketAddr, ip_proto: u8) -> Self {
         // Annoying - it turns out it's hard in Warp to figure out which local IP a given
         // connection is talking to - this technique should be close, but might
         // have problems with funky routing tables, e.g., where the packets
@@ -53,8 +51,6 @@ impl ConnectionKey {
 
         let remote_ip = addr.ip();
         let local_ip = crate::utils::remote_ip_to_local(remote_ip).unwrap();
-        let c = context.read().await;
-        let local_l4_port = c.local_tcp_listen_port;
 
         ConnectionKey {
             local_ip,
@@ -114,7 +110,6 @@ pub struct ConnectionTracker<R>
 where
     R: RawSocketWriter,
 {
-    context: Context,
     connections: hashlru::Cache<ConnectionKey, Connection>,
     local_addrs: HashSet<IpAddr>,
     local_tcp_ports: HashSet<u16>,
@@ -126,18 +121,13 @@ where
     R: RawSocketWriter,
 {
     pub async fn new(
-        context: Context,
+        log_dir: String,
+        max_connections_per_tracker: usize,
+        local_tcp_ports: HashSet<u16>,
         local_addrs: HashSet<IpAddr>,
         raw_sock: R,
     ) -> ConnectionTracker<R> {
-        let mut local_tcp_ports = HashSet::new();
-        let (log_dir, max_connections_per_tracker) = {
-            let ctx = context.read().await;
-            (ctx.log_dir.clone(), ctx.max_connections_per_tracker)
-        };
-        local_tcp_ports.insert(context.read().await.local_tcp_listen_port);
         ConnectionTracker {
-            context,
             connections: hashlru::Cache::new(max_connections_per_tracker),
             local_addrs,
             local_tcp_ports,
@@ -184,13 +174,7 @@ where
             packet.to_connection_key(&self.local_addrs, &self.local_tcp_ports)
         {
             if let Some(connection) = self.connections.get_mut(&key) {
-                let action = connection.update(
-                    &self.context,
-                    packet,
-                    &mut self.raw_sock,
-                    &key,
-                    src_is_local,
-                );
+                let action = connection.update(packet, &mut self.raw_sock, &key, src_is_local);
                 use ConnectionAction::*;
                 match action {
                     Noop => (),
@@ -241,13 +225,7 @@ where
         };
         info!("Tracking new connection: {}", &key);
 
-        connection.update(
-            &self.context,
-            packet,
-            &mut self.raw_sock,
-            &key,
-            src_is_local,
-        );
+        connection.update(packet, &mut self.raw_sock, &key, src_is_local);
         self.connections.insert(key, connection);
     }
 
@@ -364,7 +342,6 @@ pub struct Connection {
 impl Connection {
     fn update<R>(
         &mut self,
-        context: &Context,
         packet: OwnedParsedPacket,
         raw_sock: &mut R,
         key: &ConnectionKey,
@@ -376,7 +353,7 @@ impl Connection {
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
                 if src_is_local {
-                    self.update_tcp_local(context, &packet, tcp, raw_sock)
+                    self.update_tcp_local(&packet, tcp, raw_sock)
                 } else {
                     self.update_tcp_remote(&packet, tcp, raw_sock)
                 }
@@ -389,7 +366,7 @@ impl Connection {
                     );
                     ConnectionAction::Noop
                 } else {
-                    self.update_icmp4_remote(context, &packet, icmp4)
+                    self.update_icmp4_remote(&packet, icmp4)
                 }
             }
             Some(TransportHeader::Icmpv6(_icmp6)) => {
@@ -440,7 +417,6 @@ impl Connection {
 
     fn update_tcp_local<R>(
         &mut self,
-        _context: &Context,
         packet: &OwnedParsedPacket,
         tcp: &TcpHeader,
         raw_sock: &mut R,
@@ -682,7 +658,6 @@ impl Connection {
 
     fn update_icmp4_remote(
         &mut self,
-        _context: &Context,
         packet: &OwnedParsedPacket,
         icmp4: &etherparse::Icmpv4Header,
     ) -> ConnectionAction {
@@ -1074,7 +1049,6 @@ pub mod test {
 
     use super::*;
 
-    use crate::context::test::make_test_context;
     use crate::in_band_probe::test::test_tcp_packet_ports;
     use crate::owned_packet::OwnedParsedPacket;
     use crate::pcap::MockRawSocketWriter;
@@ -1151,12 +1125,21 @@ pub mod test {
 
     #[tokio::test]
     async fn connection_tracker_one_flow_outgoing() {
-        let context = make_test_context();
+        let log_dir = ".".to_string();
+        let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let mut local_addrs = HashSet::new();
         let localhost_ip = IpAddr::from_str("127.0.0.1").unwrap();
         local_addrs.insert(localhost_ip);
-        let mut connection_tracker = ConnectionTracker::new(context, local_addrs, raw_sock).await;
+        let local_tcp_ports = HashSet::from([3030]);
+        let mut connection_tracker = ConnectionTracker::new(
+            log_dir,
+            max_connections_per_tracker,
+            local_tcp_ports,
+            local_addrs,
+            raw_sock,
+        )
+        .await;
 
         let mut capture =
             // NOTE: this capture has no FINs so contracker will not remove it
@@ -1207,15 +1190,21 @@ pub mod test {
      */
     async fn connection_tracker_one_flow_out_and_in() {
         pretty_env_logger::init();
-        let context = make_test_context();
+        let log_dir = ".".to_string();
+        let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let mut local_addrs = HashSet::new();
         let local_ip = IpAddr::from_str("172.31.2.61").unwrap();
         local_addrs.insert(local_ip);
-        let mut local_tcp_ports = HashSet::new();
-        local_tcp_ports.insert(3030);
-        let mut connection_tracker =
-            ConnectionTracker::new(context, local_addrs.clone(), raw_sock).await;
+        let local_tcp_ports = HashSet::from([3030]);
+        let mut connection_tracker = ConnectionTracker::new(
+            log_dir,
+            max_connections_per_tracker,
+            local_tcp_ports.clone(),
+            local_addrs.clone(),
+            raw_sock,
+        )
+        .await;
 
         let mut connection_key: Option<ConnectionKey> = None;
         let mut capture = pcap::Capture::from_file(test_dir(
@@ -1269,15 +1258,21 @@ pub mod test {
      * we can match them up to calculate RTTs, etc.
      */
     async fn connection_tracker_probe_and_reply() {
-        let context = make_test_context();
         let raw_sock = MockRawSocketWriter::new();
+        let log_dir = ".".to_string();
+        let max_connections_per_tracker = 32;
         let mut local_addrs = HashSet::new();
         let local_ip = IpAddr::from_str("172.31.2.61").unwrap();
         local_addrs.insert(local_ip);
-        let mut local_tcp_ports = HashSet::new();
-        local_tcp_ports.insert(3030);
-        let mut connection_tracker =
-            ConnectionTracker::new(context, local_addrs.clone(), raw_sock).await;
+        let local_tcp_ports = HashSet::from([3030]);
+        let mut connection_tracker = ConnectionTracker::new(
+            log_dir,
+            max_connections_per_tracker,
+            local_tcp_ports,
+            local_addrs.clone(),
+            raw_sock,
+        )
+        .await;
 
         let probe = OwnedParsedPacket::try_from_fake_time(TEST_PROBE.to_vec()).unwrap();
 
@@ -1426,13 +1421,12 @@ pub mod test {
     #[ignore]
     #[tokio::test]
     async fn probe_on_idle_queued() {
+        let log_dir = ".".to_string();
+        let max_connections_per_tracker = 32;
         let local_ip = Ipv4Addr::from_str("192.168.1.37").unwrap();
         let local_addrs = HashSet::from([IpAddr::from(local_ip)]);
-        let local_tcp_ports = HashSet::from([443]);
         let raw_sock = MockRawSocketWriter::new();
-        let context = make_test_context();
-
-        context.write().await.local_tcp_listen_port = 443; // trace uses 443
+        let local_tcp_ports = HashSet::from([443]);
 
         let syn = OwnedParsedPacket::try_from_fake_time(TEST_1_LOCAL_SYN.to_vec()).unwrap();
         let synack = OwnedParsedPacket::try_from_fake_time(TEST_1_REMOTE_SYNACK.to_vec()).unwrap();
@@ -1454,8 +1448,14 @@ pub mod test {
             assert_eq!(key, other_key); // make sure all of the pkts map to the same key/connection
         }
 
-        let mut connection_tracker =
-            ConnectionTracker::new(context, local_addrs.clone(), raw_sock).await;
+        let mut connection_tracker = ConnectionTracker::new(
+            log_dir,
+            max_connections_per_tracker,
+            local_tcp_ports,
+            local_addrs.clone(),
+            raw_sock,
+        )
+        .await;
 
         connection_tracker.add(syn);
         connection_tracker.add(synack);
@@ -1528,11 +1528,19 @@ pub mod test {
      */
     #[tokio::test]
     async fn three_way_fin_teardown() {
-        let context = make_test_context();
+        let log_dir = ".".to_string();
+        let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.37").unwrap()]);
-        let mut connection_tracker =
-            ConnectionTracker::new(context, local_addrs.clone(), raw_sock).await;
+        let local_tcp_ports = HashSet::from([3030]);
+        let mut connection_tracker = ConnectionTracker::new(
+            log_dir,
+            max_connections_per_tracker,
+            local_tcp_ports,
+            local_addrs.clone(),
+            raw_sock,
+        )
+        .await;
 
         let mut capture =
             pcap::Capture::from_file(test_dir("tests/simple_clear_text_with_fins.pcap")).unwrap();
@@ -1553,12 +1561,19 @@ pub mod test {
      */
     #[tokio::test]
     async fn full_probe_report() {
-        let context = make_test_context();
+        let log_dir = ".".to_string();
+        let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let local_addrs = HashSet::from([IpAddr::from_str("172.31.10.232").unwrap()]);
         let local_tcp_ports = HashSet::from([443]);
-        let mut connection_tracker =
-            ConnectionTracker::new(context, local_addrs.clone(), raw_sock).await;
+        let mut connection_tracker = ConnectionTracker::new(
+            log_dir,
+            max_connections_per_tracker,
+            local_tcp_ports.clone(),
+            local_addrs.clone(),
+            raw_sock,
+        )
+        .await;
 
         let mut connection_key: Option<ConnectionKey> = None;
         let mut capture = pcap::Capture::from_file(test_dir(

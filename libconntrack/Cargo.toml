@@ -1,0 +1,23 @@
+[package]
+name = "libconntrack"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+common = {path = "../webserver/common"}  # TODO move this dir to the top level?
+chrono = "0.4.26"
+etherparse = { git = "https://github.com/robs-zeynet/etherparse", branch="tcp_header"}
+futures = "0.3.28"
+futures-util = "0.3.28"
+hashlru =  "0.11.0"
+itertools = "0.11.0"
+libc = "0.2.146"
+log = "0.4.19"
+pcap = { version = "1.1.0", features = ["capture-stream"]}
+pretty_env_logger = "0.4.0"
+serde = "1.0.177"
+serde_json = "1.0.104"
+tokio = { version="1.29.1", features = ["full"] }
