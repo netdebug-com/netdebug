@@ -79,21 +79,18 @@ impl WebServerContext {
         if !args.web_server_only {
             tokio::spawn(async move {
                 info!("Launching the connection tracker (single instance for now)");
-                let (log_dir, max_connections_per_tracker, local_tcp_port, device) = {
+                let (log_dir, max_connections_per_tracker, device) = {
                     let ctx = context_clone.read().await;
                     (
                         ctx.log_dir.clone(),
                         ctx.max_connections_per_tracker,
-                        ctx.local_tcp_listen_port,
                         ctx.pcap_device.clone(),
                     )
                 };
-                let local_tcp_ports = HashSet::from([local_tcp_port]);
                 let raw_sock = bind_writable_pcap(device).await.unwrap();
                 let mut connection_tracker = ConnectionTracker::new(
                     log_dir,
                     max_connections_per_tracker,
-                    local_tcp_ports,
                     local_addrs,
                     raw_sock,
                 )

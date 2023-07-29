@@ -147,7 +147,6 @@ impl OwnedParsedPacket {
     pub fn to_connection_key(
         &self,
         local_addrs: &HashSet<IpAddr>,
-        local_tcp_ports: &HashSet<u16>,
     ) -> Option<(ConnectionKey, bool)> {
         let (local_ip, remote_ip, source_is_local) = match &self.ip {
             Some(IpHeader::Version4(ip4, _)) => {
@@ -182,7 +181,8 @@ impl OwnedParsedPacket {
                 // NOTE: if local_ip == remote_ip, e.g., 127.0.0.1,
                 // we also need to check the tcp ports to figure out
                 // which side is 'local'/matches the webserver
-                if local_ip != remote_ip || local_tcp_ports.contains(&local_l4_port) {
+                // if src_ip == dst_ip, tie break which is local by l4 port order
+                if local_ip != remote_ip || local_l4_port < remote_l4_port {
                     Some((
                         ConnectionKey {
                             local_ip,
@@ -224,10 +224,10 @@ impl OwnedParsedPacket {
                 ))
             }
             Some(Icmpv4(icmp4)) => {
-                self.to_icmp4_connection_key(icmp4, local_addrs, local_tcp_ports)
+                self.to_icmp4_connection_key(icmp4, local_addrs)
             }
             Some(Icmpv6(icmp6)) => {
-                self.to_icmp6_connection_key(icmp6, local_addrs, local_tcp_ports)
+                self.to_icmp6_connection_key(icmp6, local_addrs)
             }
         }
     }
@@ -236,7 +236,6 @@ impl OwnedParsedPacket {
         &self,
         icmp4: &etherparse::Icmpv4Header,
         local_addrs: &HashSet<IpAddr>,
-        local_tcp_ports: &HashSet<u16>,
     ) -> Option<(ConnectionKey, bool)> {
         use etherparse::Icmpv4Type::*;
         match &icmp4.icmp_type {
@@ -247,10 +246,10 @@ impl OwnedParsedPacket {
             } => None,
             EchoReply(_) => None,
             DestinationUnreachable(_d) => {
-                self.to_icmp_payload_connection_key(local_addrs, local_tcp_ports)
+                self.to_icmp_payload_connection_key(local_addrs)
             }
             Redirect(_) | EchoRequest(_) => None,
-            TimeExceeded(_) => self.to_icmp_payload_connection_key(local_addrs, local_tcp_ports),
+            TimeExceeded(_) => self.to_icmp_payload_connection_key(local_addrs),
             ParameterProblem(_) => None,
             TimestampRequest(_) => None,
             TimestampReply(_) => None,
@@ -266,7 +265,6 @@ impl OwnedParsedPacket {
     fn to_icmp_payload_connection_key(
         &self,
         local_addrs: &HashSet<IpAddr>,
-        local_tcp_ports: &HashSet<u16>,
     ) -> Option<(ConnectionKey, bool)> {
         match OwnedParsedPacket::from_partial_embedded_ip_packet(&self.payload, None) {
             Err(e) => {
@@ -275,7 +273,7 @@ impl OwnedParsedPacket {
             }
             Ok((owned, _full_packet)) => {
                 // ignore if we parsed the full packet - doesn't matter for key
-                match owned.to_connection_key(local_addrs, local_tcp_ports) {
+                match owned.to_connection_key(local_addrs) {
                     Some((key, _src_is_local)) => {
                         // TODO: I can't convince myself there isn't a bug
                         // here if the src actually sources an ICMP message
@@ -302,14 +300,13 @@ impl OwnedParsedPacket {
         &self,
         icmp6: &etherparse::Icmpv6Header,
         local_addrs: &HashSet<IpAddr>,
-        local_tcp_ports: &HashSet<u16>,
     ) -> Option<(ConnectionKey, bool)> {
         match icmp6.icmp_type {
             etherparse::Icmpv6Type::ParameterProblem(_)
             | etherparse::Icmpv6Type::TimeExceeded(_)
             | etherparse::Icmpv6Type::PacketTooBig { mtu: _ }
             | etherparse::Icmpv6Type::DestinationUnreachable(_) => {
-                self.to_icmp_payload_connection_key(local_addrs, local_tcp_ports)
+                self.to_icmp_payload_connection_key(local_addrs)
             }
             // no embedded packet for these types
             etherparse::Icmpv6Type::Unknown {

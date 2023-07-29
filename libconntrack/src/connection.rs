@@ -112,7 +112,6 @@ where
 {
     connections: hashlru::Cache<ConnectionKey, Connection>,
     local_addrs: HashSet<IpAddr>,
-    local_tcp_ports: HashSet<u16>,
     raw_sock: R,
     log_dir: String,
 }
@@ -123,14 +122,12 @@ where
     pub async fn new(
         log_dir: String,
         max_connections_per_tracker: usize,
-        local_tcp_ports: HashSet<u16>,
         local_addrs: HashSet<IpAddr>,
         raw_sock: R,
     ) -> ConnectionTracker<R> {
         ConnectionTracker {
             connections: hashlru::Cache::new(max_connections_per_tracker),
             local_addrs,
-            local_tcp_ports,
             raw_sock,
             log_dir,
         }
@@ -171,7 +168,7 @@ where
 
     pub fn add(&mut self, packet: OwnedParsedPacket) {
         if let Some((key, src_is_local)) =
-            packet.to_connection_key(&self.local_addrs, &self.local_tcp_ports)
+            packet.to_connection_key(&self.local_addrs)
         {
             if let Some(connection) = self.connections.get_mut(&key) {
                 let action = connection.update(packet, &mut self.raw_sock, &key, src_is_local);
@@ -1065,18 +1062,16 @@ pub mod test {
         let mut local_addrs = HashSet::new();
         local_addrs.insert(local_ip);
         local_addrs.insert(localhost_ip); // both the local ip and the localhost ip are 'local'
-        let mut local_tcp_ports = HashSet::new();
-        local_tcp_ports.insert(3030);
 
         let local_pkt = test_tcp_packet_ports(local_ip, remote_ip, 21, 12345);
         let (l_key, src_is_local) = local_pkt
-            .to_connection_key(&local_addrs, &local_tcp_ports)
+            .to_connection_key(&local_addrs)
             .unwrap();
         assert!(src_is_local);
 
         let remote_pkt = test_tcp_packet_ports(remote_ip, local_ip, 12345, 21);
         let (r_key, src_is_local) = remote_pkt
-            .to_connection_key(&local_addrs, &local_tcp_ports)
+            .to_connection_key(&local_addrs)
             .unwrap();
         assert!(!src_is_local);
 
@@ -1084,13 +1079,13 @@ pub mod test {
 
         let local_localhost_pkt = test_tcp_packet_ports(localhost_ip, localhost_ip, 3030, 12345);
         let (ll_key, src_is_local) = local_localhost_pkt
-            .to_connection_key(&local_addrs, &local_tcp_ports)
+            .to_connection_key(&local_addrs)
             .unwrap();
         assert!(src_is_local);
 
         let remote_localhost_pkt = test_tcp_packet_ports(localhost_ip, localhost_ip, 12345, 3030);
         let (rl_key, src_is_local) = remote_localhost_pkt
-            .to_connection_key(&local_addrs, &local_tcp_ports)
+            .to_connection_key(&local_addrs)
             .unwrap();
         assert!(!src_is_local);
 
@@ -1131,11 +1126,9 @@ pub mod test {
         let mut local_addrs = HashSet::new();
         let localhost_ip = IpAddr::from_str("127.0.0.1").unwrap();
         local_addrs.insert(localhost_ip);
-        let local_tcp_ports = HashSet::from([3030]);
         let mut connection_tracker = ConnectionTracker::new(
             log_dir,
             max_connections_per_tracker,
-            local_tcp_ports,
             local_addrs,
             raw_sock,
         )
@@ -1196,11 +1189,9 @@ pub mod test {
         let mut local_addrs = HashSet::new();
         let local_ip = IpAddr::from_str("172.31.2.61").unwrap();
         local_addrs.insert(local_ip);
-        let local_tcp_ports = HashSet::from([3030]);
         let mut connection_tracker = ConnectionTracker::new(
             log_dir,
             max_connections_per_tracker,
-            local_tcp_ports.clone(),
             local_addrs.clone(),
             raw_sock,
         )
@@ -1216,7 +1207,7 @@ pub mod test {
         while let Ok(pkt) = capture.next_packet() {
             let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
             let (key, _) = owned_pkt
-                .to_connection_key(&local_addrs, &local_tcp_ports)
+                .to_connection_key(&local_addrs)
                 .unwrap();
             if let Some(prev_key) = connection_key {
                 assert_eq!(prev_key, key);
@@ -1264,11 +1255,9 @@ pub mod test {
         let mut local_addrs = HashSet::new();
         let local_ip = IpAddr::from_str("172.31.2.61").unwrap();
         local_addrs.insert(local_ip);
-        let local_tcp_ports = HashSet::from([3030]);
         let mut connection_tracker = ConnectionTracker::new(
             log_dir,
             max_connections_per_tracker,
-            local_tcp_ports,
             local_addrs.clone(),
             raw_sock,
         )
@@ -1302,18 +1291,16 @@ pub mod test {
     async fn icmp4_to_connection_key() {
         let mut local_addrs = HashSet::new();
         local_addrs.insert(IpAddr::from_str("172.31.2.61").unwrap());
-        let mut local_tcp_ports = HashSet::new();
-        local_tcp_ports.insert(3030);
         let probe = OwnedParsedPacket::try_from_fake_time(TEST_PROBE.to_vec()).unwrap();
 
         let icmp_reply = OwnedParsedPacket::try_from_fake_time(TEST_REPLY.to_vec()).unwrap();
         let (probe_key, src_is_local) = probe
-            .to_connection_key(&local_addrs, &local_tcp_ports)
+            .to_connection_key(&local_addrs)
             .unwrap();
         assert!(src_is_local);
 
         let (reply_key, src_is_local) = icmp_reply
-            .to_connection_key(&local_addrs, &local_tcp_ports)
+            .to_connection_key(&local_addrs)
             .unwrap();
         assert!(!src_is_local);
 
@@ -1426,7 +1413,6 @@ pub mod test {
         let local_ip = Ipv4Addr::from_str("192.168.1.37").unwrap();
         let local_addrs = HashSet::from([IpAddr::from(local_ip)]);
         let raw_sock = MockRawSocketWriter::new();
-        let local_tcp_ports = HashSet::from([443]);
 
         let syn = OwnedParsedPacket::try_from_fake_time(TEST_1_LOCAL_SYN.to_vec()).unwrap();
         let synack = OwnedParsedPacket::try_from_fake_time(TEST_1_REMOTE_SYNACK.to_vec()).unwrap();
@@ -1438,12 +1424,12 @@ pub mod test {
         let dup_ack = remote_data_ack.clone();
 
         let (key, src_is_local) = syn
-            .to_connection_key(&local_addrs, &local_tcp_ports)
+            .to_connection_key(&local_addrs)
             .unwrap();
         assert!(src_is_local); // not really important for this test, but still should be true
         for pkt in [&synack, &threeway_ack, &local_data, &remote_data_ack] {
             let (other_key, _src_is_local) = pkt
-                .to_connection_key(&local_addrs, &local_tcp_ports)
+                .to_connection_key(&local_addrs)
                 .unwrap();
             assert_eq!(key, other_key); // make sure all of the pkts map to the same key/connection
         }
@@ -1451,7 +1437,6 @@ pub mod test {
         let mut connection_tracker = ConnectionTracker::new(
             log_dir,
             max_connections_per_tracker,
-            local_tcp_ports,
             local_addrs.clone(),
             raw_sock,
         )
@@ -1532,11 +1517,9 @@ pub mod test {
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.37").unwrap()]);
-        let local_tcp_ports = HashSet::from([3030]);
         let mut connection_tracker = ConnectionTracker::new(
             log_dir,
             max_connections_per_tracker,
-            local_tcp_ports,
             local_addrs.clone(),
             raw_sock,
         )
@@ -1565,11 +1548,9 @@ pub mod test {
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let local_addrs = HashSet::from([IpAddr::from_str("172.31.10.232").unwrap()]);
-        let local_tcp_ports = HashSet::from([443]);
         let mut connection_tracker = ConnectionTracker::new(
             log_dir,
             max_connections_per_tracker,
-            local_tcp_ports.clone(),
             local_addrs.clone(),
             raw_sock,
         )
@@ -1585,7 +1566,7 @@ pub mod test {
         while let Ok(pkt) = capture.next_packet() {
             let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
             let (key, _) = owned_pkt
-                .to_connection_key(&local_addrs, &local_tcp_ports)
+                .to_connection_key(&local_addrs)
                 .unwrap();
             // make sure every packet in trace maps to same connection key
             if let Some(prev_key) = connection_key {
