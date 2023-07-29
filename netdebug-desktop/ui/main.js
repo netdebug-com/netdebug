@@ -2,11 +2,19 @@ const { invoke } = window.__TAURI__.tauri;
 
 var interval = null;
 
+// with double-buffering fakery
 async function update_table(table) {
-  var table = document.querySelector("#keys-table");
-  var old_table_body = document.querySelector("#keys-table-body");
-  old_table_body.innerHTML = '';
   let keys = await invoke('dump_connection_keys');
+  var table1 = document.querySelector("#keys-table1");
+  var table2 = document.querySelector("#keys-table2");
+  var old_table_body;
+  // only update the hidden table
+  if (table1.style.display == "none") {
+    old_table_body = document.querySelector("#keys-table-body1");
+  } else {
+    old_table_body = document.querySelector("#keys-table-body2");
+  }
+  old_table_body.innerHTML = '';
   if (keys.length == 0) {
     var row = old_table_body.insertRow(); 
     row.insertCell().textContent = count;
@@ -19,6 +27,13 @@ async function update_table(table) {
       row.insertCell().textContent = count;
       row.insertCell().textContent = k;
     });
+  }
+  if (table1.style.display == "none") {
+    table1.style.display= "inline";
+    table2.style.display= "none";
+  } else {
+    table1.style.display= "none";
+    table2.style.display= "inline";
   }
 }
 

@@ -1,45 +1,64 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="stylesheet" href="styles.css" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
-    <script type="module" src="/main.js" defer></script>
-    <style>
-      .logo.vanilla:hover {
-        filter: drop-shadow(0 0 2em #ffe21c);
-      }
-      table {
-        font-family: arial, sans-serif;
-        border-collapse: collapse;
-        width: 100%;
-      }
 
-      td, th {
-        border: 1px solid #dddddd;
-        text-align: left;
-        padding: 8px;
-      }
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="styles.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tauri App</title>
+  <script type="module" src="/main.js" defer></script>
+  <style>
+    .logo.vanilla:hover {
+      filter: drop-shadow(0 0 2em #ffe21c);
+    }
 
-      tr:nth-child(even) {
-        background-color: #dddddd;
-      }
-    </style>
+    table {
+      font-family: arial, sans-serif;
+      border-collapse: collapse;
+      width: 100%;
+    }
 
-    <button id="pause-button">Pause Upates</button>
-      <h2>Connection Key Table</h2>
-    <table id="keys-table">
+    td,
+    th {
+      border: 1px solid #dddddd;
+      text-align: left;
+      padding: 8px;
+    }
+
+    tr:nth-child(even) {
+      background-color: #dddddd;
+    }
+  </style>
+
+  <button id="pause-button">Pause Upates</button>
+  <h2>Connection Key Table</h2>
+  <div id="div-table1" style="overflow-x:auto;">
+    <table id="keys-table1">
       <thead>
         <tr>
           <th>Key #</th>
           <th>Key</th>
         </tr>
       </thead>
-      <tbody id="keys-table-body">
+      <tbody id="keys-table-body1">
         <!-- Empty until our callback happens -->
       </tbody>
     </table>
+  </div>
+  <div id="div-table2" display="none" style="overflow-x:auto;">
+    <table id="keys-table2">
+      <thead>
+        <tr>
+          <th>Key #</th>
+          <th>Key</th>
+        </tr>
+      </thead>
+      <tbody id="keys-table-body2">
+        <!-- Empty until our callback happens -->
+      </tbody>
+    </table>
+  </div>
 
   </body>
+
 </html>
