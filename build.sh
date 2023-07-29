@@ -12,3 +12,4 @@ fi
 
 cargo build $@
 wasm-pack build --target=web webserver/web-client ${build_opt}
+# add cargo tauri build here?  or cargo tauri dev?
