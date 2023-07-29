@@ -6,7 +6,7 @@ cargo install create-tauri-app  tauri-cli --locked
 * Install OS based deps: https://tauri.app/v1/guides/getting-started/prerequisites/#setting-up-linux
 
 # Day-to-day development
-
+cargo tauri dev  # just runs in background and auto-updates
 
 
 

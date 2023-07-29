@@ -2141,10 +2141,12 @@ dependencies = [
 name = "netdebug-desktop"
 version = "0.0.0"
 dependencies = [
+ "libconntrack",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
+ "tokio",
  "webserver",
 ]
 
