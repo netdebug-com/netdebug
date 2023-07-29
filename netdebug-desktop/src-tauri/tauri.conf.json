@@ -2,8 +2,8 @@
   "build": {
     "beforeDevCommand": "",
     "beforeBuildCommand": "",
-    "devPath": "../src",
-    "distDir": "../src",
+    "devPath": "../ui",
+    "distDir": "../ui",
     "withGlobalTauri": true
   },
   "package": {
@@ -21,7 +21,7 @@
     "bundle": {
       "active": true,
       "targets": "all",
-      "identifier": "com.tauri.dev",
+      "identifier": "com.netdebug.desktop",
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",
@@ -41,6 +41,17 @@
         "width": 800,
         "height": 600
       }
-    ]
+    ],
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://releases.netdebug.com/{{target}}/{{arch}}/{{current_version}}"
+      ],
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJGQ0VERjJBNDc4OTIyQzAKUldUQUlvbEhLdC9PdjVabGtNTmlZWVYwcy9qeGt2RGR6NGdJTFNYNU4zN1NhVnpDZGNEOHVsR1oK",
+      "windows": {
+	"installMode": "passive"
+      }
+    }
   }
 }
