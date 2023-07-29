@@ -13,6 +13,8 @@ edition = "2021"
 tauri-build = { version = "1.4", features = [] }
 
 [dependencies]
+log = "0.4.19"
+pretty_env_logger = "0.5.0"
 tauri = { version = "1.4", features = [ "updater", "shell-open"] }
 tokio = { version="1.29.1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }

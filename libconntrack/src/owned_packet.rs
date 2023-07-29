@@ -223,12 +223,8 @@ impl OwnedParsedPacket {
                     source_is_local, // TODO: figure out UDP + src_ip == dst_ip case
                 ))
             }
-            Some(Icmpv4(icmp4)) => {
-                self.to_icmp4_connection_key(icmp4, local_addrs)
-            }
-            Some(Icmpv6(icmp6)) => {
-                self.to_icmp6_connection_key(icmp6, local_addrs)
-            }
+            Some(Icmpv4(icmp4)) => self.to_icmp4_connection_key(icmp4, local_addrs),
+            Some(Icmpv6(icmp6)) => self.to_icmp6_connection_key(icmp6, local_addrs),
         }
     }
 
@@ -245,9 +241,7 @@ impl OwnedParsedPacket {
                 bytes5to8: _,
             } => None,
             EchoReply(_) => None,
-            DestinationUnreachable(_d) => {
-                self.to_icmp_payload_connection_key(local_addrs)
-            }
+            DestinationUnreachable(_d) => self.to_icmp_payload_connection_key(local_addrs),
             Redirect(_) | EchoRequest(_) => None,
             TimeExceeded(_) => self.to_icmp_payload_connection_key(local_addrs),
             ParameterProblem(_) => None,

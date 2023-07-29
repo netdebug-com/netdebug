@@ -3,16 +3,28 @@ const { invoke } = window.__TAURI__.tauri;
 let greetInputEl;
 let greetMsgEl;
 
-async function greet() {
-  // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
-  greetMsgEl.textContent = await invoke("greet", { name: greetInputEl.value });
+
+async function update_table(table) {
+  var table = document.querySelector("#keys-table");
+  var old_table_body = document.querySelector("#keys-table-body");
+  old_table_body.innerHTML = '';
+  let keys = await invoke('dump_connection_keys');
+  if (keys.length == 0) {
+    var row = old_table_body.insertRow(); 
+    row.insertCell().textContent = count;
+    row.insertCell().textContent = "No flows -- really!?";
+  } else {
+    var count = 0;
+    keys.forEach(k => {
+      var row = old_table_body.insertRow(); 
+      count = count +1;
+      row.insertCell().textContent = count;
+      row.insertCell().textContent = k;
+    });
+  }
 }
 
+
 window.addEventListener("DOMContentLoaded", () => {
-  greetInputEl = document.querySelector("#greet-input");
-  greetMsgEl = document.querySelector("#greet-msg");
-  document.querySelector("#greet-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    greet();
-  });
+  window.setInterval(update_table, 500);
 });

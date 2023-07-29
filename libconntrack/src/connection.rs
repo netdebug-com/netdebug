@@ -96,6 +96,9 @@ pub enum ConnectionTrackerMsg {
         key: ConnectionKey,
         tx: tokio::sync::mpsc::Sender<Vec<AnalysisInsights>>,
     },
+    GetConnectionKeys {
+        tx: tokio::sync::mpsc::Sender<Vec<ConnectionKey>>,
+    },
 }
 
 /***
@@ -161,15 +164,23 @@ where
                 SetUserAgent { user_agent, key } => {
                     self.set_user_agent(key, user_agent).await;
                 }
+                GetConnectionKeys { tx } => {
+                    // so simple, no need for a dedicated function
+                    let keys = self.connections.keys().map(|k| k.clone()).collect();
+                    if let Err(e) = tx.send(keys).await {
+                        warn!(
+                            "Error sendings keys back to caller in GetConnectionKeys(): {}",
+                            e
+                        );
+                    }
+                }
             }
         }
         info!("ConnectionTracker exiting rx_loop()");
     }
 
     pub fn add(&mut self, packet: OwnedParsedPacket) {
-        if let Some((key, src_is_local)) =
-            packet.to_connection_key(&self.local_addrs)
-        {
+        if let Some((key, src_is_local)) = packet.to_connection_key(&self.local_addrs) {
             if let Some(connection) = self.connections.get_mut(&key) {
                 let action = connection.update(packet, &mut self.raw_sock, &key, src_is_local);
                 use ConnectionAction::*;
@@ -1064,23 +1075,17 @@ pub mod test {
         local_addrs.insert(localhost_ip); // both the local ip and the localhost ip are 'local'
 
         let local_pkt = test_tcp_packet_ports(local_ip, remote_ip, 21, 12345);
-        let (l_key, src_is_local) = local_pkt
-            .to_connection_key(&local_addrs)
-            .unwrap();
+        let (l_key, src_is_local) = local_pkt.to_connection_key(&local_addrs).unwrap();
         assert!(src_is_local);
 
         let remote_pkt = test_tcp_packet_ports(remote_ip, local_ip, 12345, 21);
-        let (r_key, src_is_local) = remote_pkt
-            .to_connection_key(&local_addrs)
-            .unwrap();
+        let (r_key, src_is_local) = remote_pkt.to_connection_key(&local_addrs).unwrap();
         assert!(!src_is_local);
 
         assert_eq!(l_key, r_key);
 
         let local_localhost_pkt = test_tcp_packet_ports(localhost_ip, localhost_ip, 3030, 12345);
-        let (ll_key, src_is_local) = local_localhost_pkt
-            .to_connection_key(&local_addrs)
-            .unwrap();
+        let (ll_key, src_is_local) = local_localhost_pkt.to_connection_key(&local_addrs).unwrap();
         assert!(src_is_local);
 
         let remote_localhost_pkt = test_tcp_packet_ports(localhost_ip, localhost_ip, 12345, 3030);
@@ -1126,13 +1131,9 @@ pub mod test {
         let mut local_addrs = HashSet::new();
         let localhost_ip = IpAddr::from_str("127.0.0.1").unwrap();
         local_addrs.insert(localhost_ip);
-        let mut connection_tracker = ConnectionTracker::new(
-            log_dir,
-            max_connections_per_tracker,
-            local_addrs,
-            raw_sock,
-        )
-        .await;
+        let mut connection_tracker =
+            ConnectionTracker::new(log_dir, max_connections_per_tracker, local_addrs, raw_sock)
+                .await;
 
         let mut capture =
             // NOTE: this capture has no FINs so contracker will not remove it
@@ -1206,9 +1207,7 @@ pub mod test {
         // take all of the packets in the capture and pipe them into the connection tracker
         while let Ok(pkt) = capture.next_packet() {
             let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
-            let (key, _) = owned_pkt
-                .to_connection_key(&local_addrs)
-                .unwrap();
+            let (key, _) = owned_pkt.to_connection_key(&local_addrs).unwrap();
             if let Some(prev_key) = connection_key {
                 assert_eq!(prev_key, key);
             }
@@ -1294,14 +1293,10 @@ pub mod test {
         let probe = OwnedParsedPacket::try_from_fake_time(TEST_PROBE.to_vec()).unwrap();
 
         let icmp_reply = OwnedParsedPacket::try_from_fake_time(TEST_REPLY.to_vec()).unwrap();
-        let (probe_key, src_is_local) = probe
-            .to_connection_key(&local_addrs)
-            .unwrap();
+        let (probe_key, src_is_local) = probe.to_connection_key(&local_addrs).unwrap();
         assert!(src_is_local);
 
-        let (reply_key, src_is_local) = icmp_reply
-            .to_connection_key(&local_addrs)
-            .unwrap();
+        let (reply_key, src_is_local) = icmp_reply.to_connection_key(&local_addrs).unwrap();
         assert!(!src_is_local);
 
         assert_eq!(probe_key, reply_key);
@@ -1423,14 +1418,10 @@ pub mod test {
             OwnedParsedPacket::try_from_fake_time(TEST_1_REMOTE_ACK.to_vec()).unwrap();
         let dup_ack = remote_data_ack.clone();
 
-        let (key, src_is_local) = syn
-            .to_connection_key(&local_addrs)
-            .unwrap();
+        let (key, src_is_local) = syn.to_connection_key(&local_addrs).unwrap();
         assert!(src_is_local); // not really important for this test, but still should be true
         for pkt in [&synack, &threeway_ack, &local_data, &remote_data_ack] {
-            let (other_key, _src_is_local) = pkt
-                .to_connection_key(&local_addrs)
-                .unwrap();
+            let (other_key, _src_is_local) = pkt.to_connection_key(&local_addrs).unwrap();
             assert_eq!(key, other_key); // make sure all of the pkts map to the same key/connection
         }
 
@@ -1565,9 +1556,7 @@ pub mod test {
         // take all of the packets in the capture and pipe them into the connection tracker
         while let Ok(pkt) = capture.next_packet() {
             let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
-            let (key, _) = owned_pkt
-                .to_connection_key(&local_addrs)
-                .unwrap();
+            let (key, _) = owned_pkt.to_connection_key(&local_addrs).unwrap();
             // make sure every packet in trace maps to same connection key
             if let Some(prev_key) = connection_key {
                 assert_eq!(prev_key, key);

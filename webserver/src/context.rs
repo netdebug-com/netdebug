@@ -87,7 +87,7 @@ impl WebServerContext {
                         ctx.pcap_device.clone(),
                     )
                 };
-                let raw_sock = bind_writable_pcap(device).await.unwrap();
+                let raw_sock = bind_writable_pcap(device).unwrap();
                 let mut connection_tracker = ConnectionTracker::new(
                     log_dir,
                     max_connections_per_tracker,

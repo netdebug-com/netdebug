@@ -83,6 +83,42 @@ pub async fn start_pcap_stream(
     Ok(())
 }
 
+pub fn blocking_pcap_loop(
+    device_name: String,
+    filter_rule: Option<String>,
+    tx: tokio::sync::mpsc::UnboundedSender<ConnectionTrackerMsg>,
+) -> Result<(), Box<dyn Error>> {
+    let device = lookup_pcap_device_by_name(&device_name)?;
+    info!("Starting pcap capture on {}", &device.name);
+    let mut capture = Capture::from_device(device)?
+        .buffer_size(64_000_000) // try to prevent any packet loss
+        .open()?;
+    // only capture/probe traffic to the webserver
+    if let Some(filter_rule) = filter_rule {
+        info!("Applying pcap filter '{}'", filter_rule);
+        capture.filter(filter_rule.as_str(), true)?;
+    }
+    loop {
+        match capture.next_packet() {
+            Ok(pkt) => {
+                let parsed = etherparse::PacketHeaders::from_ethernet_slice(pkt.data);
+                if let Ok(parsed_pkt) = parsed {
+                    let parsed_packet = OwnedParsedPacket::new(parsed_pkt, pkt.header.clone());
+                    let _hash = parsed_packet.sloppy_hash();
+                    // TODO: use this hash to map to 256 parallel ConnectionTrackers for parallelism
+                    tx.send(ConnectionTrackerMsg::Pkt(parsed_packet)).unwrap();
+                }
+            }
+            Err(e) => {
+                warn!("start_pcap_stream got error: {} - exiting", e);
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /**
  * Bind a socket to a remote addr (8.8.8.8) and see which
  * IP it maps to and return the corresponding device
@@ -175,9 +211,14 @@ impl RawSocketWriter for MockRawSocketWriter {
  * that same instance does NOT actually see the outgoing packet.  We get around this by
  * binding a different instance for reading vs. writing packets.
  */
-pub async fn bind_writable_pcap(
-    device: pcap::Device,
-) -> Result<impl RawSocketWriter, Box<dyn Error>> {
+pub fn bind_writable_pcap(device: pcap::Device) -> Result<impl RawSocketWriter, Box<dyn Error>> {
     let cap = Capture::from_device(device)?.open()?;
     Ok(PcapRawSocketWriter::new(cap))
+}
+
+pub fn bind_writable_pcap_by_name(
+    pcap_device_name: String,
+) -> Result<impl RawSocketWriter, Box<dyn Error>> {
+    let device = lookup_pcap_device_by_name(&pcap_device_name)?;
+    bind_writable_pcap(device)
 }
