@@ -1,8 +1,6 @@
 const { invoke } = window.__TAURI__.tauri;
 
-let greetInputEl;
-let greetMsgEl;
-
+var interval = null;
 
 async function update_table(table) {
   var table = document.querySelector("#keys-table");
@@ -24,7 +22,22 @@ async function update_table(table) {
   }
 }
 
+function toggleInterval() {
+  var button = document.querySelector("#pause-button");
+  if (interval == null) {
+    interval = window.setInterval(update_table, 500);
+    console.log("Enabling updates: new interval=", interval);
+    button.textContent = "Pause Updates";
+  } else {
+    clearInterval(interval);
+    interval = null;
+    console.log("Pausing updates");
+    button.textContent = "Enable Updates";
+  }
+}
+
 
 window.addEventListener("DOMContentLoaded", () => {
-  window.setInterval(update_table, 500);
+  toggleInterval();
+  document.getElementById("pause-button").addEventListener("click", toggleInterval);
 });
