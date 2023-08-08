@@ -4,6 +4,7 @@
 use std::{collections::HashSet, net::IpAddr};
 
 use libconntrack::connection::{ConnectionTracker, ConnectionTrackerMsg};
+use log::warn;
 
 // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
 #[tauri::command]
@@ -105,9 +106,15 @@ fn main() {
             // launch the connection tracker as a tokio::task in the background
             let _connection_tracker_task = tauri::async_runtime::spawn(async move {
                 let context = context_clone; // save some typing/sanity
-                let raw_sock =
+                let raw_sock = match
                     libconntrack::pcap::bind_writable_pcap_by_name(context.pcap_device_name)
-                        .unwrap();
+                        {
+                            Ok(raw) => raw,
+                            Err(e) => {
+                                warn!("Couldn't bind raw socket writer: {}  (run as root?)", e);
+                                std::process::exit(1);
+                            },
+                        };
                 let mut connection_tracker = ConnectionTracker::new(
                     context.log_dir,
                     context.max_connections_per_tracker,
