@@ -1,9 +1,10 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{collections::HashSet, net::IpAddr};
+use std::{collections::{HashSet, HashMap}, net::IpAddr};
 
 use libconntrack::connection::{ConnectionTracker, ConnectionTrackerMsg};
+use log::info;
 
 // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
 #[tauri::command]
@@ -14,7 +15,7 @@ fn greet(name: &str) -> String {
 #[tauri::command]
 async fn dump_connection_keys(
     context: tauri::State<'_, DesktopContext>,
-) -> Result<Vec<String>, String> {
+) -> Result<HashMap<String,Vec<String>>, String> {
     let (tx, mut rx) = tokio::sync::mpsc::channel(10);
     if let Err(e) = context
         .connection_tracker
@@ -23,7 +24,17 @@ async fn dump_connection_keys(
         return Err(format!("dump_connection_keys():: {}", e));
     }
     match rx.recv().await {
-        Some(keys) => Ok(keys.iter().map(|k| format!("{}", k).to_string()).collect()),
+        Some(keys) => {
+            let mut map: HashMap<String, Vec<String>> = HashMap::new();
+            for k in &keys {
+                // group keys by remote IP+Port
+                let hk = format!("{} {}", k.remote_ip, k.remote_l4_port);
+                let v = format!("{}", k);
+                info!("Adding to map {} --> {}", hk, v);
+                map.entry(hk).or_default().push(v);
+            }
+            Ok(map)
+        }
         None => Err("Failed to return any keys!? Check logs".to_string()),
     }
 }

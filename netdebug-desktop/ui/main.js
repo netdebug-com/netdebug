@@ -4,7 +4,9 @@ var interval = null
 
 // with double-buffering fakery
 async function update_table (table) {
-  let keys = await invoke('dump_connection_keys')
+  let flows = await invoke('dump_connection_keys')
+  let keys = Object.keys(flows)
+  console.log("Flows = ", flows, "keys=", keys)
   var table1 = document.querySelector('#keys-table1')
   var table2 = document.querySelector('#keys-table2')
   var old_table_body
