@@ -4,14 +4,36 @@
     <meta charset="UTF-8" />
   </head>
   <body>
+    <p>TODO Pings</p>
+    <p id="location">Waiting for location info...</p>
+    <p id="origin">Waiting for origin info...</p>
     <script>
       var x = document.getElementById('location')
 
       function getLocation() {
+        console.log('Trying geolocation APIs... x=', x)
         if (navigator.geolocation) {
-          navigator.geolocation.getCurrentPosition(showPosition)
+          navigator.geolocation.getCurrentPosition(showPosition, showError)
         } else {
           x.innerHTML = 'Geolocation is not supported by this browser.'
+        }
+        console.log('Done geolocation APIs...')
+      }
+
+      function showError(error) {
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            x.innerHTML = 'User denied the request for Geolocation.'
+            break
+          case error.POSITION_UNAVAILABLE:
+            x.innerHTML = 'Location information is unavailable.'
+            break
+          case error.TIMEOUT:
+            x.innerHTML = 'The request to get user location timed out.'
+            break
+          case error.UNKNOWN_ERROR:
+            x.innerHTML = 'An unknown error occurred.'
+            break
         }
       }
 
@@ -23,10 +45,17 @@
           position.coords.longitude
       }
 
-      window.onload = getLocation
+      function getOrigin() {
+        var o = document.getElementById('origin')
+        o.innerHTML = window.location.origin
+      }
+
+      window.onload = init
+      
+      function init () {
+        getLocation()
+        getOrigin()
+      }
     </script>
-    <p>TODO Pings</p>
-    <button onclick="getLocation()">Lookup Geolocation</button>
-    <p name="location">Waiting for location info...</p>
   </body>
 </html>
