@@ -6,10 +6,10 @@ use libconntrack::{
     pcap::{lookup_egress_device, lookup_pcap_device_by_name},
 };
 use log::info;
-use websocket::websocket_handler;
 use std::{error::Error, net::IpAddr};
 use tokio::sync::mpsc::UnboundedSender;
 use warp::Filter;
+use websocket::websocket_handler;
 
 /// Netdebug desktop
 #[derive(Parser, Debug, Clone)]

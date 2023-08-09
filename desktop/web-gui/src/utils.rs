@@ -19,10 +19,22 @@ pub fn set_panic_hook() {
  * /// })
  * /// assert_eq!(div.get_attribute("name"), Some("root_div");
  * ///
+ * 
+ * A smarter person than I would have been able to simplify this into a single case...
  */
 
 #[macro_export]
 macro_rules! html {
+    // html!("div", {"key"=>"value", ...})
+    ($e:expr) => {
+        {
+        (|| -> Result<web_sys::Element, wasm_bindgen::JsValue> {
+        let d = web_sys::window().expect("window").document().expect("document");
+        let element = d.create_element($e)?;
+        Ok(element)
+    })()
+    }
+    };
     ($e:expr, {$( $k:expr => $v:expr ),* $(,)?}) => {
         {
         (|| -> Result<web_sys::Element, wasm_bindgen::JsValue> {
@@ -34,5 +46,21 @@ macro_rules! html {
         Ok(element)
     })()
     }
+    };
+    // html!("div", {"key"=>"value", ...}, child1, child2, ...)
+    ($e:expr, {$( $k:expr => $v:expr ),* $(,)?}, $($c:expr),*) => {
+        {
+        (|| -> Result<web_sys::Element, wasm_bindgen::JsValue> {
+        let d = web_sys::window().expect("window").document().expect("document");
+        let element = d.create_element($e)?;
+        $(
+            element.set_attribute($k,$v)?;
+        )*
+        $(
+            element.append_child($c)?;
+        )*
+        Ok(element)
+    })()
     }
+    };
 }

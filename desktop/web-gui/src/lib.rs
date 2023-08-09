@@ -1,4 +1,8 @@
+mod tabs;
 mod utils;
+use std::sync::Arc;
+
+use tabs::{Tab, Tabs, TabsContext};
 use web_sys::{MessageEvent, WebSocket};
 
 use wasm_bindgen::prelude::*;
@@ -44,6 +48,21 @@ fn create_websocket() -> Result<WebSocket, JsValue> {
     Ok(ws)
 }
 
+fn init_tabs() -> Result<Tabs, JsValue> {
+    let tabs: Vec<Tab> = ["alpha", "beta", "gamma"]
+        .into_iter()
+        .map(|t| Tab {
+            name: t.to_string(),
+            text: t.to_string(),
+            on_activate: None,
+            on_deactivate: None,
+        })
+        .collect();
+    let tabs = Arc::new(TabsContext::new(tabs, "alpha".to_string()));
+    tabs.construct()?;
+    Ok(tabs)
+}
+
 /**
  * Handle a message from the server, from the websocket
  */
@@ -81,6 +100,7 @@ fn handle_version_check(ver: String) -> Result<(), JsValue> {
 #[wasm_bindgen(start)]
 pub fn run() -> Result<(), JsValue> {
     utils::set_panic_hook();
+    let _tabs = init_tabs()?;
     let _ws = create_websocket()?;
 
     console_log!("working!?");
