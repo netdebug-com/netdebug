@@ -1,12 +1,14 @@
+mod websocket;
+
 use clap::Parser;
 use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg},
     pcap::{lookup_egress_device, lookup_pcap_device_by_name},
 };
-use log::{info, warn};
+use log::info;
+use websocket::websocket_handler;
 use std::{error::Error, net::IpAddr};
 use tokio::sync::mpsc::UnboundedSender;
-use warp::ws::WebSocket;
 use warp::Filter;
 
 /// Netdebug desktop
@@ -118,7 +120,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     info!(
         "Running desktop version: {}",
-        common::get_git_hash_version()
+        desktop_common::get_git_hash_version()
     );
     let listen_addr = ([127, 0, 0, 1], args.listen_port);
     warp::serve(make_desktop_http_routes(&args.wasm_root, &args.html_root, tx).await)
@@ -169,13 +171,4 @@ pub async fn websocket_desktop(
     ws: warp::ws::Ws,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     Ok(ws.on_upgrade(move |websocket| websocket_handler(connection_tracker, websocket)))
-}
-
-
-// TODO: do something with this
-async fn websocket_handler(
-    _connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
-    _ws: WebSocket,
-) {
-    warn!("Got a websocket connection! ")
 }

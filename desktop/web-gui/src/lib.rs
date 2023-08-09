@@ -1,5 +1,5 @@
 mod utils;
-use web_sys::WebSocket;
+use web_sys::{MessageEvent, WebSocket};
 
 use wasm_bindgen::prelude::*;
 macro_rules! console_log {
@@ -30,14 +30,59 @@ fn create_websocket() -> Result<WebSocket, JsValue> {
     };
     let url = format!("{}://{}/ws", proto, location.host()?);
     let ws = WebSocket::new(url.as_str())?;
+    let ws_clone = ws.clone();
+    let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
+        // double clone needed to match function prototypes - apparently(!?)
+        if let Err(js_value) = handle_ws_message(e, ws_clone.clone()) {
+            // TODO: reload whole document on JsValue("need to reload")
+            console_log!("Error! {:?}", js_value);
+        }
+    });
+
+    ws.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
+    onmessage_callback.forget(); // MAGIC: tell rust not to deallocate this!
     Ok(ws)
 }
 
+/**
+ * Handle a message from the server, from the websocket
+ */
+
+fn handle_ws_message(e: MessageEvent, _ws: WebSocket) -> Result<(), JsValue> {
+    let raw_msg = e.data().as_string().unwrap();
+    let msg: desktop_common::ServerToGuiMessages = serde_json::from_str(raw_msg.as_str()).unwrap();
+    use desktop_common::ServerToGuiMessages::*;
+    match msg {
+        VersionCheck(ver) => handle_version_check(ver),
+    }
+}
+
+/**
+ * Are the server and GUI running from the same code base?
+ * This can get out of sync if the server needs to reload
+ */
+
+fn handle_version_check(ver: String) -> Result<(), JsValue> {
+    if ver == desktop_common::get_git_hash_version() {
+        console_log!("Both GUI and desktop are running version: {}", ver);
+    } else {
+        console_log!(
+            "GUI is running version {} but desktop is {}!! Reload!",
+            desktop_common::get_git_hash_version(),
+            ver
+        );
+        // TODO: make this cleaner/less scary for the user - maybe an alert?
+        // reload the page
+        web_sys::window().expect("window").location().reload()?;
+    }
+    Ok(())
+}
 
 #[wasm_bindgen(start)]
 pub fn run() -> Result<(), JsValue> {
     utils::set_panic_hook();
     let _ws = create_websocket()?;
+
     console_log!("working!?");
     Ok(())
 }
