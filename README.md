@@ -3,9 +3,16 @@ Netdebug.com
 
 Network debugging as a service.  We help our customers help their customers solve their joint networking problems.
 
+* Desktop product --> ./desktop
 * Web product --> ./webserver
 * Developer docs --> ./docs
-* Quick start: 
+* Quick start desktop: 
+    * Build debug and run webserver binding localhost:3030 : 
+    ```
+    ./build.sh && sudo ./target/debug/desktop
+    xdg-open http://localhost:33434
+    ```
+* Quick start webserver: 
     * Build debug and run webserver binding localhost:3030 : 
     ```
     cargo build && sudo ./target/debug/webserver
