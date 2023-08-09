@@ -381,7 +381,8 @@ impl Connection {
                 todo!("Need to implement icmp6 handling")
             }
             _ => {
-                warn!("Got Connection::update() for non-TCP/ICMPv4 packet - ignoring for now");
+                // TODO: UdpTracking!
+                debug!("Got Connection::update() for non-TCP/ICMPv4 packet - ignoring for now");
                 ConnectionAction::Noop
             }
         }
