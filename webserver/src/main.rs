@@ -5,7 +5,7 @@ use libconntrack::pcap::start_pcap_stream;
 use libwebserver::context::{Args, WebServerContext};
 
 use clap::Parser;
-use libwebserver::http_routes::make_http_routes;
+use libwebserver::http_routes::make_webserver_http_routes;
 use log::info;
 use tokio::sync::RwLock;
 
@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ([127, 0, 0, 1], args.listen_port)
     };
 
-    warp::serve(make_http_routes(context).await)
+    warp::serve(make_webserver_http_routes(context).await)
         .run(listen_addr)
         .await;
     Ok(())

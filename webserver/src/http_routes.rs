@@ -6,7 +6,12 @@ use crate::webtest;
 use warp::http::StatusCode;
 use warp::{cookie::cookie, Filter, Reply};
 
-pub async fn make_http_routes(
+/**
+ * This library is used by both desktop and webserver apps but
+ * this function is only for the webserver (e.g., is passwd protected), thus the name.
+ */
+
+pub async fn make_webserver_http_routes(
     context: Context,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     // cache these so we don't need a lock every time to access
@@ -15,7 +20,7 @@ pub async fn make_http_routes(
 
     let login = make_login_route(&context).with(warp::log("login"));
     let webtest = make_webtest_route(&context).with(warp::log("webtest"));
-    let webclient = make_webclient_route(&context, &wasm_root).with(warp::log("webclient"));
+    let webclient = make_webclient_route(&wasm_root).with(warp::log("webclient"));
     let ws = make_ws_route(&context).with(warp::log("websocket"));
     let static_path = warp::path("static")
         .and(warp::fs::dir(format!("{}/static", html_root)))
@@ -79,8 +84,7 @@ fn make_webtest_route(
         .and_then(webtest)
 }
 
-fn make_webclient_route(
-    _context: &Context,
+pub fn make_webclient_route(
     wasm_root: &String,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     /* First pass, with cookie checking
@@ -115,6 +119,14 @@ fn with_context(
     let context = context.clone();
     warp::any().map(move || context.clone())
 }
+
+/*
+fn with_handler(
+    handler: WebSocketHandler,
+) -> impl Filter<Extract = (WebSocketHandler,), Error = std::convert::Infallible> + Clone {
+    warp::any().map(move || handler.clone())
+}
+*/
 
 fn _with_string(
     s: &String,
@@ -235,7 +247,7 @@ mod test {
     #[tokio::test]
     async fn test_no_cookies() {
         let context = crate::context::test::make_test_context();
-        let all_routes = make_http_routes(context);
+        let all_routes = make_webserver_http_routes(context);
 
         let resp = warp::test::request()
             .path("/garbage")
@@ -250,7 +262,7 @@ mod test {
     #[tokio::test]
     async fn test_passwords() {
         let context = make_test_context();
-        let all_routes = make_http_routes(context.clone()).await;
+        let all_routes = make_webserver_http_routes(context.clone()).await;
 
         // now verify that a bad passwd gets a 403
         let resp = warp::test::request()
@@ -300,7 +312,7 @@ mod test {
     #[tokio::test]
     async fn test_postauth_badcookie() {
         let context = make_test_context();
-        let all_routes = make_http_routes(context.clone()).await;
+        let all_routes = make_webserver_http_routes(context.clone()).await;
 
         // now verify that a bad cookie gets a 403
         let resp = warp::test::request()
@@ -315,7 +327,7 @@ mod test {
     #[tokio::test]
     async fn test_postauth_goodcookie() {
         let context = make_test_context();
-        let all_routes = make_http_routes(context.clone());
+        let all_routes = make_webserver_http_routes(context.clone());
 
         // now verify that a good cookie gets a 200
         let resp = warp::test::request()
@@ -330,7 +342,7 @@ mod test {
     #[tokio::test]
     async fn test_postauth_webclient_goodcookie() {
         let context = make_test_context();
-        let all_routes = make_http_routes(context.clone());
+        let all_routes = make_webserver_http_routes(context.clone());
 
         // now verify that a good cookie gets a 200
         let resp = warp::test::request()

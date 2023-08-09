@@ -1,40 +1,13 @@
 [package]
-name = "webserver"
+name = "desktop"
 version = "0.1.0"
 edition = "2021"
-default-run = "webserver"  # needed as we have multiple binaries
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[[bin]]
-# main webserver binary, but just the wrapper around the libwebserver
-name = "webserver"
-path = "src/main.rs"
-
-[lib]
-# almost all code lives here, eases testing to have in a library
-name = "libwebserver"
-path = "src/lib.rs"
-
-[[bin]]
-# CLI utility for mananging passwords
-name = "webserver_passwd"
-path = "src/webserver_passwd_cli.rs"
-required-features = ["cli"]
-
-[[bin]]
-# CLI utility for mananging passwords
-name = "netdebug_cli"
-path = "src/cli.rs"
-## Consider uncommenting if we want to improve build speeds
-# required-features = ["cli"]
-
-[features]
-cli = []
-
 [dependencies]
 # pls keep in alpha order
-common = { path = "./common" }
+common = { path = "../webserver/common" }
 chrono = "0.4.26"
 clap = { version = "4.2.7", features = ["derive"] }
 # move back to the public branch once https://github.com/JulianSchmid/etherparse/pull/66 is merged
@@ -45,12 +18,11 @@ etherparse = { git = "https://github.com/robs-zeynet/etherparse", branch="tcp_he
 futures = "0.3.28"
 futures-util = "0.3.28"
 libconntrack = {path = "../libconntrack"}
+webserver = {path = "../webserver"}
 log = "0.4.18"
 itertools = "0.11.0"
 pcap = "1.1.0"
 pretty_env_logger = "0.5.0"
-pwhash = "1.0.0"
-rand = "0.8.5"
 serde = { version = "1.0.163", features = ["derive"] }
 serde_json = "1.0.96"
 tokio = { version="1.28.2", features = ["full"] }

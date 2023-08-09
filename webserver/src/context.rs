@@ -116,7 +116,7 @@ fn check_log_dir(log_dir: &str) -> Result<(), std::io::Error> {
     }
 }
 
-/// Simple program to greet a person
+/// Netdebug webserver
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
