@@ -3,7 +3,7 @@ use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg},
     pcap::{lookup_egress_device, lookup_pcap_device_by_name},
 };
-use log::info;
+use log::{info, warn};
 use std::{error::Error, net::IpAddr};
 use tokio::sync::mpsc::UnboundedSender;
 use warp::ws::WebSocket;
@@ -13,6 +13,10 @@ use warp::Filter;
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
+    /// the base of the WASM build directory, where web-client{.js,_bs.wasm} live
+    #[arg(long, default_value = "desktop/html")]
+    pub html_root: String,
+
     /// the base of the WASM build directory, where web-client{.js,_bs.wasm} live
     #[arg(long, default_value = "desktop/web-gui/pkg")]
     pub wasm_root: String,
@@ -117,7 +121,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         common::get_git_hash_version()
     );
     let listen_addr = ([127, 0, 0, 1], args.listen_port);
-    warp::serve(make_desktop_http_routes(&args.wasm_root, tx).await)
+    warp::serve(make_desktop_http_routes(&args.wasm_root, &args.html_root, tx).await)
         .run(listen_addr)
         .await;
     Ok(())
@@ -127,18 +131,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 pub async fn make_desktop_http_routes(
     wasm_root: &String,
+    html_root: &String,
     connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     let webclient =
         libwebserver::http_routes::make_webclient_route(&wasm_root).with(warp::log("webclient"));
     let ws = make_desktop_ws_route(connection_tracker).with(warp::log("websocket"));
+    let static_path = warp::fs::dir(html_root.clone()).with(warp::log("static"));
 
     // this is the order that the filters try to match; it's important that
-    // it's in this order to make sure the cookie auth works right
-    let routes = ws.or(webclient);
+    // it's in this order to make sure the routing works correctly
+    let routes = ws.or(webclient).or(static_path);
     routes
 }
 
+// this function just wraps the connection tracker to make sure the types are understood
 fn with_connection_tracker(
     connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
 ) -> impl warp::Filter<
@@ -168,5 +175,5 @@ async fn websocket_handler(
     _connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
     _ws: WebSocket,
 ) {
-    todo!()
+    warn!("Got a websocket connection! ")
 }
