@@ -29,3 +29,38 @@ wasm-bindgen-test = "0.3.34"
 #[profile.release]
 # Tell `rustc` to optimize for small code size.
 #opt-level = "s"
+
+# separate out web-sys deps as they are so complicated
+[dependencies.web-sys]
+version = "0.3.46"
+features = [
+    'BinaryType',
+    'Blob',
+    'CanvasRenderingContext2d',
+    'console',
+    'Document',
+    'Element',
+    'ErrorEvent',
+    'FileReader',
+    'Geolocation',
+    'Headers',
+    'HtmlButtonElement',
+    'HtmlCanvasElement',
+    'HtmlElement',
+# Just use the raw element access... 
+#    'HtmlTableElement',
+#    'HtmlTableRowElement',
+#    'HtmlTableSectionElement',
+    'HtmlTextAreaElement',
+    'Location',
+    'MessageEvent',
+    'Node',
+    'Performance',
+    'ProgressEvent',
+    'Request',
+    'RequestInit',
+    'RequestMode',
+    'Response',
+    'Window',
+    'WebSocket',
+]

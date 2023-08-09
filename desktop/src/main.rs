@@ -171,6 +171,8 @@ pub async fn websocket_desktop(
     Ok(ws.on_upgrade(move |websocket| websocket_handler(connection_tracker, websocket)))
 }
 
+
+// TODO: do something with this
 async fn websocket_handler(
     _connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
     _ws: WebSocket,
