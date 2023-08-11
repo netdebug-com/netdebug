@@ -7,4 +7,10 @@ pub fn get_git_hash_version() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServerToGuiMessages {
     VersionCheck(String),
+    DumpFlowsReply(Vec<String>)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GuiToServerMessages {
+    DumpFlows(),
 }
