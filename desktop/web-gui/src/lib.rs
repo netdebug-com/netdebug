@@ -78,23 +78,9 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, tabs: Tabs) -> Result<(), J
     use desktop_common::ServerToGuiMessages::*;
     match msg {
         VersionCheck(ver) => handle_version_check(ver),
-        DumpFlowsReply(flows) => handle_dumpflows_reply(flows, ws.clone(), tabs.clone()),
+        DumpFlowsReply(flows) => flow_tracker::handle_dumpflows_reply(flows, ws.clone(), tabs.clone()),
     }
 }
-
-fn handle_dumpflows_reply(flows: Vec<String>, _ws: WebSocket, tabs: Tabs) -> Result<(), JsValue> {
-    // this is a reply just for the flow tracker tab; ignore if it's not active
-    // note that even when we cancel the timer event for the flow tracker and change the
-    // active tab to something else, we could still get this event if we lose the race
-    if tabs.lock().unwrap().get_active_tab() == flow_tracker::FLOW_TRACKER_TAB {
-        // TODO: log as a table
-        for flow in flows {
-            console_log!("Flow: {}", flow);
-        }
-    }
-    Ok(())
-}
-
 /**
  * Are the server and GUI running from the same code base?
  * This can get out of sync if the server needs to reload

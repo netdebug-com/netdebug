@@ -1,10 +1,10 @@
 use desktop_common::GuiToServerMessages;
 use wasm_bindgen::prelude::Closure;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{MessageEvent, WebSocket};
 
-use crate::tabs::Tab;
-use crate::{console_log, log};
+use crate::tabs::{Tab, Tabs};
+use crate::{console_log, html, log};
 
 #[derive(Debug, Clone)]
 pub struct FlowTracker {
@@ -12,6 +12,7 @@ pub struct FlowTracker {
 }
 
 pub const FLOW_TRACKER_TAB: &str = "flow_tracker";
+pub const FLOW_TRACKER_TABLE: &str = "__TABLE_flow_tracker";
 
 impl FlowTracker {
     pub(crate) fn new() -> Tab {
@@ -38,7 +39,21 @@ impl FlowTracker {
             .document()
             .expect("document");
         let content = d.get_element_by_id("tab_content").expect("tab content div");
-        content.set_inner_html(format!("Content for the {} tab", tab.name).as_str());
+        content.set_inner_html("");
+
+        let h1 = html!("th").unwrap();
+        h1.set_inner_html("Flow #");
+        let h2 = html!("th").unwrap();
+        h2.set_inner_html("Flow Key");
+        let thead = html!("thead", {}, html!("tr", {}, h1, h2).unwrap()).unwrap();
+        let table = html!(
+            "table",
+            {},
+            &thead,
+            html!("tbody", { "id" => FLOW_TRACKER_TABLE}).unwrap()
+        )
+        .expect("table");
+        content.append_child(&table).expect("context.append");
         // send one message immediately to get us started
         let msg = GuiToServerMessages::DumpFlows();
         if let Err(e) = ws.send_with_str(&serde_json::to_string(&msg).unwrap()) {
@@ -55,7 +70,8 @@ impl FlowTracker {
             .data
             .as_mut()
             .expect("No flowtracker data!?")
-            .downcast_mut::<FlowTracker>().expect("no flowtracker data!?");
+            .downcast_mut::<FlowTracker>()
+            .expect("no flowtracker data!?");
         let window = web_sys::window().expect("window");
         match window.set_interval_with_callback_and_timeout_and_arguments_0(
             periodic.as_ref().unchecked_ref(),
@@ -76,13 +92,37 @@ impl FlowTracker {
             .data
             .as_mut()
             .expect("No flowtracker data!?")
-            .downcast_mut::<FlowTracker>().expect("no flowtracker data!?");
+            .downcast_mut::<FlowTracker>()
+            .expect("no flowtracker data!?");
         let window = web_sys::window().expect("window");
         if let Some(timeout_id) = flow_tracker.timeout_id {
             // DOM implements no return value for this, so I guess pray() it works!?
             window.clear_interval_with_handle(timeout_id);
             flow_tracker.timeout_id = None;
         }
-
     }
+}
+
+pub fn handle_dumpflows_reply(
+    flows: Vec<String>,
+    _ws: WebSocket,
+    tabs: Tabs,
+) -> Result<(), JsValue> {
+    // this message is just for the flow tracker tab; ignore if it's not active
+    // note that even when we cancel the timer event for the flow tracker and change the
+    // active tab to something else, we could still get this event if we lose the race
+    if tabs.lock().unwrap().get_active_tab() == FLOW_TRACKER_TAB {
+        // TODO: log as a table
+        let d = web_sys::window().expect("window").document().expect("document");
+        let tbody = d.get_element_by_id(FLOW_TRACKER_TABLE).expect(FLOW_TRACKER_TABLE);
+        tbody.set_inner_html("");   // clear the table (??)
+        for (idx, flow) in flows.into_iter().enumerate() {
+            let idx_elm = html!("td").unwrap();
+            idx_elm.set_inner_html(format!("{}", idx).as_str());
+            let flow_elm = html!("td").unwrap();
+            flow_elm.set_inner_html(flow.as_str());
+            tbody.append_child(&html!("tr", {}, idx_elm, flow_elm).unwrap()).unwrap();
+        }
+    }
+    Ok(())
 }

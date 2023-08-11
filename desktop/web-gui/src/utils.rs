@@ -10,15 +10,23 @@ pub fn set_panic_hook() {
 }
 
 /**
- * Super helpful HTML macro that will create an element and set all of the attributes
+ * Modestly helpful HTML macro that will create an element and set all of the attributes
  *
  * /// let div = html!("div", {
  * ///  "name" => "root_div",
  * ///  "id" => "container",
  * ///   /* .... more attributes*/
- * /// })
+ * /// });
  * /// assert_eq!(div.get_attribute("name"), Some("root_div");
  * ///
+ * 
+ * Alternatively, can also append children at the end
+ * /// let list = html!("ui", {"id = "mylist"},
+ * ///      html!("li", {"inner_html" => "item1"}),
+ * ///      html!("li", {"inner_html" => "item2"}),
+ * ///      html!("li", {"inner_html" => "item3"}),
+ * /// );
+ * /// assert_eq!(list.children().lenght(), 3);
  * 
  * A smarter person than I would have been able to simplify this into a single case...
  */
@@ -57,7 +65,7 @@ macro_rules! html {
             element.set_attribute($k,$v)?;
         )*
         $(
-            element.append_child($c)?;
+            element.append_child(&$c)?;
         )*
         Ok(element)
     })()
