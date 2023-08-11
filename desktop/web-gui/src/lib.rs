@@ -54,12 +54,23 @@ fn init_tabs() -> Result<Tabs, JsValue> {
         .map(|t| Tab {
             name: t.to_string(),
             text: t.to_string(),
-            on_activate: None,
+            on_activate: Some(move |tab| {
+                let d = web_sys::window()
+                    .expect("window")
+                    .document()
+                    .expect("document");
+                let content = d.get_element_by_id("tab_content").expect("tab content div");
+                content.set_inner_html(format!("Content for the {} tab", tab.name).as_str());
+            }),
             on_deactivate: None,
         })
         .collect();
-    let tabs = Arc::new(TabsContext::new(tabs, "alpha".to_string()));
-    tabs.construct()?;
+    let tabs = Arc::new(std::sync::Mutex::new(TabsContext::new(
+        tabs,
+        "alpha".to_string(),
+    )));
+    let tabs_clone = tabs.clone();
+    tabs.lock().unwrap().construct(tabs_clone)?;
     Ok(tabs)
 }
 
