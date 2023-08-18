@@ -1,14 +1,15 @@
-use std::error::Error;
-use std::sync::Arc;
-
+#[cfg(not(windows))]
 use libconntrack::pcap::start_pcap_stream;
 use libwebserver::context::{Args, WebServerContext};
+use std::error::Error;
+use std::sync::Arc;
 
 use clap::Parser;
 use libwebserver::http_routes::make_webserver_http_routes;
 use log::info;
 use tokio::sync::RwLock;
 
+#[cfg(not(windows))]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // if RUST_LOG isn't set explicitly, set RUST_LOG=info as a default
@@ -61,4 +62,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .run(listen_addr)
         .await;
     Ok(())
+}
+
+#[cfg(windows)]
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    panic!("Webserver not supported on windows - even if some of it compiles");
 }

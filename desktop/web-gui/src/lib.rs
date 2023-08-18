@@ -78,7 +78,9 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, tabs: Tabs) -> Result<(), J
     use desktop_common::ServerToGuiMessages::*;
     match msg {
         VersionCheck(ver) => handle_version_check(ver),
-        DumpFlowsReply(flows) => flow_tracker::handle_dumpflows_reply(flows, ws.clone(), tabs.clone()),
+        DumpFlowsReply(flows) => {
+            flow_tracker::handle_dumpflows_reply(flows, ws.clone(), tabs.clone())
+        }
     }
 }
 /**

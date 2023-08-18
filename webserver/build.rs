@@ -1,6 +1,6 @@
-/*
 use std::env;
 use std::path::Path;
+/*
 use std::process::Command;
 */
 
@@ -54,4 +54,11 @@ fn main() {
         println!("cargo:rustc-env=PROJECT_NAME_JS={}", js_file.display());
         println!("cargo:rustc-env=PROJECT_NAME_WASM={}", wasm_file.display());
     */
+
+    let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    #[cfg(windows)]
+    println!(
+        "cargo:rustc-link-search=native={}",
+        Path::new(&dir).join("../lib/x64").display()
+    );
 }

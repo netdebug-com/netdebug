@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, any::Any};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 use wasm_bindgen::{prelude::Closure, JsCast, JsValue};
 use web_sys::{HtmlElement, MessageEvent, WebSocket};
@@ -82,7 +82,10 @@ impl TabsContext {
         let container = html!("div", {"id" => "tab_content", "class" => "tabs_content"})?;
         body.append_child(&container)?;
         // do this after we've added everything to the DOM
-        let active_tab = self.tabs.get_mut(&self.active_tab).expect("no active tab!?");
+        let active_tab = self
+            .tabs
+            .get_mut(&self.active_tab)
+            .expect("no active tab!?");
         // need to manually call this here rather than call the activate() function
         // as there is no old tab to deactivate
         if let Some(activate_fn) = &active_tab.on_activate {

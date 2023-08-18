@@ -3,6 +3,7 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 use crate::connection::ConnectionTrackerMsg;
+#[cfg(not(windows))]
 use futures_util::StreamExt;
 use log::{info, warn};
 use pcap::Capture;

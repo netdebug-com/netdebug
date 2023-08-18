@@ -113,15 +113,22 @@ pub fn handle_dumpflows_reply(
     // active tab to something else, we could still get this event if we lose the race
     if tabs.lock().unwrap().get_active_tab() == FLOW_TRACKER_TAB {
         // TODO: log as a table
-        let d = web_sys::window().expect("window").document().expect("document");
-        let tbody = d.get_element_by_id(FLOW_TRACKER_TABLE).expect(FLOW_TRACKER_TABLE);
-        tbody.set_inner_html("");   // clear the table (??)
+        let d = web_sys::window()
+            .expect("window")
+            .document()
+            .expect("document");
+        let tbody = d
+            .get_element_by_id(FLOW_TRACKER_TABLE)
+            .expect(FLOW_TRACKER_TABLE);
+        tbody.set_inner_html(""); // clear the table (??)
         for (idx, flow) in flows.into_iter().enumerate() {
             let idx_elm = html!("td").unwrap();
             idx_elm.set_inner_html(format!("{}", idx).as_str());
             let flow_elm = html!("td").unwrap();
             flow_elm.set_inner_html(flow.as_str());
-            tbody.append_child(&html!("tr", {}, idx_elm, flow_elm).unwrap()).unwrap();
+            tbody
+                .append_child(&html!("tr", {}, idx_elm, flow_elm).unwrap())
+                .unwrap();
         }
     }
     Ok(())

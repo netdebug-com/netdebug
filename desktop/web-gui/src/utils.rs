@@ -19,7 +19,7 @@ pub fn set_panic_hook() {
  * /// });
  * /// assert_eq!(div.get_attribute("name"), Some("root_div");
  * ///
- * 
+ *
  * Alternatively, can also append children at the end
  * /// let list = html!("ui", {"id = "mylist"},
  * ///      html!("li", {"inner_html" => "item1"}),
@@ -27,7 +27,7 @@ pub fn set_panic_hook() {
  * ///      html!("li", {"inner_html" => "item3"}),
  * /// );
  * /// assert_eq!(list.children().lenght(), 3);
- * 
+ *
  * A smarter person than I would have been able to simplify this into a single case...
  */
 

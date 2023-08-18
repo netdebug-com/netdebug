@@ -553,8 +553,8 @@ impl<'de> Deserialize<'de> for OwnedParsedPacket {
                                 map.next_value::<(i64, i64, u32, u32)>()?;
                             pkt.pcap_header = PacketHeader {
                                 ts: libc::timeval {
-                                    tv_sec: sec,
-                                    tv_usec: usec,
+                                    tv_sec: sec as i32,
+                                    tv_usec: usec as i32,
                                 },
                                 caplen,
                                 len,

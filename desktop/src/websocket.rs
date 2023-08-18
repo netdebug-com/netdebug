@@ -3,7 +3,7 @@ use futures_util::{
     SinkExt, StreamExt,
 };
 use libconntrack::connection::ConnectionTrackerMsg;
-use log::{info, warn, debug};
+use log::{debug, info, warn};
 use tokio::sync::mpsc::UnboundedSender;
 use warp::ws::{self, Message, WebSocket};
 
@@ -76,7 +76,7 @@ async fn handle_gui_to_server_msg(
         GuiToServerMessages::DumpFlows() => {
             debug!("Got DumpFlows request");
             handle_gui_dumpflows(tx, connection_tracker).await;
-        },
+        }
     }
 }
 
@@ -100,7 +100,6 @@ async fn handle_gui_dumpflows(
     if let Err(e) = tx.send(ServerToGuiMessages::DumpFlowsReply(key_strings)) {
         warn!("Sending to GUI trigged: {}", e);
     }
-
 }
 
 /**
