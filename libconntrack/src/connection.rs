@@ -377,8 +377,16 @@ impl Connection {
                     self.update_icmp4_remote(&packet, icmp4)
                 }
             }
-            Some(TransportHeader::Icmpv6(_icmp6)) => {
-                todo!("Need to implement icmp6 handling")
+            Some(TransportHeader::Icmpv6(icmp6)) => {
+                if src_is_local {
+                    warn!(
+                        "Ignoring ICMP6 from our selves but for this connection: {} : {:?}",
+                        key, packet
+                    );
+                    ConnectionAction::Noop
+                } else {
+                    self.update_icmp6_remote(&packet, icmp6)
+                }
             }
             _ => {
                 // TODO: UdpTracking!
@@ -665,6 +673,22 @@ impl Connection {
         ConnectionAction::Noop
     }
 
+    fn update_icmp6_remote(
+        &mut self,
+        packet: &OwnedParsedPacket,
+        icmp6: &etherparse::Icmpv6Header,
+    ) -> ConnectionAction {
+        match icmp6.icmp_type {
+            etherparse::Icmpv6Type::Unknown { .. }
+            | etherparse::Icmpv6Type::ParameterProblem(_)
+            | etherparse::Icmpv6Type::EchoRequest(_)
+            | etherparse::Icmpv6Type::EchoReply(_)
+            | etherparse::Icmpv6Type::PacketTooBig { .. } => ConnectionAction::Noop,
+            etherparse::Icmpv6Type::DestinationUnreachable(_)
+            | etherparse::Icmpv6Type::TimeExceeded(_) => self.store_icmp_reply(packet),
+        }
+    }
+
     fn update_icmp4_remote(
         &mut self,
         packet: &OwnedParsedPacket,
@@ -683,34 +707,36 @@ impl Connection {
             etherparse::Icmpv4Type::DestinationUnreachable(_)
             | etherparse::Icmpv4Type::Redirect(_)
             | etherparse::Icmpv4Type::TimeExceeded(_)
-            | etherparse::Icmpv4Type::ParameterProblem(_) => {
-                // TODO figure out how to cache this from the connection_key() computation
-                // if it's a perf problem - ignore for now
-                // but right now we're creating this embedded packet twice!
-                match OwnedParsedPacket::from_partial_embedded_ip_packet(
-                    &packet.payload,
-                    Some(packet.pcap_header),
-                ) {
-                    Ok((pkt, _partial)) => {
-                        if let Some(probe_id) = self.is_reply_heuristic(&pkt) {
-                            if let Some(hash) = self.incoming_reply_timestamps.get_mut(&probe_id) {
-                                hash.insert(pkt);
-                            } else {
-                                self.incoming_reply_timestamps
-                                    // careful to store the original packet and not the embedded one
-                                    .insert(probe_id, HashSet::from([packet.clone()]));
-                            }
-                        }
-                        ConnectionAction::Noop
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to parsed update_icmp4_remote() {} for {:?}",
-                            e, packet
-                        );
-                        ConnectionAction::Noop
+            | etherparse::Icmpv4Type::ParameterProblem(_) => self.store_icmp_reply(packet),
+        }
+    }
+
+    fn store_icmp_reply(&mut self, packet: &OwnedParsedPacket) -> ConnectionAction {
+        // TODO figure out how to cache this from the connection_key() computation
+        // if it's a perf problem - ignore for now
+        // but right now we're creating this embedded packet twice!
+        match OwnedParsedPacket::from_partial_embedded_ip_packet(
+            &packet.payload,
+            Some(packet.pcap_header),
+        ) {
+            Ok((pkt, _partial)) => {
+                if let Some(probe_id) = self.is_reply_heuristic(&pkt) {
+                    if let Some(hash) = self.incoming_reply_timestamps.get_mut(&probe_id) {
+                        hash.insert(pkt);
+                    } else {
+                        self.incoming_reply_timestamps
+                            // careful to store the original packet and not the embedded one
+                            .insert(probe_id, HashSet::from([packet.clone()]));
                     }
                 }
+                ConnectionAction::Noop
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to parsed update_icmp4_remote() {} for {:?}",
+                    e, packet
+                );
+                ConnectionAction::Noop
             }
         }
     }
@@ -738,7 +764,11 @@ impl Connection {
                     }
                     Some(IpHeader::Version6(ip6, _)) => {
                         // NOTE: etherparse "smartly" already returns hdr_len * 4
-                        (ip6.payload_length, ip6.header_len() as u16)
+                        // any icmp6 doesn't have ip6.total_len() so fake it
+                        (
+                            ip6.payload_length + ip6.header_len() as u16,
+                            ip6.header_len() as u16,
+                        )
                     }
                     None => {
                         warn!("No IP packet with a TCP packet!?");
