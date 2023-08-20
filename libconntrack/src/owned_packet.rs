@@ -549,12 +549,18 @@ impl<'de> Deserialize<'de> for OwnedParsedPacket {
                 while let Some(key) = map.next_key::<Fields>()? {
                     match key {
                         Fields::PcapHeader => {
+                            #[cfg(windows)]
+                            // windows uses i32 instead of i64 for the timestamps
+                            let (sec, usec, caplen, len) =
+                                map.next_value::<(i32, i32, u32, u32)>()?;
+                                #[cfg(not(windows))]
                             let (sec, usec, caplen, len) =
                                 map.next_value::<(i64, i64, u32, u32)>()?;
                             pkt.pcap_header = PacketHeader {
-                                ts: libc::timeval {
-                                    tv_sec: sec as i32,
-                                    tv_usec: usec as i32,
+                                ts: libc::timeval 
+                                {
+                                    tv_sec: sec,
+                                    tv_usec: usec,
                                 },
                                 caplen,
                                 len,
