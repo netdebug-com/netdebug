@@ -3,7 +3,8 @@ mod websocket;
 use clap::Parser;
 use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg},
-    pcap::{lookup_egress_device, lookup_pcap_device_by_name}, dns_tracker::DnsTracker,
+    dns_tracker::DnsTracker,
+    pcap::{lookup_egress_device, lookup_pcap_device_by_name},
 };
 use log::info;
 use std::{error::Error, net::IpAddr};
