@@ -9,7 +9,12 @@ use common::{
     ProbeReportSummary, PROBE_MAX_TTL,
 };
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader};
-use log::{debug, info, warn};
+#[cfg(not(test))]
+use log::{debug, info, warn}; // Use log crate when building application
+
+#[cfg(test)]
+use std::{println as debug, println as info, println as warn}; // Workaround to use prinltn! for logs.
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -1019,7 +1024,8 @@ impl Connection {
     fn generate_output_filename(&mut self) -> String {
         if self.close_time.is_none() {
             let now = Utc::now();
-            self.close_time = Some(now.to_rfc3339()); // seems convenient - <shrug>
+            self.close_time = Some(now.to_rfc3339().replace(":", "_"));
+            // convenient time format, but need the remove the ':' as windows doesn't like the filename
         }
 
         let label = if self.user_annotation.is_some() {
@@ -1030,18 +1036,20 @@ impl Connection {
             "simple"
         };
 
-        format!(
-            "{}/{}_{}____{}_{}____{}_{}_{}.log", // this style path contruction will
-            // need to change if server runs on windows
-            self.log_dir,
-            label,
-            self.close_time.as_ref().unwrap(),
-            self.connection_key.remote_ip,
-            self.connection_key.remote_l4_port,
-            self.connection_key.local_ip,
-            self.connection_key.local_l4_port,
-            self.connection_key.ip_proto,
-        )
+        std::path::Path::new(&self.log_dir)
+            .join(format!(
+                "{}_{}____{}_{}____{}_{}_{}.log",
+                label,
+                self.close_time.as_ref().unwrap(),
+                self.connection_key.remote_ip,
+                self.connection_key.remote_l4_port,
+                self.connection_key.local_ip,
+                self.connection_key.local_l4_port,
+                self.connection_key.ip_proto,
+            ))
+            .into_os_string()
+            .into_string()
+            .unwrap()
     }
 
     // Write Connection details and stats out to a logfile when it goes away
