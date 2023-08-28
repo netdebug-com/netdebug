@@ -37,7 +37,7 @@ pub struct ConnectionKey {
 
 impl std::fmt::Display for ConnectionKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let proto_desc = format!("ip_proto={}", self.ip_proto);
+        let proto_desc = utils::ip_proto_to_string(self.ip_proto);
         write!(
             f,
             "{} [{}]::{} --> [{}]::{} ",
@@ -66,6 +66,24 @@ impl ConnectionKey {
             remote_l4_port: addr.port(),
             ip_proto,
         }
+    }
+
+    pub fn to_string_with_dns(&self, dns_cache: &HashMap<IpAddr, crate::dns_tracker::DnsTrackerEntry>) -> String {
+        let local = if let Some(entry) = dns_cache.get(&self.local_ip) {
+            entry.hostname.clone()
+        } else {
+            format!("[{}]", self.local_ip)
+        };
+        let remote = if let Some(entry) = dns_cache.get(&self.remote_ip) {
+            entry.hostname.clone()
+        } else {
+            format!("[{}]", self.remote_ip)
+        };
+        let proto_desc = utils::ip_proto_to_string(self.ip_proto);
+        format!(
+            "{} {}::{} --> {}::{} ",
+            proto_desc, local, self.local_l4_port, remote, self.remote_l4_port,
+        )
     }
 }
 

@@ -2,7 +2,7 @@ use futures_util::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
-use libconntrack::connection::ConnectionTrackerMsg;
+use libconntrack::{connection::ConnectionTrackerMsg, dns_tracker::DnsTrackerMessage};
 use log::{debug, info, warn};
 use tokio::sync::mpsc::UnboundedSender;
 use warp::ws::{self, Message, WebSocket};
@@ -46,6 +46,7 @@ async fn handle_websocket_rx_messages(
     mut ws_rx: SplitStream<WebSocket>,
     tx: UnboundedSender<ServerToGuiMessages>,
     connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
+    dns_tracker: UnboundedSender<DnsTrackerMessage>,
 ) {
     while let Some(msg_result) = ws_rx.next().await {
         match msg_result {
@@ -53,7 +54,7 @@ async fn handle_websocket_rx_messages(
                 if msg.is_text() {
                     let json = msg.to_str().expect("msg.is_text() lies!");
                     match serde_json::from_str::<GuiToServerMessages>(&json) {
-                        Ok(msg) => handle_gui_to_server_msg(msg, &tx, &connection_tracker).await,
+                        Ok(msg) => handle_gui_to_server_msg(msg, &tx, &connection_tracker, &dns_tracker).await,
                         Err(e) => {
                             warn!("Failed to parse JSON websocket msg: {:?}", e);
                         }
@@ -71,11 +72,12 @@ async fn handle_gui_to_server_msg(
     msg: GuiToServerMessages,
     tx: &UnboundedSender<ServerToGuiMessages>,
     connection_tracker: &UnboundedSender<ConnectionTrackerMsg>,
+    dns_tracker: &UnboundedSender<DnsTrackerMessage>,
 ) {
     match msg {
         GuiToServerMessages::DumpFlows() => {
             debug!("Got DumpFlows request");
-            handle_gui_dumpflows(tx, connection_tracker).await;
+            handle_gui_dumpflows(tx, connection_tracker, dns_tracker).await;
         }
     }
 }
@@ -83,6 +85,7 @@ async fn handle_gui_to_server_msg(
 async fn handle_gui_dumpflows(
     tx: &UnboundedSender<ServerToGuiMessages>,
     connection_tracker: &UnboundedSender<ConnectionTrackerMsg>,
+    dns_tracker: &UnboundedSender<DnsTrackerMessage>,
 ) {
     let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(10);
     let request = ConnectionTrackerMsg::GetConnectionKeys { tx: reply_tx };
@@ -96,7 +99,10 @@ async fn handle_gui_dumpflows(
             Vec::new() // just pretend it returned nothing as a hack
         }
     };
-    let key_strings: Vec<String> = keys.iter().map(|k| format!("{}", k)).collect();
+    let (dns_tx, mut dns_rx) = tokio::sync::mpsc::unbounded_channel();
+    dns_tracker.send(DnsTrackerMessage::DumpReverseMap { tx: dns_tx }).expect("dns tracker down?");
+    let dns_cache = dns_rx.recv().await.unwrap();
+    let key_strings: Vec<String> = keys.iter().map(|k| k.to_string_with_dns(&dns_cache)).collect();
     if let Err(e) = tx.send(ServerToGuiMessages::DumpFlowsReply(key_strings)) {
         warn!("Sending to GUI trigged: {}", e);
     }
@@ -107,6 +113,7 @@ async fn handle_gui_dumpflows(
  */
 pub async fn websocket_handler(
     connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
+    dns_tracker: UnboundedSender<DnsTrackerMessage>,
     ws: WebSocket,
 ) {
     info!("Got a websocket connection! ");
@@ -118,7 +125,7 @@ pub async fn websocket_handler(
     let tx_clone = tx.clone();
     let connection_tracker_clone = connection_tracker.clone();
     let _rx_handler = tokio::spawn(async move {
-        handle_websocket_rx_messages(ws_rx, tx_clone, connection_tracker_clone).await;
+        handle_websocket_rx_messages(ws_rx, tx_clone, connection_tracker_clone, dns_tracker).await;
     });
 
     if let Err(e) = tx.send(ServerToGuiMessages::VersionCheck(

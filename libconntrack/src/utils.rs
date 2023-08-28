@@ -58,7 +58,20 @@ pub fn timeval_to_ms(tv: libc::timeval) -> f64 {
 }
 
 pub fn timeval_to_duration(tv: libc::timeval) -> chrono::Duration {
-    Duration::microseconds((tv.tv_sec * 1_000_000 + tv.tv_usec) as i64)
+    Duration::microseconds(tv.tv_sec as i64 * 1_000_000 + tv.tv_usec as i64)
+}
+
+
+// really should exist in some library somewhere
+pub fn ip_proto_to_string(ip_proto: u8) -> String {
+    use etherparse::IpNumber::*;
+    if ip_proto == Tcp as u8 {
+        String::from("Tcp")
+    } else if ip_proto == Udp as u8 {
+        String::from("Udp")
+    } else {
+        format!("ip_proto={}", ip_proto)
+    }
 }
 
 #[cfg(test)]

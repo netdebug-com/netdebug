@@ -16,10 +16,10 @@ pub const UDP_DNS_PORT: u16 = 53;
 #[serde_with::serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsTrackerEntry {
-    hostname: String,
-    created: DateTime<Utc>,
+    pub hostname: String,
+    pub created: DateTime<Utc>,
     #[serde_as(as = "Option<serde_with::DurationMicroSeconds<i64>>")]
-    rtt: Option<chrono::Duration>,
+    pub rtt: Option<chrono::Duration>,
 }
 
 pub struct DnsPendingEntry {
@@ -44,6 +44,14 @@ pub enum DnsTrackerMessage {
         data: Vec<u8>,
         src_is_local: bool,
     },
+    DumpReverseMap {
+        tx : UnboundedSender<HashMap<IpAddr, DnsTrackerEntry>>
+    },
+    CacheForever {  // used to make all of the local IPs show up as 'localhost'
+        ip: IpAddr,
+        hostname: String,
+    }
+
 }
 
 impl DnsTracker {
@@ -70,6 +78,8 @@ impl DnsTracker {
                     key,
                     src_is_local,
                 } => self.parse_dns(key, timestamp, data, src_is_local).await,
+                DnsTrackerMessage::DumpReverseMap { tx } => self.dump_reverse_map(tx),
+                DnsTrackerMessage::CacheForever { ip, hostname } => self.cache_forever(ip, hostname),
             }
         }
     }
@@ -200,6 +210,32 @@ impl DnsTracker {
                 }
             }
         }
+    }
+
+    /**
+     * Send a copy of the reverse DNS map back to the caller.
+     * 
+     * TODO: this is a good time to garbage collect old/expired DNS entries so they don't grow
+     * unbounded!
+     */
+    fn dump_reverse_map(&self, tx: UnboundedSender<HashMap<IpAddr, DnsTrackerEntry>>) {
+        let reverse_map = self.reverse_map.clone();
+        if let Err(e) = tx.send(reverse_map) {
+            warn!("Problem sending the reverse_map DNS dump: {}", e);
+        }
+    }
+
+    /**
+     * Permanently add this mapping to the cache - useful for tracking localhost's IPs
+     * and pretty printing
+     * 
+     * Could in theory get overridden if we look ourselves up, but then should just
+     * get the FQDN which seems better
+     */
+    fn cache_forever(&mut self, ip: IpAddr, hostname: String) {
+        let created = Utc::now();
+        let rtt = None;
+        self.reverse_map.insert(ip, DnsTrackerEntry { hostname, created, rtt });
     }
 }
 
