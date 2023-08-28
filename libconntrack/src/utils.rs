@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 
+use chrono::Duration;
 use etherparse::IpHeader;
 
 pub fn etherparse_ipheaders2ipaddr(ip: &Option<IpHeader>) -> Result<(IpAddr, IpAddr), pcap::Error> {
@@ -54,6 +55,10 @@ pub fn calc_rtt_ms(pkt_after: pcap::PacketHeader, pkt_before: pcap::PacketHeader
 
 pub fn timeval_to_ms(tv: libc::timeval) -> f64 {
     (tv.tv_sec as f64 * 1000.0) + (tv.tv_usec as f64 / 1000.0)
+}
+
+pub fn timeval_to_duration(tv: libc::timeval) -> chrono::Duration {
+    Duration::microseconds((tv.tv_sec * 1_000_000 + tv.tv_usec) as i64)
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@ mod websocket;
 use clap::Parser;
 use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg},
-    pcap::{lookup_egress_device, lookup_pcap_device_by_name},
+    pcap::{lookup_egress_device, lookup_pcap_device_by_name}, dns_tracker::DnsTracker,
 };
 use log::info;
 use std::{error::Error, net::IpAddr};
@@ -100,6 +100,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         });
     }
+    // launch the DNS tracker
+    let (dns_tx, _) = DnsTracker::new().spawn().await;
 
     // launch the connection tracker as a tokio::task in the background
     let args_clone = args.clone();
@@ -114,6 +116,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             raw_sock,
         )
         .await;
+        connection_tracker.set_dns_tracker(dns_tx);
         // loop forever tracking messages sent on the channel
         connection_tracker.rx_loop(rx).await;
     });

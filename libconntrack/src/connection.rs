@@ -8,9 +8,10 @@ use common::{
     analysis_messages::AnalysisInsights, ProbeId, ProbeReport, ProbeReportEntry,
     ProbeReportSummary, PROBE_MAX_TTL,
 };
-use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader};
+use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 #[cfg(not(test))]
-use log::{debug, info, warn}; // Use log crate when building application
+use log::{debug, info, warn};
+use tokio::sync::mpsc::UnboundedSender; // Use log crate when building application
 
 #[cfg(test)]
 use std::{println as debug, println as info, println as warn}; // Workaround to use prinltn! for logs.
@@ -19,10 +20,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     analyze::analyze,
+    dns_tracker::{DnsTrackerMessage, UDP_DNS_PORT},
     in_band_probe::tcp_inband_probe,
     owned_packet::OwnedParsedPacket,
     pcap::RawSocketWriter,
-    utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timeval_to_ms},
+    utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, timeval_to_ms},
 };
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ConnectionKey {
@@ -122,6 +124,7 @@ where
     local_addrs: HashSet<IpAddr>,
     raw_sock: R,
     log_dir: String,
+    dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
 }
 impl<R> ConnectionTracker<R>
 where
@@ -138,7 +141,12 @@ where
             local_addrs,
             raw_sock,
             log_dir,
+            dns_tx: None,
         }
+    }
+
+    pub fn set_dns_tracker(&mut self, dns_tx: UnboundedSender<DnsTrackerMessage>) {
+        self.dns_tx = Some(dns_tx);
     }
 
     pub async fn rx_loop(
@@ -187,7 +195,8 @@ where
     pub fn add(&mut self, packet: OwnedParsedPacket) {
         if let Some((key, src_is_local)) = packet.to_connection_key(&self.local_addrs) {
             if let Some(connection) = self.connections.get_mut(&key) {
-                let action = connection.update(packet, &mut self.raw_sock, &key, src_is_local);
+                let action =
+                    connection.update(packet, &mut self.raw_sock, &key, src_is_local, &self.dns_tx);
                 use ConnectionAction::*;
                 match action {
                     Noop => (),
@@ -238,7 +247,7 @@ where
         };
         info!("Tracking new connection: {}", &key);
 
-        connection.update(packet, &mut self.raw_sock, &key, src_is_local);
+        connection.update(packet, &mut self.raw_sock, &key, src_is_local, &self.dns_tx);
         self.connections.insert(key, connection);
     }
 
@@ -359,6 +368,7 @@ impl Connection {
         raw_sock: &mut R,
         key: &ConnectionKey,
         src_is_local: bool,
+        dns_tx: &Option<UnboundedSender<DnsTrackerMessage>>,
     ) -> ConnectionAction
     where
         R: RawSocketWriter,
@@ -393,9 +403,15 @@ impl Connection {
                     self.update_icmp6_remote(&packet, icmp6)
                 }
             }
-            _ => {
-                // TODO: UdpTracking!
-                debug!("Got Connection::update() for non-TCP/ICMPv4 packet - ignoring for now");
+            Some(TransportHeader::Udp(udp)) => {
+                // logic is for both src_is_local and not, for now
+                self.update_udp(&key, &packet, udp, dns_tx, src_is_local)
+            }
+            None => {
+                warn!(
+                    "Ignoring unknown transport in IP protocol in packet {:?}",
+                    packet
+                );
                 ConnectionAction::Noop
             }
         }
@@ -1072,6 +1088,37 @@ impl Connection {
                 warn!("Error serializing connection {} -- {}", outfile, e);
             }
         }
+    }
+
+    fn update_udp(
+        &self,
+        key: &ConnectionKey,
+        packet: &OwnedParsedPacket,
+        udp: &UdpHeader,
+        dns_tx: &Option<UnboundedSender<DnsTrackerMessage>>,
+        src_is_local: bool,
+    ) -> ConnectionAction {
+        if (src_is_local && udp.destination_port == UDP_DNS_PORT)
+            || (!src_is_local && udp.source_port == UDP_DNS_PORT)
+        {
+            // are we tracking DNS?
+            if let Some(dns_tx) = dns_tx {
+                let timestamp = utils::timeval_to_duration(packet.pcap_header.ts);
+                if let Err(e) = dns_tx.send(DnsTrackerMessage::NewEntry {
+                    key: key.clone(),
+                    data: packet.payload.clone(),
+                    timestamp,
+                    src_is_local,
+                }) {
+                    warn!("Error sending to DNS Tracker: {}", e);
+                }
+                return ConnectionAction::Close; // don't track DNS requests here
+            }
+        } else {
+            // Noop - don't do anything special for other UDP connections -yet
+            info!("Ignoring untracked UDP connection: {}", key);
+        }
+        ConnectionAction::Noop
     }
 }
 
