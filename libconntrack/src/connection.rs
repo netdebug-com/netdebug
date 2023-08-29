@@ -9,6 +9,7 @@ use common::{
     ProbeReportSummary, PROBE_MAX_TTL,
 };
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
+use libconntrack_wasm::DnsTrackerEntry;
 #[cfg(not(test))]
 use log::{debug, info, warn};
 use tokio::sync::mpsc::UnboundedSender; // Use log crate when building application
@@ -68,7 +69,7 @@ impl ConnectionKey {
         }
     }
 
-    pub fn to_string_with_dns(&self, dns_cache: &HashMap<IpAddr, crate::dns_tracker::DnsTrackerEntry>) -> String {
+    pub fn to_string_with_dns(&self, dns_cache: &HashMap<IpAddr, DnsTrackerEntry>) -> String {
         let local = if let Some(entry) = dns_cache.get(&self.local_ip) {
             entry.hostname.clone()
         } else {

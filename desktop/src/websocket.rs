@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use futures_util::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
@@ -54,7 +56,10 @@ async fn handle_websocket_rx_messages(
                 if msg.is_text() {
                     let json = msg.to_str().expect("msg.is_text() lies!");
                     match serde_json::from_str::<GuiToServerMessages>(&json) {
-                        Ok(msg) => handle_gui_to_server_msg(msg, &tx, &connection_tracker, &dns_tracker).await,
+                        Ok(msg) => {
+                            handle_gui_to_server_msg(msg, &tx, &connection_tracker, &dns_tracker)
+                                .await
+                        }
                         Err(e) => {
                             warn!("Failed to parse JSON websocket msg: {:?}", e);
                         }
@@ -62,8 +67,8 @@ async fn handle_websocket_rx_messages(
                 } else {
                     info!("Ignoring websocket non-text message {:?}", msg);
                 }
-            }
-            Err(_) => todo!(),
+            },
+            Err(e) => warn!("Error from Websocket message queue: {}", e),
         }
     }
 }
@@ -79,6 +84,31 @@ async fn handle_gui_to_server_msg(
             debug!("Got DumpFlows request");
             handle_gui_dumpflows(tx, connection_tracker, dns_tracker).await;
         }
+        GuiToServerMessages::DumpDnsCache() => {
+            handle_gui_dump_dns_cache(tx, connection_tracker, dns_tracker).await
+        }
+    }
+}
+
+/**
+ * Gui has asked for a copy of the DNS cache - poke the dns_tracker and send it to them
+ */
+async fn handle_gui_dump_dns_cache(
+    tx: &UnboundedSender<ServerToGuiMessages>,
+    _connection_tracker: &UnboundedSender<ConnectionTrackerMsg>,
+    dns_tracker: &UnboundedSender<DnsTrackerMessage>,
+) {
+    let (dns_tx, mut dns_rx) = tokio::sync::mpsc::unbounded_channel();
+    let cache = if let Err(e) = dns_tracker.send(DnsTrackerMessage::DumpReverseMap { tx: dns_tx }) {
+        warn!("Failed to send message to dns_tracker: {}", e);
+        HashMap::new() // just send back an empty map so the gui isn't confused
+                       // TODO: find a way to better signal errors back to the GUI?
+                       // TODO: do we need transcation IDs?
+    } else {
+        dns_rx.recv().await.expect("valid dns_cache")
+    };
+    if let Err(e) = tx.send(ServerToGuiMessages::DumpDnsCache(cache)) {
+        warn!("Failed to send the DNS cache back to the GUI!?: {}", e);
     }
 }
 
@@ -100,9 +130,14 @@ async fn handle_gui_dumpflows(
         }
     };
     let (dns_tx, mut dns_rx) = tokio::sync::mpsc::unbounded_channel();
-    dns_tracker.send(DnsTrackerMessage::DumpReverseMap { tx: dns_tx }).expect("dns tracker down?");
+    dns_tracker
+        .send(DnsTrackerMessage::DumpReverseMap { tx: dns_tx })
+        .expect("dns tracker down?");
     let dns_cache = dns_rx.recv().await.unwrap();
-    let key_strings: Vec<String> = keys.iter().map(|k| k.to_string_with_dns(&dns_cache)).collect();
+    let key_strings: Vec<String> = keys
+        .iter()
+        .map(|k| k.to_string_with_dns(&dns_cache))
+        .collect();
     if let Err(e) = tx.send(ServerToGuiMessages::DumpFlowsReply(key_strings)) {
         warn!("Sending to GUI trigged: {}", e);
     }

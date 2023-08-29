@@ -1,8 +1,10 @@
+mod dns_tracker;
 mod flow_tracker;
 mod tabs;
 mod utils;
 use std::sync::Arc;
 
+use dns_tracker::DnsTracker;
 use flow_tracker::FlowTracker;
 use tabs::{Tab, Tabs, TabsContext};
 use web_sys::{MessageEvent, WebSocket};
@@ -41,7 +43,7 @@ fn create_websocket() -> Result<WebSocket, JsValue> {
 
 fn init_tabs(ws: WebSocket) -> Result<Tabs, JsValue> {
     // throw together some test tabs
-    let mut tabs: Vec<Tab> = ["alpha", "beta", "gamma"]
+    let test_tabs: Vec<Tab> = ["alpha", "beta", "gamma"]
         .into_iter()
         .map(|t| Tab {
             name: t.to_string(),
@@ -58,10 +60,13 @@ fn init_tabs(ws: WebSocket) -> Result<Tabs, JsValue> {
             data: None,
         })
         .collect();
+    let mut tabs = Vec::new();
     tabs.push(FlowTracker::new());
+    tabs.push(DnsTracker::new());
+    tabs.extend(test_tabs);
     let tabs = Arc::new(std::sync::Mutex::new(TabsContext::new(
         tabs,
-        "alpha".to_string(),
+        flow_tracker::FLOW_TRACKER_TAB.to_string(),
     )));
     let tabs_clone = tabs.clone();
     tabs.lock().unwrap().construct(tabs_clone, ws.clone())?;
@@ -74,14 +79,22 @@ fn init_tabs(ws: WebSocket) -> Result<Tabs, JsValue> {
 
 fn handle_ws_message(e: MessageEvent, ws: WebSocket, tabs: Tabs) -> Result<(), JsValue> {
     let raw_msg = e.data().as_string().unwrap();
-    let msg: desktop_common::ServerToGuiMessages = serde_json::from_str(raw_msg.as_str()).unwrap();
-    use desktop_common::ServerToGuiMessages::*;
-    match msg {
-        VersionCheck(ver) => handle_version_check(ver),
-        DumpFlowsReply(flows) => {
-            flow_tracker::handle_dumpflows_reply(flows, ws.clone(), tabs.clone())
+    match serde_json::from_str(raw_msg.as_str()) {
+        Ok(msg) => {
+            use desktop_common::ServerToGuiMessages::*;
+            match msg {
+                VersionCheck(ver) => handle_version_check(ver),
+                DumpFlowsReply(flows) => {
+                    flow_tracker::handle_dumpflows_reply(flows, ws.clone(), tabs.clone())
+                }
+                DumpDnsCache(cache) => dns_tracker::handle_dump_dns_cache_reply(cache, ws, tabs),
+            }
         }
-    }
+        Err(e) => {
+            console_log!("Got unparsable message from server: {} :: '{}'", e, raw_msg);
+            Ok(())
+        }
+    } 
 }
 /**
  * Are the server and GUI running from the same code base?

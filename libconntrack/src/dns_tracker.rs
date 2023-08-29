@@ -1,27 +1,21 @@
+#[cfg(not(test))]
 use log::{debug, warn};
-use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::{println as debug, println as warn}; // Workaround to use prinltn! for logs.
+
 use std::{collections::HashMap, net::IpAddr};
 use tokio::{
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
 };
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
+use libconntrack_wasm::DnsTrackerEntry;
 
 use crate::connection::ConnectionKey;
 use dns_parser::{self, QueryType};
 
 pub const UDP_DNS_PORT: u16 = 53;
-
-#[serde_with::serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DnsTrackerEntry {
-    pub hostname: String,
-    pub created: DateTime<Utc>,
-    #[serde_as(as = "Option<serde_with::DurationMicroSeconds<i64>>")]
-    pub rtt: Option<chrono::Duration>,
-}
-
 pub struct DnsPendingEntry {
     sent_timestamp: Duration,
 }
@@ -45,13 +39,13 @@ pub enum DnsTrackerMessage {
         src_is_local: bool,
     },
     DumpReverseMap {
-        tx : UnboundedSender<HashMap<IpAddr, DnsTrackerEntry>>
+        tx: UnboundedSender<HashMap<IpAddr, DnsTrackerEntry>>,
     },
-    CacheForever {  // used to make all of the local IPs show up as 'localhost'
+    CacheForever {
+        // used to make all of the local IPs show up as 'localhost'
         ip: IpAddr,
         hostname: String,
-    }
-
+    },
 }
 
 impl DnsTracker {
@@ -79,7 +73,9 @@ impl DnsTracker {
                     src_is_local,
                 } => self.parse_dns(key, timestamp, data, src_is_local).await,
                 DnsTrackerMessage::DumpReverseMap { tx } => self.dump_reverse_map(tx),
-                DnsTrackerMessage::CacheForever { ip, hostname } => self.cache_forever(ip, hostname),
+                DnsTrackerMessage::CacheForever { ip, hostname } => {
+                    self.cache_forever(ip, hostname)
+                }
             }
         }
     }
@@ -205,6 +201,7 @@ impl DnsTracker {
                             hostname: hostname.clone(),
                             created,
                             rtt,
+                            ttl: Some(chrono::Duration::seconds(answer.ttl as i64)),
                         },
                     );
                 }
@@ -214,11 +211,11 @@ impl DnsTracker {
 
     /**
      * Send a copy of the reverse DNS map back to the caller.
-     * 
-     * TODO: this is a good time to garbage collect old/expired DNS entries so they don't grow
-     * unbounded!
+     *
      */
-    fn dump_reverse_map(&self, tx: UnboundedSender<HashMap<IpAddr, DnsTrackerEntry>>) {
+    fn dump_reverse_map(&mut self, tx: UnboundedSender<HashMap<IpAddr, DnsTrackerEntry>>) {
+        // Good time to expire the cache to stop propagating stale data
+        self.expire_cache();
         let reverse_map = self.reverse_map.clone();
         if let Err(e) = tx.send(reverse_map) {
             warn!("Problem sending the reverse_map DNS dump: {}", e);
@@ -228,19 +225,58 @@ impl DnsTracker {
     /**
      * Permanently add this mapping to the cache - useful for tracking localhost's IPs
      * and pretty printing
-     * 
+     *
      * Could in theory get overridden if we look ourselves up, but then should just
      * get the FQDN which seems better
      */
     fn cache_forever(&mut self, ip: IpAddr, hostname: String) {
         let created = Utc::now();
         let rtt = None;
-        self.reverse_map.insert(ip, DnsTrackerEntry { hostname, created, rtt });
+        self.reverse_map.insert(
+            ip,
+            DnsTrackerEntry {
+                hostname,
+                created,
+                rtt,
+                ttl: None,
+            },
+        );
+    }
+
+    /**
+     * Walk the reverse_map and remove any entries that are older than their TTL
+     */
+    fn expire_cache(&mut self) {
+        let now = Utc::now();
+        // first pass, figure out which ones to delete; clone the keys so we don't reference the map
+        let remove_list = &self
+            .reverse_map
+            .iter()
+            .filter_map(|(k, v)| {
+                if let Some(ttl) = v.ttl {
+                    if now > (v.created + ttl) {
+                        Some(k.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<IpAddr>>();
+        // second pass, delete them
+        for k in remove_list {
+            self.reverse_map.remove(k);
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
+    use etherparse::TransportHeader;
+
+    use crate::{connection::test::test_dir, owned_packet::OwnedParsedPacket, utils};
+
     use super::*;
     use std::{collections::HashSet, str::FromStr};
 
@@ -292,6 +328,58 @@ mod test {
             assert_eq!(entry.rtt.unwrap(), timestamp); // RTT is the second timestamp b/c first is zero
         } else {
             panic!("No DNS entry cached!?");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dns_expiration() {
+        let mut dns_tracker = DnsTracker::new();
+        // 'create' the entry 2 seconds ago with a ttl of 1 second, so it should expire immediately
+        dns_tracker.reverse_map.insert(
+            IpAddr::from_str("1.2.3.4").unwrap(),
+            DnsTrackerEntry {
+                hostname: "foo".to_string(),
+                created: Utc::now() - Duration::seconds(2),
+                rtt: None,
+                ttl: Some(Duration::seconds(1)),
+            },
+        );
+        dns_tracker.expire_cache();
+        assert_eq!(dns_tracker.reverse_map.len(), 0);
+    }
+
+    #[tokio::test]
+    /**
+     * Walk through every packet in a live capture of DNS traffic and make sure
+     * we can parse everything and serialize/deserialize everything
+     */
+    async fn verify_real_dns_data() {
+        let mut dns_tracker = DnsTracker::new();
+        let local_addrs = HashSet::from([
+            IpAddr::from_str("192.168.1.103").unwrap(),
+            IpAddr::from_str("2600:1700:5b20:4e10:3529:39f:19de:6434").unwrap(),
+        ]);
+        let mut capture = pcap::Capture::from_file(test_dir("tests/dns_traces.pcap")).unwrap();
+        // grab each packet and dump it into the dns tracker
+        while let Ok(pkt) = capture.next_packet() {
+            let pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            let udp = match &pkt.transport {
+                Some(TransportHeader::Udp(udp)) => udp,
+                _ => panic!("Non-UDP packet in the DNS+UDP only trace")
+            };
+            assert!(udp.source_port == UDP_DNS_PORT || udp.destination_port == UDP_DNS_PORT);
+            let (key, src_is_local) = pkt.to_connection_key(&local_addrs).unwrap();
+            let timestamp = utils::timeval_to_duration(pkt.pcap_header.ts.clone());
+            dns_tracker.parse_dns(key, timestamp, pkt.payload, src_is_local).await;
+        }
+        // TODO: sanity check this data; for now just parsing is enough
+        
+        // now make sure we can serialize/deserialize it all
+        for (_ip, dns_entry) in &dns_tracker.reverse_map {
+            let json = serde_json::to_string(dns_entry).unwrap();
+            println!("{}", json);
+            let new_value : DnsTrackerEntry = serde_json::from_str(&json).unwrap();
+            assert_eq!(*dns_entry, new_value);
         }
     }
 }
