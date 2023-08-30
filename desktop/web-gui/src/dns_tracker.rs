@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
+use chrono::Utc;
 use desktop_common::GuiToServerMessages;
-use libconntrack_wasm::DnsTrackerEntry;
+use libconntrack_wasm::{pretty_print_duration, DnsTrackerEntry};
 use wasm_bindgen::prelude::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Element, MessageEvent, WebSocket};
@@ -137,23 +138,25 @@ pub fn handle_dump_dns_cache_reply(
         .expect(DNS_TRACKER_TABLE);
     tbody.set_inner_html(""); // clear the table (??)
     let mut sorted_cache: Vec<(IpAddr, DnsTrackerEntry)> = cache.into_iter().collect();
-    sorted_cache.sort_by(|(_, a),(_, b)| a.hostname.cmp(&b.hostname));
+    let now = Utc::now();
+    sorted_cache.sort_by(|(ip_a, a), (ip_b, b)| a.hostname.cmp(&b.hostname).then(ip_a.cmp(ip_b)));
     for (ip_addr, dns_entry) in &sorted_cache {
         let hostname = html!("td").unwrap();
         hostname.set_inner_html(&dns_entry.hostname);
         let ip = html!("td").unwrap();
-        ip.set_inner_html(format!("[{}]", ip_addr).as_str());
+        ip.set_inner_html(format!("{}", ip_addr).as_str());
+        let created_time = now - dns_entry.created;
         let created = html!("td").unwrap();
-        created.set_inner_html(format!("{}", dns_entry.created).as_str());
+        created.set_inner_html(format!("{} ago", pretty_print_duration(&created_time)).as_str());
         let ttl = html!("td").unwrap();
         if let Some(ttl_value) = dns_entry.ttl {
-            ttl.set_inner_html(format!("{}", ttl_value).as_str());
+            ttl.set_inner_html(pretty_print_duration(&ttl_value).as_str());
         } else {
             ttl.set_inner_html("-");
         }
         let rtt = html!("td").unwrap();
         if let Some(rtt_value) = dns_entry.rtt {
-            rtt.set_inner_html(format!("{}", rtt_value).as_str());
+            rtt.set_inner_html(pretty_print_duration(&rtt_value).as_str());
         } else {
             rtt.set_inner_html("-");
         }
