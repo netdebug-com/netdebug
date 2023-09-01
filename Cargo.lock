@@ -963,6 +963,7 @@ dependencies = [
  "libc",
  "libconntrack-wasm",
  "log",
+ "netstat2",
  "pcap",
  "pretty_env_logger",
  "serde",
