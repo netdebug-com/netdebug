@@ -3,6 +3,7 @@
 #Grr! would love for build.rs to make this work... but it doesn't...
 
 set -x
+set -e 
 
 if [ $# == 0 ] ; then
    build_opt=--dev
