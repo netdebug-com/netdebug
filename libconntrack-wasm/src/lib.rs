@@ -1,6 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+pub mod connection_measurements;
+pub use connection_measurements::*;  // reshare these identifiers in this namespace
+
 #[serde_with::serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DnsTrackerEntry {

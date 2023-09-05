@@ -1200,6 +1200,20 @@ impl Connection {
         }
         ConnectionAction::Noop
     }
+
+    pub fn to_connection_measurements(&self) -> libconntrack_wasm::ConnectionMeasurements {
+        libconntrack_wasm::ConnectionMeasurements {
+            local_ip: self.connection_key.local_ip.clone(),
+            local_l4_port: self.connection_key.local_l4_port,
+            remote_ip: self.connection_key.remote_ip.clone(),
+            remote_l4_port: self.connection_key.remote_l4_port,
+            ip_proto: self.connection_key.ip_proto,
+            probe_report_summary: self.probe_report_summary.clone(),
+            user_annotation: self.user_annotation.clone(),
+            user_agent: self.user_agent.clone(),
+            pids: self.pids.clone(),
+        }
+    }
 }
 
 /**
