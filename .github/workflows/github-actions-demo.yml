@@ -1,6 +1,8 @@
 name: GitHub Rust CI
 run-name: ${{ github.actor }} GitHub Actions 🚀
-on: [push]
+on: 
+  - push
+  - pull_request
 jobs:
   Explore-GitHub-Actions:
     runs-on: ubuntu-latest
