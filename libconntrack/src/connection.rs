@@ -157,7 +157,7 @@ pub enum ConnectionTrackerMsg {
     GetConnectionKeys {
         tx: tokio::sync::mpsc::Sender<Vec<ConnectionKey>>,
     },
-    SetConnectionPids {
+    SetConnectionApps {
         key: ConnectionKey,
         associated_apps: HashMap<u32, Option<String>>, // PID --> ProcessName, if we know it
     },
@@ -242,10 +242,10 @@ where
                         );
                     }
                 }
-                SetConnectionPids {
+                SetConnectionApps {
                     key,
                     associated_apps,
-                } => self.set_connection_pids(key, associated_apps),
+                } => self.set_connection_apps(key, associated_apps),
             }
         }
         info!("ConnectionTracker exiting rx_loop()");
@@ -303,7 +303,7 @@ where
             user_annotation: None,
             log_dir: self.log_dir.clone(),
             user_agent: None,
-            pids: None,
+            associated_apps: None,
         };
         info!("Tracking new connection: {}", &key);
 
@@ -387,13 +387,13 @@ where
      * Tie the connection to the underlying PID as known from the Operating System
      */
 
-    fn set_connection_pids(
+    fn set_connection_apps(
         &mut self,
         key: ConnectionKey,
         associated_apps: HashMap<u32, Option<String>>,
     ) {
         if let Some(connection) = self.connections.get_mut(&key) {
-            connection.pids = Some(associated_apps);
+            connection.associated_apps = Some(associated_apps);
         } else {
             warn!(
                 "Tried to set the associated pids for a non-existing connection {}",
@@ -439,7 +439,7 @@ pub struct Connection {
     pub user_annotation: Option<String>, // an human supplied comment on this connection
     pub log_dir: String, // need to cache it here as we need it during Destructor; fugly
     pub user_agent: Option<String>, // when created via a web request, store the user-agent header
-    pub pids: Option<HashMap<u32, Option<String>>>, // PID --> ProcessName, if we know it
+    pub associated_apps: Option<HashMap<u32, Option<String>>>, // PID --> ProcessName, if we know it
 }
 impl Connection {
     fn update<R>(
@@ -1211,7 +1211,7 @@ impl Connection {
             probe_report_summary: self.probe_report_summary.clone(),
             user_annotation: self.user_annotation.clone(),
             user_agent: self.user_agent.clone(),
-            pids: self.pids.clone(),
+            pids: self.associated_apps.clone(),
         }
     }
 }

@@ -34,7 +34,7 @@ pub struct ProcessTracker {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessTrackerEntry {
-    associated_pids: Vec<u32>,
+    associated_apps: HashMap<u32, Option<String>>, // map from PID to the application name, if we know it
 }
 
 impl ProcessTracker {
@@ -131,6 +131,19 @@ impl ProcessTracker {
 
         // parse out all of the new data
         for si in sockets_info {
+            let associated_apps = HashMap::from_iter(
+                si.associated_pids
+                    .into_iter()
+                    .map(|p| {
+                        // clone the app name if it exists
+                        let app = if let Some(app) = self.pid2app_name_cache.get(&p) {
+                            Some(app.clone())
+                        } else {
+                            None
+                        };
+                        (p, app)
+                    })
+            );
             match &si.protocol_socket_info {
                 ProtocolSocketInfo::Tcp(tcp_si) => {
                     if tcp_si.remote_port != 0 {
@@ -151,12 +164,7 @@ impl ProcessTracker {
                 }
                 ProtocolSocketInfo::Udp(udp_si) => {
                     let key = (udp_si.local_addr, udp_si.local_port);
-                    new_udp_cache.insert(
-                        key,
-                        ProcessTrackerEntry {
-                            associated_pids: si.associated_pids,
-                        },
-                    );
+                    new_udp_cache.insert(key, ProcessTrackerEntry { associated_apps });
                 }
             }
         }
@@ -166,22 +174,12 @@ impl ProcessTracker {
             if !self.tcp_cache.contains_key(&k) {
                 if let Err(e) = self
                     .conntracker
-                    .send(ConnectionTrackerMsg::SetConnectionPids {
+                    .send(ConnectionTrackerMsg::SetConnectionApps {
                         key: k.clone(),
-                        associated_apps: v
-                            .associated_pids
-                            .iter()
-                            .map(|p| {
-                                let name = match self.pid2app_name_cache.get(&p) {
-                                    Some(name) => Some(name.clone()),
-                                    None => None,
-                                };
-                                (p.clone(), name)
-                            })
-                            .collect(),
+                        associated_apps: v.associated_apps.clone(),
                     })
                 {
-                    warn!("Failed to send SetConnectionPids to ConnTracker: {}", e);
+                    warn!("Failed to send SetConnectionApps to ConnTracker: {}", e);
                 }
             }
         }
@@ -198,7 +196,7 @@ impl ProcessTracker {
 mod test {
     use super::*;
     #[tokio::test]
-    async fn dns_update() {
+    async fn process_update() {
         // bind a socket real quick for some ground truth
         let tcp_server = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -232,7 +230,7 @@ mod test {
         while let Ok(msg) = rx.try_recv() {
             use ConnectionTrackerMsg::*;
             let (key, apps) = match &msg {
-                SetConnectionPids {
+                SetConnectionApps {
                     key,
                     associated_apps,
                 } => Some((key, associated_apps)),
