@@ -549,17 +549,23 @@ impl<'de> Deserialize<'de> for OwnedParsedPacket {
                 while let Some(key) = map.next_key::<Fields>()? {
                     match key {
                         Fields::PcapHeader => {
-                            #[cfg(windows)]
                             // windows uses i32 instead of i64 for the timestamps
+                            // mac uses i32 for usec but not for sec
+                            // linux uses i64 for both!?
+                            #[cfg(windows)]
                             let (sec, usec, caplen, len) =
                                 map.next_value::<(i32, i32, u32, u32)>()?;
-                            #[cfg(not(windows))]
+                            #[cfg(target_os = "linux")]
                             let (sec, usec, caplen, len) =
                                 map.next_value::<(i64, i64, u32, u32)>()?;
+                            #[cfg(target_os = "macos")]
+                            let (sec, usec, caplen, len) =
+                                map.next_value::<(i64, i32, u32, u32)>()?;
+                            // if none of these OS's, fail compilation
                             pkt.pcap_header = PacketHeader {
                                 ts: libc::timeval {
                                     tv_sec: sec,
-                                    tv_usec: usec as i32,
+                                    tv_usec: usec,
                                 },
                                 caplen,
                                 len,
