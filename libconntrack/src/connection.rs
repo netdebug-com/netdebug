@@ -72,15 +72,13 @@ impl ConnectionKey {
 
     pub fn from_protocol_socket_info(proto_info: &ProtocolSocketInfo) -> Self {
         match proto_info {
-            ProtocolSocketInfo::Tcp(tcp) => {
-                ConnectionKey {
-                    local_ip: tcp.local_addr,
-                    remote_ip: tcp.remote_addr,
-                    local_l4_port: tcp.local_port,
-                    remote_l4_port: tcp.remote_port,
-                    ip_proto: etherparse::IpNumber::Tcp as u8,
-                }
-            }
+            ProtocolSocketInfo::Tcp(tcp) => ConnectionKey {
+                local_ip: tcp.local_addr,
+                remote_ip: tcp.remote_addr,
+                local_l4_port: tcp.local_port,
+                remote_l4_port: tcp.remote_port,
+                ip_proto: etherparse::IpNumber::Tcp as u8,
+            },
             ProtocolSocketInfo::Udp(_udp) => {
                 panic!("Not supported for UDP yet - check out https://github.com/ohadravid/netstat2-rs/issues/11")
             }
@@ -145,8 +143,8 @@ pub enum ConnectionTrackerMsg {
     },
     SetConnectionPids {
         key: ConnectionKey,
-        associated_pids: Vec<u32>,
-    }
+        associated_apps: HashMap<u32, Option<String>>, // PID --> ProcessName, if we know it
+    },
 }
 
 /***
@@ -228,7 +226,10 @@ where
                         );
                     }
                 }
-                SetConnectionPids { key, associated_pids } => self.set_connection_pids(key, associated_pids),
+                SetConnectionPids {
+                    key,
+                    associated_apps,
+                } => self.set_connection_pids(key, associated_apps),
             }
         }
         info!("ConnectionTracker exiting rx_loop()");
@@ -370,11 +371,14 @@ where
      * Tie the connection to the underlying PID as known from the Operating System
      */
 
-    fn set_connection_pids(&mut self, key: ConnectionKey, associated_pids: Vec<u32>) {
+    fn set_connection_pids(&mut self, key: ConnectionKey, associated_apps: HashMap<u32, Option<String>>) {
         if let Some(connection) = self.connections.get_mut(&key) {
-            connection.pids = Some(associated_pids);
+            connection.pids = Some(associated_apps);
         } else {
-            warn!("Tried to set the associated pids for a non-existing connection {}", key);
+            warn!(
+                "Tried to set the associated pids for a non-existing connection {}",
+                key
+            );
         }
     }
 }
@@ -415,7 +419,7 @@ pub struct Connection {
     pub user_annotation: Option<String>, // an human supplied comment on this connection
     pub log_dir: String, // need to cache it here as we need it during Destructor; fugly
     pub user_agent: Option<String>, // when created via a web request, store the user-agent header
-    pub pids: Option<Vec<u32>>,
+    pub pids: Option<HashMap<u32, Option<String>>>, // PID --> ProcessName, if we know it
 }
 impl Connection {
     fn update<R>(
