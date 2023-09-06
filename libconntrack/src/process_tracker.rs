@@ -229,6 +229,7 @@ mod test {
             if *key == test_key {
                 found_it = true;
                 // did we correctly find this connection and map it back to this pid?
+                assert!(!apps.is_empty());
                 assert!(apps.contains_key(&my_pid));
                 // TODO : we don't track App names for all OSes yet - when we do, add this test
                 // let name = apps.get(&my_pid);
