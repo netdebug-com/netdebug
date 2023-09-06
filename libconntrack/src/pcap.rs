@@ -118,14 +118,13 @@ pub fn blocking_pcap_loop(
                     _ => {
                         // die on any other error
                         warn!("start_pcap_stream got error: {} - exiting", e);
-                        break;
+                        return Err(Box::new(e));
                     }
                 }
             }
         }
     }
-
-    Ok(())
+    // never returns unless there's an error
 }
 
 /**
