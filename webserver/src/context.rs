@@ -95,7 +95,7 @@ impl WebServerContext {
                     raw_sock,
                 )
                 .await;
-                connection_tracker.rx_loop(rx).await;
+                let _ret: () = connection_tracker.rx_loop(rx).await;
             });
         }
 
