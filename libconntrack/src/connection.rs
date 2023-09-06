@@ -72,13 +72,29 @@ impl ConnectionKey {
 
     pub fn from_protocol_socket_info(proto_info: &ProtocolSocketInfo) -> Self {
         match proto_info {
-            ProtocolSocketInfo::Tcp(tcp) => ConnectionKey {
-                local_ip: tcp.local_addr,
-                remote_ip: tcp.remote_addr,
-                local_l4_port: tcp.local_port,
-                remote_l4_port: tcp.remote_port,
-                ip_proto: etherparse::IpNumber::Tcp as u8,
-            },
+            ProtocolSocketInfo::Tcp(tcp) => {
+                if tcp.local_addr != tcp.remote_addr {
+                    ConnectionKey {
+                        local_ip: tcp.local_addr,
+                        remote_ip: tcp.remote_addr,
+                        local_l4_port: tcp.local_port,
+                        remote_l4_port: tcp.remote_port,
+                        ip_proto: etherparse::IpNumber::Tcp as u8,
+                    }
+                } else {
+                    // this is commonly local_ip=remote_ip=localhost
+                    // so sort the ports to create a cannoical key
+                    let local_port = std::cmp::min(tcp.local_port, tcp.remote_port);
+                    let remote_port = std::cmp::max(tcp.local_port, tcp.remote_port);
+                    ConnectionKey {
+                        local_ip: tcp.local_addr,
+                        remote_ip: tcp.remote_addr,
+                        local_l4_port: local_port,
+                        remote_l4_port: remote_port,
+                        ip_proto: etherparse::IpNumber::Tcp as u8,
+                    }
+                }
+            }
             ProtocolSocketInfo::Udp(_udp) => {
                 panic!("Not supported for UDP yet - check out https://github.com/ohadravid/netstat2-rs/issues/11")
             }
@@ -371,7 +387,11 @@ where
      * Tie the connection to the underlying PID as known from the Operating System
      */
 
-    fn set_connection_pids(&mut self, key: ConnectionKey, associated_apps: HashMap<u32, Option<String>>) {
+    fn set_connection_pids(
+        &mut self,
+        key: ConnectionKey,
+        associated_apps: HashMap<u32, Option<String>>,
+    ) {
         if let Some(connection) = self.connections.get_mut(&key) {
             connection.pids = Some(associated_apps);
         } else {
