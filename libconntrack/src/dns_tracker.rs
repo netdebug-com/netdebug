@@ -365,20 +365,22 @@ mod test {
             let pkt = OwnedParsedPacket::try_from(pkt).unwrap();
             let udp = match &pkt.transport {
                 Some(TransportHeader::Udp(udp)) => udp,
-                _ => panic!("Non-UDP packet in the DNS+UDP only trace")
+                _ => panic!("Non-UDP packet in the DNS+UDP only trace"),
             };
             assert!(udp.source_port == UDP_DNS_PORT || udp.destination_port == UDP_DNS_PORT);
             let (key, src_is_local) = pkt.to_connection_key(&local_addrs).unwrap();
             let timestamp = utils::timeval_to_duration(pkt.pcap_header.ts.clone());
-            dns_tracker.parse_dns(key, timestamp, pkt.payload, src_is_local).await;
+            dns_tracker
+                .parse_dns(key, timestamp, pkt.payload, src_is_local)
+                .await;
         }
         // TODO: sanity check this data; for now just parsing is enough
-        
+
         // now make sure we can serialize/deserialize it all
         for (_ip, dns_entry) in &dns_tracker.reverse_map {
             let json = serde_json::to_string(dns_entry).unwrap();
             println!("{}", json);
-            let new_value : DnsTrackerEntry = serde_json::from_str(&json).unwrap();
+            let new_value: DnsTrackerEntry = serde_json::from_str(&json).unwrap();
             assert_eq!(*dns_entry, new_value);
         }
     }

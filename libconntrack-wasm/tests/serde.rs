@@ -19,7 +19,7 @@ fn chrono_serdes_test() {
     }
 }
 
-// Doens't work for some json parsing issue on IpAddr!? 
+// Doens't work for some json parsing issue on IpAddr!?
 // we don't see it in practice, so just ignore for now - probably a problem
 // with the test data
 #[ignore]

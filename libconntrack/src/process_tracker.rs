@@ -2,18 +2,18 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 use chrono::Duration;
-#[cfg(test)]
-use std::{println as debug, println as warn};
 #[cfg(not(test))]
-use log::{warn, debug};
+use log::{debug, warn};
 use netstat2::{AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::{println as debug, println as warn};
 use tokio::{
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
 };
 
-use crate::connection::{ConnectionKey, ConnectionTrackerMsg};
+use crate::connection::ConnectionKey;
 
 pub enum ProcessTrackerMessage {
     LookupOne {
@@ -21,10 +21,16 @@ pub enum ProcessTrackerMessage {
         tx: UnboundedSender<Option<ProcessTrackerEntry>>,
     },
     UpdateCache,
+    DumpCache {
+        // return the tcp_cache and the udp_cache
+        tx: UnboundedSender<(
+            HashMap<ConnectionKey, ProcessTrackerEntry>,
+            HashMap<(IpAddr, u16), ProcessTrackerEntry>,
+        )>,
+    },
 }
 
 pub struct ProcessTracker {
-    conntracker: UnboundedSender<ConnectionTrackerMsg>,
     tx: UnboundedSender<ProcessTrackerMessage>,
     rx: UnboundedReceiver<ProcessTrackerMessage>,
     tcp_cache: HashMap<ConnectionKey, ProcessTrackerEntry>,
@@ -34,14 +40,13 @@ pub struct ProcessTracker {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessTrackerEntry {
-    associated_pids: Vec<u32>,
+    pub associated_apps: HashMap<u32, Option<String>>, // map from PID to the application name, if we know it
 }
 
 impl ProcessTracker {
-    pub fn new(conntracker: UnboundedSender<ConnectionTrackerMsg>) -> ProcessTracker {
+    pub fn new() -> ProcessTracker {
         let (tx, rx) = unbounded_channel::<ProcessTrackerMessage>();
         ProcessTracker {
-            conntracker,
             tx,
             rx,
             tcp_cache: HashMap::new(),
@@ -76,6 +81,11 @@ impl ProcessTracker {
             match msg {
                 LookupOne { key, tx } => self.handle_lookup(key, tx),
                 UpdateCache => self.update_cache(),
+                DumpCache { tx } => {
+                    if let Err(e) = tx.send((self.tcp_cache.clone(), self.udp_cache.clone())) {
+                        warn!("ProcessTracker :: dump cache sender failed: {}", e);
+                    }
+                }
             }
         }
     }
@@ -131,62 +141,37 @@ impl ProcessTracker {
 
         // parse out all of the new data
         for si in sockets_info {
+            let associated_apps = HashMap::from_iter(si.associated_pids.into_iter().map(|p| {
+                // clone the app name if it exists
+                let app = if let Some(app) = self.pid2app_name_cache.get(&p) {
+                    Some(app.clone())
+                } else {
+                    None
+                };
+                (p, app)
+            }));
             match &si.protocol_socket_info {
                 ProtocolSocketInfo::Tcp(tcp_si) => {
                     if tcp_si.remote_port != 0 {
                         // don't record sockets that are just listenning
                         let key =
                             ConnectionKey::from_protocol_socket_info(&si.protocol_socket_info);
-                        if new_tcp_cache.contains_key(&key) && si.associated_pids.is_empty() {
-                            debug!("process_tracker:: Skipping stray duplicate update!?: {:?}", si);
+                        if new_tcp_cache.contains_key(&key) && associated_apps.is_empty() {
+                            debug!(
+                                "process_tracker:: Skipping stray duplicate update!?: {} -- {:?}",
+                                key, associated_apps
+                            );
                             continue;
                         }
-                        new_tcp_cache.insert(
-                            key,
-                            ProcessTrackerEntry {
-                                associated_pids: si.associated_pids,
-                            },
-                        );
+                        new_tcp_cache.insert(key, ProcessTrackerEntry { associated_apps });
                     }
                 }
                 ProtocolSocketInfo::Udp(udp_si) => {
                     let key = (udp_si.local_addr, udp_si.local_port);
-                    new_udp_cache.insert(
-                        key,
-                        ProcessTrackerEntry {
-                            associated_pids: si.associated_pids,
-                        },
-                    );
+                    new_udp_cache.insert(key, ProcessTrackerEntry { associated_apps });
                 }
             }
         }
-
-        // walk through the old data and compare
-        for (k, v) in &new_tcp_cache {
-            if !self.tcp_cache.contains_key(&k) {
-                if let Err(e) = self
-                    .conntracker
-                    .send(ConnectionTrackerMsg::SetConnectionPids {
-                        key: k.clone(),
-                        associated_apps: v
-                            .associated_pids
-                            .iter()
-                            .map(|p| {
-                                let name = match self.pid2app_name_cache.get(&p) {
-                                    Some(name) => Some(name.clone()),
-                                    None => None,
-                                };
-                                (p.clone(), name)
-                            })
-                            .collect(),
-                    })
-                {
-                    warn!("Failed to send SetConnectionPids to ConnTracker: {}", e);
-                }
-            }
-        }
-        // don't bother sending the proactive UDP updates for now - too much work for too little reward
-        // TODO: add Udp support once netstat2 is fixed up sanely per issue #11
 
         // last, move new cache into place
         self.tcp_cache = new_tcp_cache;
@@ -198,7 +183,7 @@ impl ProcessTracker {
 mod test {
     use super::*;
     #[tokio::test]
-    async fn dns_update() {
+    async fn process_update() {
         // bind a socket real quick for some ground truth
         let tcp_server = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -218,32 +203,17 @@ mod test {
             ip_proto: etherparse::IpNumber::Tcp as u8,
         };
         //
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let mut process_tracker = ProcessTracker::new(tx);
+        let mut process_tracker = ProcessTracker::new();
         process_tracker.update_cache();
 
-        // in theory, the only tx to the channel is in process_tracker and it will
-        // go out of scope HERE b/c it's not refereced anymore, so the rx should
-        // empty the channel and then return an error when getting messages
-        // rather than just query indefinitely
-
         let mut found_it = false;
-        while let Ok(msg) = rx.try_recv() {
-            use ConnectionTrackerMsg::*;
-            let (key, apps) = match &msg {
-                SetConnectionPids {
-                    key,
-                    associated_apps,
-                } => Some((key, associated_apps)),
-                _ => panic!("Got unexplained ConnectionTrackerMsg {:?}", msg),
-            }
-            .unwrap();
+        for (key, entry) in &process_tracker.tcp_cache {
             if *key == test_key {
                 found_it = true;
                 // did we correctly find this connection and map it back to this pid?
-                assert!(!apps.is_empty());
-                assert!(apps.contains_key(&my_pid));
+                assert!(!entry.associated_apps.is_empty());
+                assert!(entry.associated_apps.contains_key(&my_pid));
                 // TODO : we don't track App names for all OSes yet - when we do, add this test
                 // let name = apps.get(&my_pid);
                 // assert_eq(name, std::process::name(), std::env::args().next().unwrap());

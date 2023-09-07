@@ -94,7 +94,7 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, tabs: Tabs) -> Result<(), J
             console_log!("Got unparsable message from server: {} :: '{}'", e, raw_msg);
             Ok(())
         }
-    } 
+    }
 }
 /**
  * Are the server and GUI running from the same code base?

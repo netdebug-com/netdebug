@@ -9,7 +9,7 @@ use common::{
     ProbeReportSummary, PROBE_MAX_TTL,
 };
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
-use libconntrack_wasm::DnsTrackerEntry;
+use libconntrack_wasm::{DnsTrackerEntry, IpProtocol};
 #[cfg(not(test))]
 use log::{debug, info, warn};
 use netstat2::ProtocolSocketInfo;
@@ -26,6 +26,7 @@ use crate::{
     in_band_probe::tcp_inband_probe,
     owned_packet::OwnedParsedPacket,
     pcap::RawSocketWriter,
+    process_tracker::ProcessTrackerEntry,
     utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, timeval_to_ms},
 };
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -51,6 +52,8 @@ impl std::fmt::Display for ConnectionKey {
 impl ConnectionKey {
     /**
      * Create a ConnectionKey from a remote socket addr and the global context
+     *
+     * NOTE: this code will not work in WASM b/c of the udp call
      */
     pub async fn new(local_l4_port: u16, addr: &SocketAddr, ip_proto: u8) -> Self {
         // Annoying - it turns out it's hard in Warp to figure out which local IP a given
@@ -157,9 +160,8 @@ pub enum ConnectionTrackerMsg {
     GetConnectionKeys {
         tx: tokio::sync::mpsc::Sender<Vec<ConnectionKey>>,
     },
-    SetConnectionPids {
-        key: ConnectionKey,
-        associated_apps: HashMap<u32, Option<String>>, // PID --> ProcessName, if we know it
+    GetConnections {
+        tx: tokio::sync::mpsc::UnboundedSender<Vec<Connection>>,
     },
 }
 
@@ -242,10 +244,9 @@ where
                         );
                     }
                 }
-                SetConnectionPids {
-                    key,
-                    associated_apps,
-                } => self.set_connection_pids(key, associated_apps),
+                GetConnections { tx } => {
+                    self.handle_get_connections(tx);
+                }
             }
         }
         info!("ConnectionTracker exiting rx_loop()");
@@ -303,7 +304,7 @@ where
             user_annotation: None,
             log_dir: self.log_dir.clone(),
             user_agent: None,
-            pids: None,
+            associated_apps: None,
         };
         info!("Tracking new connection: {}", &key);
 
@@ -383,21 +384,16 @@ where
         }
     }
 
-    /**
-     * Tie the connection to the underlying PID as known from the Operating System
-     */
-
-    fn set_connection_pids(
-        &mut self,
-        key: ConnectionKey,
-        associated_apps: HashMap<u32, Option<String>>,
-    ) {
-        if let Some(connection) = self.connections.get_mut(&key) {
-            connection.pids = Some(associated_apps);
-        } else {
+    fn handle_get_connections(&self, tx: tokio::sync::mpsc::UnboundedSender<Vec<Connection>>) {
+        let connections = self
+            .connections
+            .values()
+            .cloned()
+            .collect::<Vec<Connection>>();
+        if let Err(e) = tx.send(connections) {
             warn!(
-                "Tried to set the associated pids for a non-existing connection {}",
-                key
+                "Tried to send the connections back to caller, but failed: {}",
+                e
             );
         }
     }
@@ -439,7 +435,7 @@ pub struct Connection {
     pub user_annotation: Option<String>, // an human supplied comment on this connection
     pub log_dir: String, // need to cache it here as we need it during Destructor; fugly
     pub user_agent: Option<String>, // when created via a web request, store the user-agent header
-    pub pids: Option<HashMap<u32, Option<String>>>, // PID --> ProcessName, if we know it
+    pub associated_apps: Option<HashMap<u32, Option<String>>>, // PID --> ProcessName, if we know it
 }
 impl Connection {
     fn update<R>(
@@ -1196,9 +1192,64 @@ impl Connection {
             }
         } else {
             // Noop - don't do anything special for other UDP connections -yet
-            info!("Ignoring untracked UDP connection: {}", key);
+            // TODO: handle QUIC connections - there are a lot of them
+            debug!("Ignoring untracked UDP connection: {}", key);
         }
         ConnectionAction::Noop
+    }
+
+    pub fn to_connection_measurements(
+        &self,
+        dns_cache: &HashMap<IpAddr, DnsTrackerEntry>,
+        tcp_cache: &HashMap<ConnectionKey, ProcessTrackerEntry>,
+        udp_cache: &HashMap<(IpAddr, u16), ProcessTrackerEntry>,
+    ) -> libconntrack_wasm::ConnectionMeasurements {
+        let local_hostname = if let Some(entry) = dns_cache.get(&self.connection_key.local_ip) {
+            Some(entry.hostname.clone())
+        } else {
+            None
+        };
+        let remote_hostname = if let Some(entry) = dns_cache.get(&self.connection_key.remote_ip) {
+            Some(entry.hostname.clone())
+        } else {
+            None
+        };
+        use IpProtocol::*;
+        let ip_proto = IpProtocol::from_wire(self.connection_key.ip_proto);
+        let associated_apps = match ip_proto {
+            TCP => {
+                if let Some(entry) = tcp_cache.get(&self.connection_key) {
+                    entry.associated_apps.clone()
+                } else {
+                    HashMap::new()
+                }
+            }
+            UDP => {
+                let key = (
+                    self.connection_key.local_ip,
+                    self.connection_key.local_l4_port,
+                );
+                if let Some(entry) = udp_cache.get(&key) {
+                    entry.associated_apps.clone()
+                } else {
+                    HashMap::new()
+                }
+            }
+            _ => HashMap::new(), // no info
+        };
+        libconntrack_wasm::ConnectionMeasurements {
+            local_hostname,
+            local_ip: self.connection_key.local_ip.clone(),
+            local_l4_port: self.connection_key.local_l4_port,
+            remote_hostname,
+            remote_ip: self.connection_key.remote_ip.clone(),
+            remote_l4_port: self.connection_key.remote_l4_port,
+            ip_proto,
+            probe_report_summary: self.probe_report_summary.clone(),
+            user_annotation: self.user_annotation.clone(),
+            user_agent: self.user_agent.clone(),
+            associated_apps,
+        }
     }
 }
 

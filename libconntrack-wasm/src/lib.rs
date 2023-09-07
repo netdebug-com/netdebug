@@ -1,6 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+pub mod connection_measurements;
+pub use connection_measurements::*; // reshare these identifiers in this namespace
+
 #[serde_with::serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DnsTrackerEntry {
@@ -50,5 +53,60 @@ pub fn pretty_print_duration(d: &chrono::Duration) -> String {
             // unwrap should be ok here b/c we won't reach here if it's None
             format!("{} microseconds*", d.num_microseconds().unwrap())
         }
+    }
+}
+
+/**
+ * A (hopefuly useful) subset of all of the possible IP Protocols
+ * /// use IpProtocol::*;
+ * ///  assert_eq!(TCP, IpProtocol::from_wire(TCP.to_wire()));
+ */
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IpProtocol {
+    ICMP,
+    TCP,
+    UDP,
+    ICMP6,
+    Other(u8),
+}
+
+impl IpProtocol {
+    pub fn to_wire(&self) -> u8 {
+        use IpProtocol::*;
+        let num = match self {
+            ICMP => 1,
+            TCP => 6,
+            UDP => 17,
+            ICMP6 => 58,
+            Other(ip_proto) => *ip_proto,
+        };
+        num as u8
+    }
+
+    pub fn from_wire(ip_proto: u8) -> IpProtocol {
+        use IpProtocol::*;
+        match ip_proto {
+            1 => ICMP,
+            6 => TCP,
+            17 => UDP,
+            58 => ICMP6,
+            _ => Other(ip_proto),
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn ip_protocol_wire() {
+        // it seems you need a special crate ('strum') to be able to iterate over enums
+        // don't worry about that for now and just test the four we've defined
+        use IpProtocol::*;
+        assert_eq!(TCP, IpProtocol::from_wire(TCP.to_wire()));
+        assert_eq!(UDP, IpProtocol::from_wire(UDP.to_wire()));
+        assert_eq!(ICMP, IpProtocol::from_wire(ICMP.to_wire()));
+        assert_eq!(ICMP6, IpProtocol::from_wire(ICMP6.to_wire()));
     }
 }

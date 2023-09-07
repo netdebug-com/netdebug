@@ -1,10 +1,12 @@
 mod websocket;
 
+use chrono::Duration;
 use clap::Parser;
 use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg},
     dns_tracker::{DnsTracker, DnsTrackerMessage},
     pcap::{lookup_egress_device, lookup_pcap_device_by_name},
+    process_tracker::{ProcessTracker, ProcessTrackerMessage},
 };
 use log::info;
 use std::{collections::HashSet, error::Error, net::IpAddr};
@@ -90,6 +92,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .map(|d| d.addresses.iter().map(|a| a.addr).collect::<Vec<IpAddr>>())
         .flatten()
         .collect::<HashSet<IpAddr>>();
+    // launch the process tracker
+    let process_tracker = ProcessTracker::new();
+    let (process_tracker, _join) = process_tracker.spawn(Duration::milliseconds(500)).await;
 
     // launch the DNS tracker; cache localhost entries
     let (dns_tx, _) = DnsTracker::new().spawn().await;
@@ -138,9 +143,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         desktop_common::get_git_hash_version()
     );
     let listen_addr = ([127, 0, 0, 1], args.listen_port);
-    warp::serve(make_desktop_http_routes(&args.wasm_root, &args.html_root, tx, dns_tx).await)
-        .run(listen_addr)
-        .await;
+    warp::serve(
+        make_desktop_http_routes(
+            &args.wasm_root,
+            &args.html_root,
+            tx,
+            dns_tx,
+            process_tracker,
+        )
+        .await,
+    )
+    .run(listen_addr)
+    .await;
     Ok(())
 }
 
@@ -151,10 +165,12 @@ pub async fn make_desktop_http_routes(
     html_root: &String,
     connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
+    process_tracker: UnboundedSender<ProcessTrackerMessage>,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     let webclient =
         libwebserver::http_routes::make_webclient_route(&wasm_root).with(warp::log("webclient"));
-    let ws = make_desktop_ws_route(connection_tracker, dns_tracker).with(warp::log("websocket"));
+    let ws = make_desktop_ws_route(connection_tracker, dns_tracker, process_tracker)
+        .with(warp::log("websocket"));
     let static_path = warp::fs::dir(html_root.clone()).with(warp::log("static"));
 
     // this is the order that the filters try to match; it's important that
@@ -184,21 +200,35 @@ fn with_dns_tracker(
     warp::any().map(move || dns_tracker.clone())
 }
 
+fn with_process_tracker(
+    process_tracker: UnboundedSender<ProcessTrackerMessage>,
+) -> impl warp::Filter<
+    Extract = (UnboundedSender<ProcessTrackerMessage>,),
+    Error = std::convert::Infallible,
+> + Clone {
+    let process_tracker = process_tracker.clone();
+    warp::any().map(move || process_tracker.clone())
+}
+
 fn make_desktop_ws_route(
     connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
+    process_tracker: UnboundedSender<ProcessTrackerMessage>,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::path("ws")
         .and(with_connection_tracker(connection_tracker))
         .and(with_dns_tracker(dns_tracker))
+        .and(with_process_tracker(process_tracker))
         .and(warp::ws())
         .and_then(websocket_desktop)
 }
 pub async fn websocket_desktop(
     connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
+    process_tracker: UnboundedSender<ProcessTrackerMessage>,
     ws: warp::ws::Ws,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    Ok(ws
-        .on_upgrade(move |websocket| websocket_handler(connection_tracker, dns_tracker, websocket)))
+    Ok(ws.on_upgrade(move |websocket| {
+        websocket_handler(connection_tracker, dns_tracker, process_tracker, websocket)
+    }))
 }

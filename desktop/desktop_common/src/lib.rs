@@ -1,11 +1,11 @@
-use std::{collections::HashMap, net::IpAddr};
-use libconntrack_wasm::DnsTrackerEntry;
+use libconntrack_wasm::{ConnectionMeasurements, DnsTrackerEntry};
 /**
  * Anything in this file must compile for both native rust/x86 AND WASM
- * 
+ *
  * So no thread, deep OS calls, etc. here
  */
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, net::IpAddr};
 
 pub fn get_git_hash_version() -> String {
     env!("GIT_HASH").to_string()
@@ -14,7 +14,7 @@ pub fn get_git_hash_version() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServerToGuiMessages {
     VersionCheck(String),
-    DumpFlowsReply(Vec<String>),
+    DumpFlowsReply(Vec<ConnectionMeasurements>),
     DumpDnsCache(HashMap<IpAddr, DnsTrackerEntry>),
 }
 

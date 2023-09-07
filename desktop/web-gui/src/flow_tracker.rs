@@ -1,4 +1,5 @@
 use desktop_common::GuiToServerMessages;
+use libconntrack_wasm::ConnectionMeasurements;
 use wasm_bindgen::prelude::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{MessageEvent, WebSocket};
@@ -45,7 +46,9 @@ impl FlowTracker {
         h1.set_inner_html("Flow #");
         let h2 = html!("th").unwrap();
         h2.set_inner_html("Flow Key");
-        let thead = html!("thead", {}, html!("tr", {}, h1, h2).unwrap()).unwrap();
+        let h3 = html!("th").unwrap();
+        h3.set_inner_html("Application(s)");
+        let thead = html!("thead", {}, html!("tr", {}, h1, h2, h3).unwrap()).unwrap();
         let table = html!(
             "table",
             {},
@@ -104,7 +107,7 @@ impl FlowTracker {
 }
 
 pub fn handle_dumpflows_reply(
-    flows: Vec<String>,
+    flows: Vec<ConnectionMeasurements>,
     _ws: WebSocket,
     tabs: Tabs,
 ) -> Result<(), JsValue> {
@@ -122,13 +125,47 @@ pub fn handle_dumpflows_reply(
         .get_element_by_id(FLOW_TRACKER_TABLE)
         .expect(FLOW_TRACKER_TABLE);
     tbody.set_inner_html(""); // clear the table (??)
-    for (idx, flow) in flows.into_iter().enumerate() {
+    for (idx, measurments) in flows.into_iter().enumerate() {
         let idx_elm = html!("td").unwrap();
         idx_elm.set_inner_html(format!("{}", idx).as_str());
         let flow_elm = html!("td").unwrap();
-        flow_elm.set_inner_html(flow.as_str());
+        let local = if let Some(local) = measurments.local_hostname {
+            local
+        } else {
+            format!("[{}]", measurments.local_ip)
+        };
+        let remote = if let Some(remote) = measurments.remote_hostname {
+            remote
+        } else {
+            format!("[{}]", measurments.remote_ip)
+        };
+        flow_elm.set_inner_html(
+            format!(
+                "{}::{} --> {}::{}",
+                local, measurments.local_l4_port, remote, measurments.remote_l4_port
+            )
+            .as_str(),
+        );
+        let apps = if !measurments.associated_apps.is_empty() {
+            measurments
+                .associated_apps
+                .iter()
+                .map(|(p, a)| {
+                    if let Some(name) = a {
+                        name.clone()
+                    } else {
+                        format!("({})", p)
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(", ")
+        } else {
+            "(unknown!)".to_string()
+        };
+        let app_elm = html!("td").unwrap();
+        app_elm.set_inner_html(&apps);
         tbody
-            .append_child(&html!("tr", {}, idx_elm, flow_elm).unwrap())
+            .append_child(&html!("tr", {}, idx_elm, flow_elm, app_elm).unwrap())
             .unwrap();
     }
     Ok(())

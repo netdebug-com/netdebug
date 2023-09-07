@@ -61,7 +61,6 @@ pub fn timeval_to_duration(tv: libc::timeval) -> chrono::Duration {
     Duration::microseconds(tv.tv_sec as i64 * 1_000_000 + tv.tv_usec as i64)
 }
 
-
 // really should exist in some library somewhere
 pub fn ip_proto_to_string(ip_proto: u8) -> String {
     use etherparse::IpNumber::*;
