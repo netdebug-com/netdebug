@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 use chrono::Duration;
-use log::warn;
+#[cfg(test)]
+use std::{println as debug, println as warn};
+#[cfg(not(test))]
+use log::{warn, debug};
 use netstat2::{AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -129,14 +132,22 @@ impl ProcessTracker {
         // parse out all of the new data
         for si in sockets_info {
             match &si.protocol_socket_info {
-                ProtocolSocketInfo::Tcp(_tcp_si) => {
-                    let key = ConnectionKey::from_protocol_socket_info(&si.protocol_socket_info);
-                    new_tcp_cache.insert(
-                        key,
-                        ProcessTrackerEntry {
-                            associated_pids: si.associated_pids,
-                        },
-                    );
+                ProtocolSocketInfo::Tcp(tcp_si) => {
+                    if tcp_si.remote_port != 0 {
+                        // don't record sockets that are just listenning
+                        let key =
+                            ConnectionKey::from_protocol_socket_info(&si.protocol_socket_info);
+                        if new_tcp_cache.contains_key(&key) && si.associated_pids.is_empty() {
+                            debug!("process_tracker:: Skipping stray duplicate update!?: {:?}", si);
+                            continue;
+                        }
+                        new_tcp_cache.insert(
+                            key,
+                            ProcessTrackerEntry {
+                                associated_pids: si.associated_pids,
+                            },
+                        );
+                    }
                 }
                 ProtocolSocketInfo::Udp(udp_si) => {
                     let key = (udp_si.local_addr, udp_si.local_port);
@@ -189,7 +200,9 @@ mod test {
     #[tokio::test]
     async fn dns_update() {
         // bind a socket real quick for some ground truth
-        let tcp_server = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let tcp_server = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let server_addr = tcp_server.local_addr().unwrap();
         // println!("Test socket bound: {}", server_addr);
         let tcp_client = tokio::net::TcpStream::connect(server_addr).await.unwrap();
@@ -229,6 +242,7 @@ mod test {
             if *key == test_key {
                 found_it = true;
                 // did we correctly find this connection and map it back to this pid?
+                assert!(!apps.is_empty());
                 assert!(apps.contains_key(&my_pid));
                 // TODO : we don't track App names for all OSes yet - when we do, add this test
                 // let name = apps.get(&my_pid);
