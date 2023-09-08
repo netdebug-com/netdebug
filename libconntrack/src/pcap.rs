@@ -114,7 +114,7 @@ pub fn blocking_pcap_loop(
             }
             Err(e) => {
                 match e {
-                    pcap::Error::PcapError(_e) => continue, // just keep going if we get a timeout
+                    pcap::Error::TimeoutExpired => continue, // just keep going if we get a timeout
                     _ => {
                         // die on any other error
                         warn!("start_pcap_stream got error: {} - exiting", e);
