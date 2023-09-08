@@ -1,3 +1,0 @@
-lib filter=lfs diff=lfs merge=lfs -text
-lib/x64/Packet.lib filter=lfs diff=lfs merge=lfs -text
-lib/x64/wpcap.lib filter=lfs diff=lfs merge=lfs -text
