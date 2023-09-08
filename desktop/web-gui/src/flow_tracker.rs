@@ -51,7 +51,7 @@ impl FlowTracker {
         let thead = html!("thead", {}, html!("tr", {}, h1, h2, h3).unwrap()).unwrap();
         let table = html!(
             "table",
-            {},
+            {"class" => "content-table"},
             &thead,
             html!("tbody", { "id" => FLOW_TRACKER_TABLE}).unwrap()
         )
