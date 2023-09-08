@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +71,19 @@ pub enum IpProtocol {
     UDP,
     ICMP6,
     Other(u8),
+}
+
+impl Display for IpProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use IpProtocol::*;
+        match self {
+            ICMP => write!(f, "ICMP"),
+            TCP => write!(f, "TCP"),
+            UDP => write!(f, "UDP"),
+            ICMP6 => write!(f, "ICMP6"),
+            Other(ip_proto) => write!(f, "ip_proto={}", ip_proto),
+        }
+    }
 }
 
 impl IpProtocol {

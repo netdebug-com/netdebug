@@ -141,8 +141,8 @@ pub fn handle_dumpflows_reply(
         };
         flow_elm.set_inner_html(
             format!(
-                "{}::{} --> {}::{}",
-                local, measurments.local_l4_port, remote, measurments.remote_l4_port
+                "{} {}::{} --> {}::{}",
+                measurments.ip_proto, local, measurments.local_l4_port, remote, measurments.remote_l4_port
             )
             .as_str(),
         );
