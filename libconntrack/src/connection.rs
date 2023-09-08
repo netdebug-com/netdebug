@@ -1116,8 +1116,7 @@ impl Connection {
     fn generate_output_filename(&mut self) -> String {
         if self.close_time.is_none() {
             let now = Utc::now();
-            self.close_time = Some(now.to_rfc3339().replace(":", "_"));
-            // convenient time format, but need the remove the ':' as windows doesn't like the filename
+            self.close_time = Some(now.to_rfc3339());
         }
 
         let label = if self.user_annotation.is_some() {
@@ -1128,7 +1127,7 @@ impl Connection {
             "simple"
         };
 
-        std::path::Path::new(&self.log_dir)
+        let filename = std::path::Path::new(&self.log_dir)
             .join(format!(
                 "{}_{}____{}_{}____{}_{}_{}.log",
                 label,
@@ -1142,6 +1141,11 @@ impl Connection {
             .into_os_string()
             .into_string()
             .unwrap()
+            // silly windows doesn't allow ':'s from time + Ipv6 addrs in the filename
+            // keep it the same file name on all systems
+            .replace(":", "-");
+
+        filename
     }
 
     // Write Connection details and stats out to a logfile when it goes away
