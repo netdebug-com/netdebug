@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use desktop_common::GuiToServerMessages;
 use libconntrack_wasm::{pretty_print_duration, DnsTrackerEntry};
 use wasm_bindgen::prelude::Closure;
@@ -63,7 +63,7 @@ impl DnsTracker {
         let thead = html!("thead", {}, tr).unwrap();
         let table = html!(
             "table",
-            {},
+            {"class" => "content-table"},
             &thead,
             html!("tbody", { "id" => DNS_TRACKER_TABLE}).unwrap()
         )
@@ -139,7 +139,12 @@ pub fn handle_dump_dns_cache_reply(
     tbody.set_inner_html(""); // clear the table (??)
     let mut sorted_cache: Vec<(IpAddr, DnsTrackerEntry)> = cache.into_iter().collect();
     let now = Utc::now();
-    sorted_cache.sort_by(|(ip_a, a), (ip_b, b)| a.hostname.cmp(&b.hostname).then(ip_a.cmp(ip_b)));
+    sorted_cache.sort_by(|(ip_a, a), (ip_b, b)| {
+        // first by rtt (highest to lowest), then by hostname then IP
+        b.rtt
+            .cmp(&a.rtt)
+            .then(a.hostname.cmp(&b.hostname).then(ip_a.cmp(ip_b)))
+    });
     for (ip_addr, dns_entry) in &sorted_cache {
         let hostname = html!("td").unwrap();
         hostname.set_inner_html(&dns_entry.hostname);
@@ -157,6 +162,12 @@ pub fn handle_dump_dns_cache_reply(
         let rtt = html!("td").unwrap();
         if let Some(rtt_value) = dns_entry.rtt {
             rtt.set_inner_html(pretty_print_duration(&rtt_value).as_str());
+            // TODO: normalize these numbers by some fraction of typical RTT, e.g., 20%
+            if rtt_value > Duration::milliseconds(10) {
+                rtt.set_attribute("style", "color:red;background-color:black").unwrap();
+            } else if rtt_value > Duration::milliseconds(5) {
+                rtt.set_attribute("style", "color:yellow;background-color:black").unwrap();
+            }
         } else {
             rtt.set_inner_html("-");
         }
