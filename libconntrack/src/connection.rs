@@ -327,9 +327,8 @@ where
         tx: tokio::sync::mpsc::Sender<ProbeReport>,
     ) {
         if let Some(connection) = self.connections.get_mut(&key) {
-            let report = connection
-                .generate_probe_report(probe_round, application_rtt, clear_state)
-                .await;
+            let report =
+                connection.generate_probe_report(probe_round, application_rtt, clear_state);
             if let Err(e) = tx.send(report).await {
                 warn!("Error sending back report: {}", e);
             }
@@ -893,7 +892,7 @@ impl Connection {
      * report.  If 'clear' is set, reset the connection's state so we can do a new set
      * of probes on the next data packet
      */
-    async fn generate_probe_report(
+    fn generate_probe_report(
         &mut self,
         probe_round: u32,
         application_rtt: f64,
@@ -1148,12 +1147,21 @@ impl Connection {
         filename
     }
 
+    fn in_active_probe_session(&self) -> bool {
+        !self.incoming_reply_timestamps.is_empty() || !self.outgoing_probe_timestamps.is_empty()
+    }
+
     // Write Connection details and stats out to a logfile when it goes away
     // NOTE this can go away by FIN/RST or also by HashLru eviction
     // TODO: just write out to a file in JSON for now, but will ultimately need
     // some sort of database... I think? SQL scheme may be a PITA
     fn log_to_disk(&mut self) {
         self.needs_logging = false;
+        if self.in_active_probe_session() {
+            let probe_round = self.probe_report_summary.raw_reports.len() as u32;
+            let application_rtt = 0.0; // FIXME - garbage!
+            self.generate_probe_report(probe_round, application_rtt, true);
+        }
         let outfile = self.generate_output_filename();
         debug!("Writing connection out to {}", outfile);
         // write to $CWD for now... figure it out later
@@ -1459,7 +1467,7 @@ pub mod test {
         }
 
         // fake probe_report data; round=1, rtt=100ms
-        let report = connection.generate_probe_report(1, 100.0, false).await;
+        let report = connection.generate_probe_report(1, 100.0, false);
         println!("Report:\n{}", report);
     }
 
@@ -1792,7 +1800,7 @@ pub mod test {
             .connections
             .get_mut(&connection_key)
             .unwrap();
-        let report = connection.generate_probe_report(1, 100.0, false).await;
+        let report = connection.generate_probe_report(1, 100.0, false);
         println!("{}", report); // useful for debugging
 
         // hand analysis via wireshark = which TTL's got which reply types?
