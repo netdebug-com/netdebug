@@ -137,7 +137,7 @@ pub enum ConnectionTrackerMsg {
         key: ConnectionKey,
         clear_state: bool,
         probe_round: u32,
-        application_rtt: f64,
+        application_rtt: Option<f64>,
         tx: tokio::sync::mpsc::Sender<ProbeReport>,
     },
     ProbeOnIdle {
@@ -322,7 +322,7 @@ where
         &mut self,
         key: ConnectionKey,
         probe_round: u32,
-        application_rtt: f64,
+        application_rtt: Option<f64>,
         clear_state: bool,
         tx: tokio::sync::mpsc::Sender<ProbeReport>,
     ) {
@@ -895,7 +895,7 @@ impl Connection {
     fn generate_probe_report(
         &mut self,
         probe_round: u32,
-        application_rtt: f64,
+        application_rtt: Option<f64>,
         clear: bool,
     ) -> ProbeReport {
         let mut report = HashMap::new();
@@ -1159,8 +1159,7 @@ impl Connection {
         self.needs_logging = false;
         if self.in_active_probe_session() {
             let probe_round = self.probe_report_summary.raw_reports.len() as u32;
-            let application_rtt = 0.0; // FIXME - garbage!
-            self.generate_probe_report(probe_round, application_rtt, true);
+            self.generate_probe_report(probe_round, None, true);
         }
         let outfile = self.generate_output_filename();
         debug!("Writing connection out to {}", outfile);
@@ -1467,7 +1466,7 @@ pub mod test {
         }
 
         // fake probe_report data; round=1, rtt=100ms
-        let report = connection.generate_probe_report(1, 100.0, false);
+        let report = connection.generate_probe_report(1, Some(100.0), false);
         println!("Report:\n{}", report);
     }
 
@@ -1708,7 +1707,7 @@ pub mod test {
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         // fake data for probe_round=1, rtt=100ms
         connection_tracker
-            .generate_report(key, 1, 100.0, false, tx)
+            .generate_report(key, 1, Some(100.0), false, tx)
             .await;
         let report = rx.recv().await.unwrap();
 
@@ -1800,7 +1799,7 @@ pub mod test {
             .connections
             .get_mut(&connection_key)
             .unwrap();
-        let report = connection.generate_probe_report(1, 100.0, false);
+        let report = connection.generate_probe_report(1, Some(100.0), false);
         println!("{}", report); // useful for debugging
 
         // hand analysis via wireshark = which TTL's got which reply types?
