@@ -269,7 +269,7 @@ async fn get_probe_report(
             clear_state,
             tx: report_tx,
             probe_round,
-            application_rtt,
+            application_rtt: Some(application_rtt),
         }) {
             warn!("Error talking to connection tracker: {}", e);
             None

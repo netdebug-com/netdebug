@@ -126,13 +126,15 @@ fn compute_application_latency(
             .raw_reports
             .get(*probe_round as usize)
             .unwrap();
-        sum += report.application_rtt;
-        if min > report.application_rtt {
-            min = report.application_rtt;
-        }
-        if max < report.application_rtt {
-            max = report.application_rtt;
-            max_probe_round = *probe_round as u32;
+        if let Some(app_rtt) = report.application_rtt {
+            sum += app_rtt;
+            if min > app_rtt {
+                min = app_rtt;
+            }
+            if max < app_rtt {
+                max = app_rtt;
+                max_probe_round = *probe_round as u32;
+            }
         }
     }
 
@@ -151,11 +153,13 @@ fn compute_application_latency(
             .raw_reports
             .get(probe_round as usize)
             .unwrap();
-        let diff = f64::abs(avg - report.application_rtt);
-        if diff < avg_probe_round_approximation_error {
-            // this clause should trigger at least once if there's any data
-            avg_probe_round_approximation_error = diff;
-            avg_probe_round = probe_round as u32;
+        if let Some(app_rtt) = report.application_rtt {
+            let diff = f64::abs(avg - app_rtt);
+            if diff < avg_probe_round_approximation_error {
+                // this clause should trigger at least once if there's any data
+                avg_probe_round_approximation_error = diff;
+                avg_probe_round = probe_round as u32;
+            }
         }
     }
     ApplicationLatencyAnalysis {

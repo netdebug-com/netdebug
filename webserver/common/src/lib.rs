@@ -78,16 +78,18 @@ pub fn get_git_hash_version() -> String {
 pub struct ProbeReport {
     pub probes: HashMap<ProbeId, ProbeReportEntry>,
     pub probe_round: u32,
-    pub application_rtt: f64,
+    pub application_rtt: Option<f64>,
 }
 
 impl Display for ProbeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
-            f,
-            "Probe report: application delay {}",
-            self.application_rtt
-        )?;
+        if let Some(app_rtt) = self.application_rtt {
+            writeln!(
+                f,
+                "Probe report: application delay {}",
+                app_rtt,
+            )?;
+        }
         for probe_id in self.probes.keys().sorted() {
             let e = self.probes.get(probe_id).unwrap();
             writeln!(f, "Probe {:3} - {:?}", probe_id, e)?;
@@ -255,7 +257,7 @@ impl ProbeReport {
     pub fn new(
         report: HashMap<ProbeId, ProbeReportEntry>,
         probe_round: u32,
-        application_rtt: f64,
+        application_rtt: Option<f64>,
     ) -> ProbeReport {
         ProbeReport {
             probes: report,
