@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -8,53 +8,53 @@
     <p id="location">Waiting for location info...</p>
     <p id="origin">Waiting for origin info...</p>
     <script>
-      var x = document.getElementById('location')
+      var x = document.getElementById("location");
 
       function getLocation() {
-        console.log('Trying geolocation APIs... x=', x)
+        console.log("Trying geolocation APIs... x=", x);
         if (navigator.geolocation) {
-          navigator.geolocation.getCurrentPosition(showPosition, showError)
+          navigator.geolocation.getCurrentPosition(showPosition, showError);
         } else {
-          x.innerHTML = 'Geolocation is not supported by this browser.'
+          x.innerHTML = "Geolocation is not supported by this browser.";
         }
-        console.log('Done geolocation APIs...')
+        console.log("Done geolocation APIs...");
       }
 
       function showError(error) {
         switch (error.code) {
           case error.PERMISSION_DENIED:
-            x.innerHTML = 'User denied the request for Geolocation.'
-            break
+            x.innerHTML = "User denied the request for Geolocation.";
+            break;
           case error.POSITION_UNAVAILABLE:
-            x.innerHTML = 'Location information is unavailable.'
-            break
+            x.innerHTML = "Location information is unavailable.";
+            break;
           case error.TIMEOUT:
-            x.innerHTML = 'The request to get user location timed out.'
-            break
+            x.innerHTML = "The request to get user location timed out.";
+            break;
           case error.UNKNOWN_ERROR:
-            x.innerHTML = 'An unknown error occurred.'
-            break
+            x.innerHTML = "An unknown error occurred.";
+            break;
         }
       }
 
       function showPosition(position) {
         x.innerHTML =
-          'Latitude: ' +
+          "Latitude: " +
           position.coords.latitude +
-          '<br>Longitude: ' +
-          position.coords.longitude
+          "<br>Longitude: " +
+          position.coords.longitude;
       }
 
       function getOrigin() {
-        var o = document.getElementById('origin')
-        o.innerHTML = window.location.origin
+        var o = document.getElementById("origin");
+        o.innerHTML = window.location.origin;
       }
 
-      window.onload = init
-      
-      function init () {
-        getLocation()
-        getOrigin()
+      window.onload = init;
+
+      function init() {
+        getLocation();
+        getOrigin();
       }
     </script>
   </body>
