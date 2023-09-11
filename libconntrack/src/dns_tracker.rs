@@ -3,7 +3,7 @@ use log::{debug, warn};
 #[cfg(test)]
 use std::{println as debug, println as warn}; // Workaround to use prinltn! for logs.
 
-use std::{collections::HashMap, net::IpAddr};
+use std::{collections::HashMap, io::Error, net::IpAddr};
 use tokio::{
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
@@ -55,6 +55,32 @@ impl DnsTracker {
             reverse_map: HashMap::new(),
             pending: HashMap::new(),
         }
+    }
+
+    /**
+     * Naively, we can't resolve IP DNS information for connections that were
+     * started before the DnsTracker.  If available, pre-populate the DNS
+     * cache information that we keep with the one that the OS keeps to help
+     * resolve more IP addresses, e.g., in the GUI.
+     */
+    pub fn try_to_load_os_cache(&mut self) -> Result<(), Box<Error>> {
+        // unless this is windows, this is currently a NOOP
+        #[cfg(windows)]
+        self.load_windows_dns_cache(
+            // Note, 'ipconfig /displaydns' also does this, but needs admin!?
+            // this is also easier to parse
+            std::process::Command::new("powershell")
+                // 'out-string -width 256' overrides the $COLS equivalent and
+                // stops trunaction of the output - sigh
+                // could convert everything to json with '|convertTo-Json' but 
+                // seems like a PITA
+                .arg("get-dnsclientcache | out-string -width 256")
+                .output()
+                .unwrap()
+                .stdout
+                .as_slice(),
+        )?;
+        Ok(())
     }
 
     pub async fn spawn(mut self) -> (UnboundedSender<DnsTrackerMessage>, JoinHandle<()>) {
@@ -269,6 +295,47 @@ impl DnsTracker {
             self.reverse_map.remove(k);
         }
     }
+
+    /**
+         * Load the OS-level DNS cache info into our cache to pre-populate things
+         *
+         * Yes, it's screen scraping, but the win32 API for this appears to be
+         * obfuscated and/or private - this seems easier
+         *
+         *
+    Entry                     RecordName                Record Status    Section TimeTo Data   Data
+                                                        Type                     Live   Length
+    -----                     ----------                ------ ------    ------- ------ ------ ----
+    ocsp.digicert.com         ocsp.digicert.com         CNAME  Success   Answer    2241      8 ocsp.edge.digicert.com
+    ocsp.digicert.com         ocsp.edge.digicert.com    CNAME  Success   Answer    2241      8 fp2e7a.wpc.2be4.phicdn.net
+    ocsp.digicert.com         fp2e7a.wpc.2be4.phicdn... CNAME  Success   Answer    2241      8 fp2e7a.wpc.phicdn.net
+    ocsp.digicert.com         fp2e7a.wpc.phicdn.net     A      Success   Answer    2241      4 192.229.211.108
+         *
+         */
+    #[cfg(windows)]
+    fn load_windows_dns_cache<R>(&mut self, input: R) -> Result<(), Box<Error>>
+    where
+        R: std::io::Read,
+    {
+        use std::str::FromStr;
+
+        let all_input = std::io::read_to_string(input).unwrap();
+        for line in all_input.lines() {
+            let tokens = line.split_whitespace().collect::<Vec<&str>>();
+            // we only care about 'A' and 'AAAA' for now
+            if tokens.len() >= 7 && (tokens[2] == "A" || tokens[2] == "AAAA") {
+                let entry = DnsTrackerEntry {
+                    hostname: tokens[1].to_string(),
+                    created: Utc::now(), // kinda a fudge, oh well
+                    rtt: None,
+                    ttl: Some(Duration::seconds(i64::from_str(tokens[5]).expect("digits"))),
+                };
+                let ip = IpAddr::from_str(tokens[7]).unwrap();
+                self.reverse_map.insert(ip, entry);
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -382,6 +449,36 @@ mod test {
             println!("{}", json);
             let new_value: DnsTrackerEntry = serde_json::from_str(&json).unwrap();
             assert_eq!(*dns_entry, new_value);
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn verify_windows_load_os_client_cache() {
+        use std::fs::File;
+
+        let mut dns_tracker = DnsTracker::new();
+        let input = File::open(test_dir("tests/windows_get_dnsclientcache.txt")).unwrap();
+        assert!(dns_tracker.load_windows_dns_cache(input).is_ok());
+        assert_eq!(dns_tracker.reverse_map.len(), 24); // from the test data
+    }
+
+    #[test]
+    fn verify_load_os_client_cache() {
+        use std::net::ToSocketAddrs;
+        let mut dns_tracker = DnsTracker::new();
+        // resolve google.com to add something to the OS cache; just the first one
+        #[allow(unused)] // this var won't be used if not windows
+        let addr = "google.com:443".to_socket_addrs().unwrap().next();
+        dns_tracker.try_to_load_os_cache().unwrap();
+        /*
+         * If not windows, it's ok for the DnsTracker::try_to_load_os_cache() to just not Err(_) out
+         * Which is handled by the .unwrap()
+         */
+        #[cfg(windows)]
+        {
+            let google_addr = addr.unwrap();
+            assert!(dns_tracker.reverse_map.contains_key(&google_addr.ip()));
         }
     }
 }
