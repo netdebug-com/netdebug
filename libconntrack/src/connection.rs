@@ -3,7 +3,7 @@ use std::{
     net::{IpAddr, SocketAddr},
 };
 
-use chrono::{Utc, DateTime};
+use chrono::{DateTime, Utc};
 use common::{
     analysis_messages::AnalysisInsights, ProbeId, ProbeReport, ProbeReportEntry,
     ProbeReportSummary, PROBE_MAX_TTL,

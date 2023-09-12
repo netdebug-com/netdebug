@@ -129,7 +129,7 @@ pub fn handle_dumpflows_reply(
         .expect(FLOW_TRACKER_TABLE);
     tbody.set_inner_html(""); // clear the table (??)
     let now = Utc::now();
-    flows.sort_by(|a,b| a.start_tracking_time.cmp(&b.start_tracking_time));
+    flows.sort_by(|a, b| a.start_tracking_time.cmp(&b.start_tracking_time));
     for (idx, measurments) in flows.into_iter().enumerate() {
         let idx_elm = html!("td").unwrap();
         idx_elm.set_inner_html(format!("{}", idx).as_str());
@@ -147,7 +147,11 @@ pub fn handle_dumpflows_reply(
         flow_elm.set_inner_html(
             format!(
                 "{} {}::{} --> {}::{}",
-                measurments.ip_proto, local, measurments.local_l4_port, remote, measurments.remote_l4_port
+                measurments.ip_proto,
+                local,
+                measurments.local_l4_port,
+                remote,
+                measurments.remote_l4_port
             )
             .as_str(),
         );
