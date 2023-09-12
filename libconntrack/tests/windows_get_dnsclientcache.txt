@@ -1,0 +1,52 @@
+
+Entry                     RecordName                Record Status    Section TimeTo Data   Data                                                                       
+                                                    Type                     Live   Length                                                                            
+-----                     ----------                ------ ------    ------- ------ ------ ----                                                                       
+ocsp.digicert.com         ocsp.digicert.com         CNAME  Success   Answer    2241      8 ocsp.edge.digicert.com                                                     
+ocsp.digicert.com         ocsp.edge.digicert.com    CNAME  Success   Answer    2241      8 fp2e7a.wpc.2be4.phicdn.net                                                 
+ocsp.digicert.com         fp2e7a.wpc.2be4.phicdn... CNAME  Success   Answer    2241      8 fp2e7a.wpc.phicdn.net                                                      
+ocsp.digicert.com         fp2e7a.wpc.phicdn.net     A      Success   Answer    2241      4 192.229.211.108                                                            
+crs.cr.adobe.com          crs.cr.adobe.com          CNAME  Success   Answer    2621      8 crlog-crcn.adobe.com                                                       
+crs.cr.adobe.com          crlog-crcn.adobe.com      A      Success   Answer    2621      4 192.147.130.166                                                            
+array509.prod.do.dsp.m... array509.prod.do.dsp.m... A      Success   Answer     166      4 52.184.217.56                                                              
+cs.dds.microsoft.com      cs.dds.microsoft.com      CNAME  Success   Answer     168      8 cs-geo-dds.trafficmanager.net                                              
+cs.dds.microsoft.com      cs-geo-dds.trafficmana... A      Success   Answer     168      4 52.138.124.216                                                             
+ftp.hp.com                ftp.hp.com                CNAME  Success   Answer      84      8 ftp.ext.hp.com                                                             
+ftp.hp.com                ftp.ext.hp.com            CNAME  Success   Answer      84      8 cdn.ext.hp.com.c.footprint.net                                             
+ftp.hp.com                cdn.ext.hp.com.c.footp... A      Success   Answer      84      4 8.252.56.115                                                               
+downloads.napps-2.com     downloads.napps-2.com     AAAA   Success   Answer     270     16 2606:4700:e2::ac40:870b                                                    
+downloads.napps-2.com     downloads.napps-2.com     AAAA   Success   Answer     270     16 2606:4700:e2::ac40:860b                                                    
+downloads.napps-2.com     downloads.napps-2.com     A      Success   Answer     185      4 172.64.135.11                                                              
+downloads.napps-2.com     downloads.napps-2.com     A      Success   Answer     185      4 172.64.134.11                                                              
+static-ecst.licdn.com     static-ecst.licdn.com     CNAME  Success   Answer     520      8 cs1404.wpc.epsiloncdn.net                                                  
+static-ecst.licdn.com     cs1404.wpc.epsiloncdn.net A      Success   Answer     520      4 152.199.24.163                                                             
+static-ecst.licdn.com     static-ecst.licdn.com     CNAME  Success   Answer    1189      8 cs1404.wpc.epsiloncdn.net                                                  
+static-ecst.licdn.com     cs1404.wpc.epsiloncdn.net AAAA   Success   Answer    1189     16 2606:2800:21f:fedd:8b7a:88ab:fc7e:fa3b                                     
+catalog.gamepass.com      catalog.gamepass.com      CNAME  Success   Answer       1      8 catalog.gamepass.com.edgesuite.net                                         
+catalog.gamepass.com      catalog.gamepass.com.e... CNAME  Success   Answer       1      8 a1992.dscd.akamai.net                                                      
+catalog.gamepass.com      a1992.dscd.akamai.net     CNAME  Success   Answer       1      8 user-att-75-11-8-0.a1992.dscd.akamai.net                                   
+catalog.gamepass.com      user-att-75-11-8-0.a19... AAAA   Success   Answer       1     16 2600:1406:2e00:19::6010:370a                                               
+catalog.gamepass.com      user-att-75-11-8-0.a19... AAAA   Success   Answer       1     16 2600:1406:2e00:19::6010:3710                                               
+catalog.gamepass.com      catalog.gamepass.com      CNAME  Success   Answer       1      8 catalog.gamepass.com.edgesuite.net                                         
+catalog.gamepass.com      catalog.gamepass.com.e... CNAME  Success   Answer       1      8 a1992.dscd.akamai.net                                                      
+catalog.gamepass.com      a1992.dscd.akamai.net     CNAME  Success   Answer       1      8 user-att-75-11-8-0.a1992.dscd.akamai.net                                   
+catalog.gamepass.com      user-att-75-11-8-0.a19... A      Success   Answer       1      4 104.114.76.195                                                             
+catalog.gamepass.com      user-att-75-11-8-0.a19... A      Success   Answer       1      4 104.114.76.147                                                             
+login.live.com            login.live.com            CNAME  Success   Answer      24      8 login.msa.msidentity.com                                                   
+login.live.com            login.msa.msidentity.com  CNAME  Success   Answer      24      8 www.tm.lg.prod.aadmsa.trafficmanager.net                                   
+login.live.com            www.tm.lg.prod.aadmsa.... CNAME  Success   Answer      24      8 prdv4a.aadg.msidentity.com                                                 
+login.live.com            prdv4a.aadg.msidentity... CNAME  Success   Answer      24      8 www.tm.v4.a.prd.aadg.akadns.net                                            
+login.live.com            www.tm.v4.a.prd.aadg.a... A      Success   Answer      24      4 20.190.151.69                                                              
+login.live.com            www.tm.v4.a.prd.aadg.a... A      Success   Answer      24      4 20.190.151.132                                                             
+login.live.com            www.tm.v4.a.prd.aadg.a... A      Success   Answer      24      4 20.190.151.133                                                             
+login.live.com            www.tm.v4.a.prd.aadg.a... A      Success   Answer      24      4 20.190.151.70                                                              
+login.live.com            www.tm.v4.a.prd.aadg.a... A      Success   Answer      24      4 20.190.151.68                                                              
+login.live.com            www.tm.v4.a.prd.aadg.a... A      Success   Answer      24      4 20.190.151.9                                                               
+login.live.com            www.tm.v4.a.prd.aadg.a... A      Success   Answer      24      4 20.190.151.6                                                               
+login.live.com            www.tm.v4.a.prd.aadg.a... A      Success   Answer      24      4 20.190.151.7                                                               
+az700632.vo.msecnd.net    az700632.vo.msecnd.net    CNAME  Success   Answer     755      8 az700632-pme.azureedge.net                                                 
+az700632.vo.msecnd.net    az700632-pme.azureedge... CNAME  Success   Answer     755      8 az700632-PME.ec.azureedge.net                                              
+az700632.vo.msecnd.net    az700632-PME.ec.azuree... CNAME  Success   Answer     755      8 cs9.wpc.v0cdn.net                                                          
+az700632.vo.msecnd.net    cs9.wpc.v0cdn.net         AAAA   Success   Answer     755     16 2606:2800:11f:17a5:191a:18d5:537:22f9                                      
+
+
