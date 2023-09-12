@@ -154,7 +154,7 @@ pub fn handle_dump_dns_cache_reply(
     for (dns_entry, ips) in &sorted_cache {
         let hostname = html!("td").unwrap();
         hostname.set_inner_html(&dns_entry.hostname);
-        let ip = genenate_ips_details(ips);
+        let ip = generate_ips_details(ips);
         let created_time = now - dns_entry.created;
         let created = html!("td").unwrap();
         created.set_inner_html(format!("{} ago", pretty_print_duration(&created_time)).as_str());
@@ -195,25 +195,30 @@ pub fn handle_dump_dns_cache_reply(
 *      <li> ...
 *     </ul>
 * </details>
+* ... unless it's a single IP
 */
-fn genenate_ips_details(ips: &[IpAddr]) -> Element {
-    let ui = html!("ui").unwrap();
-    for ip in ips {
-        let li = html!("li").unwrap();
-        li.set_inner_html(ip.to_string().as_str());
-        ui.append_child(&li).unwrap();
-    }
+fn generate_ips_details(ips: &[IpAddr]) -> Element {
     let td = html!("td").unwrap();
-    let summary = html!("summary").unwrap();
-    summary.set_inner_html(
-        format!(
-            "{} address{}",
-            ips.len(),
-            if ips.len() > 1 { "es" } else { "" }
-        )
-        .as_str(),
-    );
-    let ip_details = html!("details", {}, summary, ui).unwrap();
-    td.append_child(&ip_details).unwrap();
+    if ips.len() == 1 {
+        td.set_inner_html(format!("{}", ips[0]).as_str());
+    } else {
+        let ui = html!("ui").unwrap();
+        for ip in ips {
+            let li = html!("li").unwrap();
+            li.set_inner_html(ip.to_string().as_str());
+            ui.append_child(&li).unwrap();
+        }
+        let summary = html!("summary").unwrap();
+        summary.set_inner_html(
+            format!(
+                "{} address{}",
+                ips.len(),
+                if ips.len() > 1 { "es" } else { "" }
+            )
+            .as_str(),
+        );
+        let ip_details = html!("details", {}, summary, ui).unwrap();
+        td.append_child(&ip_details).unwrap();
+    }
     td
 }
