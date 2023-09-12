@@ -2,50 +2,51 @@ name: GitHub Rust CI
 run-name: ${{ github.actor }} GitHub Actions 🚀
 on: [push, pull_request]
 jobs:
-  Explore-GitHub-Actions:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "🎉 The job was automatically triggered by a ${{ github.event_name }} event."
-      - run: echo "🐧 This job is now running on a ${{ runner.os }} server hosted by GitHub!"
-      - run: echo "🔎 The name of your branch is ${{ github.ref }} and your repository is ${{ github.repository }}."
-      - name: Check out repository code
-        uses: actions/checkout@v3
-      - run: echo "💡 The ${{ github.repository }} repository has been cloned to the runner."
-      - run: echo "🖥️ The workflow is now ready to test your code on the runner."
-      - name: Get wasm-pack
-        uses: jetli/wasm-pack-action@v0.4.0
-        with:
-                # Optional version of wasm-pack to install(eg. 'v0.9.1', 'latest')
-                version: 'latest'
-      - name: Install libpcap
-          # everything after pcap is for tauri to build
-        run: sudo apt-get update && sudo apt-get install -y libpcap-dev libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf
-      - name: Install protobuf protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Cargo build
-        run: |
-          cargo build --all-features --verbose  --release
-      - name: wasm-pack webserver
-        run: |
-          wasm-pack build webserver/web-client --target web
-          # if you get '--target web' important!
-      - name: wasm-pack desktop
-        run: |
-          wasm-pack build desktop/web-gui --target web
-          # if you get '--target web' important!
-      - name: cargo test
-        run: |
-          cargo test
-          # FIXME 'cargo test' without 'cargo build' doesn't work as
-          # it does not correctly depend on the wasm-pack tool
-          # but for now, just manually work around by doing both in same step
-      - name: wasm-pack test
-        run: |
-          wasm-pack test --headless --chrome webserver/web-client/
-          wasm-pack test --headless --chrome desktop/web-gui/
-      - run: echo "🍏 This job's status is ${{ job.status }}."
-
-
+    Explore-GitHub-Actions:
+        runs-on: ubuntu-latest
+        steps:
+            - run: echo "🎉 The job was automatically triggered by a ${{ github.event_name }} event."
+            - run: echo "🐧 This job is now running on a ${{ runner.os }} server hosted by GitHub!"
+            - run: echo "🔎 The name of your branch is ${{ github.ref }} and your repository is ${{ github.repository }}."
+            - name: Check out repository code
+              uses: actions/checkout@v3
+            - run: echo "💡 The ${{ github.repository }} repository has been cloned to the runner."
+            - run: echo "🖥️ The workflow is now ready to test your code on the runner."
+            - name: Get wasm-pack
+              uses: jetli/wasm-pack-action@v0.4.0
+              with:
+                  # Optional version of wasm-pack to install(eg. 'v0.9.1', 'latest')
+                  version: "latest"
+            - name:
+                  Install libpcap
+                  # everything after pcap is for tauri to build
+              run: sudo apt-get update && sudo apt-get install -y libpcap-dev libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf
+            - name: Install protobuf protoc
+              uses: arduino/setup-protoc@v2
+              with:
+                  version: "24.x"
+            - name: Cargo build
+              run: |
+                  cargo build --all-features --verbose  --release
+            - name: wasm-pack webserver
+              run: |
+                  wasm-pack build webserver/web-client --target web
+                  # if you get '--target web' important!
+            - name: wasm-pack desktop
+              run: |
+                  wasm-pack build desktop/web-gui --target web
+                  # if you get '--target web' important!
+            - name: cargo test
+              run: |
+                  cargo test
+                  # FIXME 'cargo test' without 'cargo build' doesn't work as
+                  # it does not correctly depend on the wasm-pack tool
+                  # but for now, just manually work around by doing both in same step
+            - name: wasm-pack test
+              run: |
+                  wasm-pack test --headless --chrome webserver/web-client/
+                  wasm-pack test --headless --chrome desktop/web-gui/
+            - run: echo "🍏 This job's status is ${{ job.status }}."
 # this was needed for the 'cargo-feature[per-package-target]'
 # but nightly is unstable and it also breaks 'cargo test' so remove for now
 #      - name: Set rust nighty toolchain

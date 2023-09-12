@@ -6,6 +6,12 @@ use serde::{Deserialize, Serialize};
 pub mod connection_measurements;
 pub use connection_measurements::*; // reshare these identifiers in this namespace
 
+extern crate prost_types;
+
+pub mod pb {
+    include!(concat!(env!("OUT_DIR"), "/measurements.rs"));
+}
+
 #[serde_with::serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DnsTrackerEntry {
@@ -123,5 +129,11 @@ mod test {
         assert_eq!(UDP, IpProtocol::from_wire(UDP.to_wire()));
         assert_eq!(ICMP, IpProtocol::from_wire(ICMP.to_wire()));
         assert_eq!(ICMP6, IpProtocol::from_wire(ICMP6.to_wire()));
+    }
+
+    #[test]
+    fn use_symbols_from_protobuf() {
+        let _ = pb::IpAddr::default();
+        let _ = pb::ConnectionMeasurements::default();
     }
 }
