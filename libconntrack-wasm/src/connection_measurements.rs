@@ -13,7 +13,7 @@ use crate::IpProtocol;
  * privacy sensitive (e.g., packet payloads) except IP addresses.
  */
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionMeasurements {
     pub local_hostname: Option<String>,
     pub local_ip: IpAddr,

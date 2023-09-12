@@ -74,12 +74,14 @@ pub fn get_git_hash_version() -> String {
     env!("GIT_HASH").to_string()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProbeReport {
     pub probes: HashMap<ProbeId, ProbeReportEntry>,
     pub probe_round: u32,
     pub application_rtt: Option<f64>,
 }
+
+impl Eq for ProbeReport {}
 
 impl Display for ProbeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -96,7 +98,7 @@ impl Display for ProbeReport {
 
 pub type ProbeId = u8;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ProbeReportEntry {
     // the notion of 'comment' might get abused - consider strongly typing everything(?)
     RouterReplyFound {
@@ -249,6 +251,8 @@ impl ProbeReportEntry {
     }
 }
 
+impl Eq for ProbeReportEntry {}
+
 impl ProbeReport {
     pub fn new(
         report: HashMap<ProbeId, ProbeReportEntry>,
@@ -263,7 +267,7 @@ impl ProbeReport {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProbeReportSummaryNode {
     pub probe_type: ProbeReportEntry,
     pub ttl: u8,
@@ -271,6 +275,7 @@ pub struct ProbeReportSummaryNode {
     pub rtts: Vec<f64>,
     pub comments: Vec<String>,
 }
+impl Eq for ProbeReportSummaryNode {}
 
 impl ProbeReportSummaryNode {
     pub fn stats(&self) -> Option<(f64, f64, f64)> {
@@ -306,7 +311,7 @@ impl Display for ProbeReportSummaryNode {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProbeReportSummary {
     pub raw_reports: Vec<ProbeReport>,
     pub summary: HashMap<u8, Vec<ProbeReportSummaryNode>>,
