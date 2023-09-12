@@ -90,7 +90,7 @@ impl DnsTracker {
         let window = web_sys::window().expect("window");
         match window.set_interval_with_callback_and_timeout_and_arguments_0(
             periodic.as_ref().unchecked_ref(),
-            500,
+            3000,
         ) {
             // save the timeout id so we can cancel it later
             Ok(timeout) => dns_tracker.timeout_id = Some(timeout),
@@ -136,20 +136,25 @@ pub fn handle_dump_dns_cache_reply(
     let tbody = d
         .get_element_by_id(DNS_TRACKER_TABLE)
         .expect(DNS_TRACKER_TABLE);
-    tbody.set_inner_html(""); // clear the table (??)
-    let mut sorted_cache: Vec<(IpAddr, DnsTrackerEntry)> = cache.into_iter().collect();
+    tbody.set_inner_html(""); // clear the previous table
+
+    // build a reverse map of DnsEntries to IPs
+    let mut entries2ips: HashMap<DnsTrackerEntry, Vec<IpAddr>> = HashMap::new();
+    for (ip, dns_entry) in cache {
+        entries2ips.entry(dns_entry).or_insert(Vec::new()).push(ip);
+    }
+    let mut sorted_cache: Vec<(DnsTrackerEntry, Vec<IpAddr>)> = entries2ips.into_iter().collect();
     let now = Utc::now();
-    sorted_cache.sort_by(|(ip_a, a), (ip_b, b)| {
+    sorted_cache.sort_by(|(a, ips_a), (b, ips_b)| {
         // first by rtt (highest to lowest), then by hostname then IP
         b.rtt
             .cmp(&a.rtt)
-            .then(a.hostname.cmp(&b.hostname).then(ip_a.cmp(ip_b)))
+            .then(a.hostname.cmp(&b.hostname).then(ips_a.cmp(ips_b)))
     });
-    for (ip_addr, dns_entry) in &sorted_cache {
+    for (dns_entry, ips) in &sorted_cache {
         let hostname = html!("td").unwrap();
         hostname.set_inner_html(&dns_entry.hostname);
-        let ip = html!("td").unwrap();
-        ip.set_inner_html(format!("{}", ip_addr).as_str());
+        let ip = generate_ips_details(ips);
         let created_time = now - dns_entry.created;
         let created = html!("td").unwrap();
         created.set_inner_html(format!("{} ago", pretty_print_duration(&created_time)).as_str());
@@ -164,9 +169,11 @@ pub fn handle_dump_dns_cache_reply(
             rtt.set_inner_html(pretty_print_duration(&rtt_value).as_str());
             // TODO: normalize these numbers by some fraction of typical RTT, e.g., 20%
             if rtt_value > Duration::milliseconds(10) {
-                rtt.set_attribute("style", "color:red;background-color:black").unwrap();
+                rtt.set_attribute("style", "color:red;background-color:black")
+                    .unwrap();
             } else if rtt_value > Duration::milliseconds(5) {
-                rtt.set_attribute("style", "color:yellow;background-color:black").unwrap();
+                rtt.set_attribute("style", "color:yellow;background-color:black")
+                    .unwrap();
             }
         } else {
             rtt.set_inner_html("-");
@@ -178,4 +185,40 @@ pub fn handle_dump_dns_cache_reply(
             .unwrap();
     }
     Ok(())
+}
+
+/*  Show the list of IPs as
+*  <details>
+*    <summary> X addresses </summary>
+*    <ul>
+*      <li> ...
+*      <li> ...
+*     </ul>
+* </details>
+* ... unless it's a single IP
+*/
+fn generate_ips_details(ips: &[IpAddr]) -> Element {
+    let td = html!("td").unwrap();
+    if ips.len() == 1 {
+        td.set_inner_html(format!("{}", ips[0]).as_str());
+    } else {
+        let ui = html!("ui").unwrap();
+        for ip in ips {
+            let li = html!("li").unwrap();
+            li.set_inner_html(ip.to_string().as_str());
+            ui.append_child(&li).unwrap();
+        }
+        let summary = html!("summary").unwrap();
+        summary.set_inner_html(
+            format!(
+                "{} address{}",
+                ips.len(),
+                if ips.len() > 1 { "es" } else { "" }
+            )
+            .as_str(),
+        );
+        let ip_details = html!("details", {}, summary, ui).unwrap();
+        td.append_child(&ip_details).unwrap();
+    }
+    td
 }

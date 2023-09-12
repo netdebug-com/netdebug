@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use futures_util::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
+use itertools::Itertools;
 use libconntrack::{
     connection::ConnectionTrackerMsg, dns_tracker::DnsTrackerMessage,
     process_tracker::ProcessTrackerMessage,
@@ -145,8 +146,19 @@ async fn handle_gui_dumpflows(
     };
     // get the DNS cache
     let (dns_tx, mut dns_rx) = tokio::sync::mpsc::unbounded_channel();
+    // figure out which IPs we need to lookup?
+    let mut addrs = HashSet::new();
+    for c in &connections {
+        addrs.insert(c.connection_key.local_ip);
+        addrs.insert(c.connection_key.remote_ip);
+    }
+    let addrs = addrs.into_iter().collect_vec();
     dns_tracker
-        .send(DnsTrackerMessage::DumpReverseMap { tx: dns_tx })
+        .send(DnsTrackerMessage::LookupBatch {
+            addrs,
+            tx: dns_tx,
+            use_expired: true,
+        })
         .expect("dns tracker down?");
     let dns_cache = dns_rx.recv().await.unwrap();
     // get the process caches

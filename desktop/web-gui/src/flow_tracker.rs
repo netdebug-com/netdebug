@@ -1,3 +1,4 @@
+use chrono::Utc;
 use desktop_common::GuiToServerMessages;
 use libconntrack_wasm::ConnectionMeasurements;
 use wasm_bindgen::prelude::Closure;
@@ -48,7 +49,9 @@ impl FlowTracker {
         h2.set_inner_html("Flow Key");
         let h3 = html!("th").unwrap();
         h3.set_inner_html("Application(s)");
-        let thead = html!("thead", {}, html!("tr", {}, h1, h2, h3).unwrap()).unwrap();
+        let h4 = html!("th").unwrap();
+        h4.set_inner_html("Lifetime");
+        let thead = html!("thead", {}, html!("tr", {}, h1, h2, h3, h4).unwrap()).unwrap();
         let table = html!(
             "table",
             {"class" => "content-table"},
@@ -107,7 +110,7 @@ impl FlowTracker {
 }
 
 pub fn handle_dumpflows_reply(
-    flows: Vec<ConnectionMeasurements>,
+    mut flows: Vec<ConnectionMeasurements>,
     _ws: WebSocket,
     tabs: Tabs,
 ) -> Result<(), JsValue> {
@@ -125,6 +128,8 @@ pub fn handle_dumpflows_reply(
         .get_element_by_id(FLOW_TRACKER_TABLE)
         .expect(FLOW_TRACKER_TABLE);
     tbody.set_inner_html(""); // clear the table (??)
+    let now = Utc::now();
+    flows.sort_by(|a, b| a.start_tracking_time.cmp(&b.start_tracking_time));
     for (idx, measurments) in flows.into_iter().enumerate() {
         let idx_elm = html!("td").unwrap();
         idx_elm.set_inner_html(format!("{}", idx).as_str());
@@ -142,7 +147,11 @@ pub fn handle_dumpflows_reply(
         flow_elm.set_inner_html(
             format!(
                 "{} {}::{} --> {}::{}",
-                measurments.ip_proto, local, measurments.local_l4_port, remote, measurments.remote_l4_port
+                measurments.ip_proto,
+                local,
+                measurments.local_l4_port,
+                remote,
+                measurments.remote_l4_port
             )
             .as_str(),
         );
@@ -164,8 +173,11 @@ pub fn handle_dumpflows_reply(
         };
         let app_elm = html!("td").unwrap();
         app_elm.set_inner_html(&apps);
+        let life_elm = html!("td").unwrap();
+        let lifetime = now - measurments.start_tracking_time;
+        life_elm.set_inner_html(format!("{} seconds", lifetime.num_seconds()).as_str());
         tbody
-            .append_child(&html!("tr", {}, idx_elm, flow_elm, app_elm).unwrap())
+            .append_child(&html!("tr", {}, idx_elm, flow_elm, app_elm, life_elm).unwrap())
             .unwrap();
     }
     Ok(())
