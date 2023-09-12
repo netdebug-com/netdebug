@@ -4,18 +4,12 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-        
         {
             "type": "lldb",
             "request": "launch",
             "name": "Debug unit tests in library 'libwebserver'",
             "cargo": {
-                "args": [
-                    "test",
-                    "--no-run",
-                    "--lib",
-                    "--package=webserver"
-                ],
+                "args": ["test", "--no-run", "--lib", "--package=webserver"],
                 "filter": {
                     "name": "libwebserver",
                     "kind": "lib"
@@ -29,11 +23,7 @@
             "request": "launch",
             "name": "Debug executable 'webserver'",
             "cargo": {
-                "args": [
-                    "build",
-                    "--bin=webserver",
-                    "--package=webserver"
-                ],
+                "args": ["build", "--bin=webserver", "--package=webserver"],
                 "filter": {
                     "name": "webserver",
                     "kind": "bin"
@@ -66,12 +56,7 @@
             "request": "launch",
             "name": "Debug unit tests in library 'common'",
             "cargo": {
-                "args": [
-                    "test",
-                    "--no-run",
-                    "--lib",
-                    "--package=common"
-                ],
+                "args": ["test", "--no-run", "--lib", "--package=common"],
                 "filter": {
                     "name": "common",
                     "kind": "lib"
@@ -85,12 +70,7 @@
             "request": "launch",
             "name": "Debug unit tests in library 'web-client'",
             "cargo": {
-                "args": [
-                    "test",
-                    "--no-run",
-                    "--lib",
-                    "--package=web-client"
-                ],
+                "args": ["test", "--no-run", "--lib", "--package=web-client"],
                 "filter": {
                     "name": "web-client",
                     "kind": "lib"

@@ -1,23 +1,20 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-    <head>
-    <title>
-        Network Debug WebTest Demo
-    </title>
-    <link rel="stylesheet" href="/static/tabs.css">
+  <head>
+    <title>Network Debug WebTest Demo</title>
+    <link rel="stylesheet" href="/static/tabs.css" />
     <!-- STOPPED WORKING!? <script src="https://cdn.jsdelivr.net/npm/chart.js"></script> -->
     <script src="/static/chart-4.3.0.umd.js"></script>
-    </head>
-    <body>
-        <script type="module">
-
-            import init, {run_webtest} from './webclient/web_client.js'
-            await init()
-            await run_webtest()
-        </script>
-        <noscript>
-            Everything about this test requires javascript and WASM support
-        </noscript>
-        <div id="root_div"></div>
-    </body>
+  </head>
+  <body>
+    <script type="module">
+      import init, { run_webtest } from "./webclient/web_client.js";
+      await init();
+      await run_webtest();
+    </script>
+    <noscript>
+      Everything about this test requires javascript and WASM support
+    </noscript>
+    <div id="root_div"></div>
+  </body>
 </html>
