@@ -3,7 +3,7 @@ use std::{
     net::{IpAddr, SocketAddr},
 };
 
-use chrono::Utc;
+use chrono::{Utc, DateTime};
 use common::{
     analysis_messages::AnalysisInsights, ProbeId, ProbeReport, ProbeReportEntry,
     ProbeReportSummary, PROBE_MAX_TTL,
@@ -305,6 +305,7 @@ where
             log_dir: self.log_dir.clone(),
             user_agent: None,
             associated_apps: None,
+            start_tracking_time: Utc::now(),
         };
         info!("Tracking new connection: {}", &key);
 
@@ -413,6 +414,7 @@ enum ConnectionAction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Connection {
     pub connection_key: ConnectionKey,
+    pub start_tracking_time: DateTime<Utc>,
     pub local_syn: Option<OwnedParsedPacket>,
     pub remote_syn: Option<OwnedParsedPacket>,
     pub local_seq: Option<u32>, // the most recent seq seen from local INCLUDING the TCP payload
@@ -1260,6 +1262,7 @@ impl Connection {
             user_annotation: self.user_annotation.clone(),
             user_agent: self.user_agent.clone(),
             associated_apps,
+            start_tracking_time: self.start_tracking_time.clone(),
         }
     }
 }
