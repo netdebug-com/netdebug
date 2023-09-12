@@ -28,6 +28,7 @@ pub struct DnsPendingKey {
 
 pub struct DnsTracker {
     pub reverse_map: HashMap<IpAddr, DnsTrackerEntry>,
+    pub reverse_map_recently_expired: hashlru::Cache<IpAddr, DnsTrackerEntry>,
     pub pending: HashMap<DnsPendingKey, DnsPendingEntry>,
 }
 
@@ -39,6 +40,8 @@ pub enum DnsTrackerMessage {
         src_is_local: bool,
     },
     DumpReverseMap {
+        // NOTE: this only returns the current active entries
+        // and ignores the recently expired entries
         tx: UnboundedSender<HashMap<IpAddr, DnsTrackerEntry>>,
     },
     CacheForever {
@@ -46,14 +49,24 @@ pub enum DnsTrackerMessage {
         ip: IpAddr,
         hostname: String,
     },
+    LookupBatch {
+        // Lookup this list of IP addresses
+        // NOTE: by passing this to the DNS tracker and it passing back
+        // an answer, we can leverage the LRU cache for the recently expired
+        // entries
+        addrs: Vec<IpAddr>,
+        tx: UnboundedSender<HashMap<IpAddr, DnsTrackerEntry>>,
+        use_expired: bool,
+    },
 }
 
 impl DnsTracker {
     /// New DnsTracker
-    pub fn new() -> DnsTracker {
+    pub fn new(expired_entries_capacity: usize) -> DnsTracker {
         DnsTracker {
             reverse_map: HashMap::new(),
             pending: HashMap::new(),
+            reverse_map_recently_expired: hashlru::Cache::new(expired_entries_capacity),
         }
     }
 
@@ -72,7 +85,7 @@ impl DnsTracker {
             std::process::Command::new("powershell")
                 // 'out-string -width 256' overrides the $COLS equivalent and
                 // stops trunaction of the output - sigh
-                // could convert everything to json with '|convertTo-Json' but 
+                // could convert everything to json with '|convertTo-Json' but
                 // seems like a PITA
                 .arg("get-dnsclientcache | out-string -width 256")
                 .output()
@@ -102,6 +115,11 @@ impl DnsTracker {
                 DnsTrackerMessage::CacheForever { ip, hostname } => {
                     self.cache_forever(ip, hostname)
                 }
+                DnsTrackerMessage::LookupBatch {
+                    addrs,
+                    tx,
+                    use_expired,
+                } => self.lookup_batch(addrs, tx, use_expired),
             }
         }
     }
@@ -292,17 +310,19 @@ impl DnsTracker {
             .collect::<Vec<IpAddr>>();
         // second pass, delete them
         for k in remove_list {
-            self.reverse_map.remove(k);
+            // moved expired entries to the recently expired cache
+            let entry = self.reverse_map.remove(k).unwrap();
+            self.reverse_map_recently_expired.insert(*k, entry);
         }
     }
 
-    /**
-         * Load the OS-level DNS cache info into our cache to pre-populate things
-         *
-         * Yes, it's screen scraping, but the win32 API for this appears to be
-         * obfuscated and/or private - this seems easier
-         *
-         *
+    /*
+    * Load the OS-level DNS cache info into our cache to pre-populate things
+    *
+    * Yes, it's screen scraping, but the win32 API for this appears to be
+    * obfuscated and/or private - this seems easier
+    *
+    *
     Entry                     RecordName                Record Status    Section TimeTo Data   Data
                                                         Type                     Live   Length
     -----                     ----------                ------ ------    ------- ------ ------ ----
@@ -330,11 +350,50 @@ impl DnsTracker {
                     rtt: None,
                     ttl: Some(Duration::seconds(i64::from_str(tokens[5]).expect("digits"))),
                 };
-                let ip = IpAddr::from_str(tokens[7]).unwrap();
-                self.reverse_map.insert(ip, entry);
+                match IpAddr::from_str(tokens[7]) {
+                    Ok(ip) => {
+                        self.reverse_map.insert(ip, entry);
+                    }
+                    Err(e) => warn!(
+                        "DnsTracker::load_windows_dns_cache - failed to parse IP in '{}' : {}",
+                        tokens[7], e
+                    ),
+                };
             }
         }
         Ok(())
+    }
+
+    /**
+     * Lookup at batch of IP addresses and send it back to the caller.
+     */
+
+    fn lookup_batch(
+        &mut self,
+        addrs: Vec<IpAddr>,
+        tx: UnboundedSender<HashMap<IpAddr, DnsTrackerEntry>>,
+        use_expired: bool,
+    ) {
+        let mut answer = HashMap::new();
+
+        for ip in addrs {
+            // first try the active/valid entries
+            if let Some(entry) = self.reverse_map.get(&ip) {
+                answer.insert(ip, entry.clone());
+            } else if use_expired {
+                if let Some(entry) = self.reverse_map_recently_expired.get(&ip) {
+                    answer.insert(ip, entry.clone());
+                }
+            }
+            /* else -- TODO: do a regular DNS PTR lookup to map the ip to something; for later */
+        }
+
+        if let Err(e) = tx.send(answer) {
+            warn!(
+                "Failed to send DnsTracker::lookup_batch answer back to caller: {}",
+                e
+            );
+        }
     }
 }
 
@@ -349,7 +408,7 @@ mod test {
 
     #[tokio::test]
     async fn match_dns_request_to_reply() {
-        let mut dns_tracker = DnsTracker::new();
+        let mut dns_tracker = DnsTracker::new(10);
         let request: [u8; 26] = [
             0x8d, 0xb9, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x6f,
             0x03, 0x73, 0x73, 0x32, 0x02, 0x75, 0x73, 0x00, 0x00, 0x01, 0x00, 0x01,
@@ -400,7 +459,7 @@ mod test {
 
     #[tokio::test]
     async fn test_dns_expiration() {
-        let mut dns_tracker = DnsTracker::new();
+        let mut dns_tracker = DnsTracker::new(10);
         // 'create' the entry 2 seconds ago with a ttl of 1 second, so it should expire immediately
         dns_tracker.reverse_map.insert(
             IpAddr::from_str("1.2.3.4").unwrap(),
@@ -411,8 +470,10 @@ mod test {
                 ttl: Some(Duration::seconds(1)),
             },
         );
+        assert_eq!(dns_tracker.reverse_map_recently_expired.len(), 0);
         dns_tracker.expire_cache();
         assert_eq!(dns_tracker.reverse_map.len(), 0);
+        assert_eq!(dns_tracker.reverse_map_recently_expired.len(), 1);
     }
 
     #[tokio::test]
@@ -421,7 +482,7 @@ mod test {
      * we can parse everything and serialize/deserialize everything
      */
     async fn verify_real_dns_data() {
-        let mut dns_tracker = DnsTracker::new();
+        let mut dns_tracker = DnsTracker::new(10);
         let local_addrs = HashSet::from([
             IpAddr::from_str("192.168.1.103").unwrap(),
             IpAddr::from_str("2600:1700:5b20:4e10:3529:39f:19de:6434").unwrap(),
@@ -457,7 +518,7 @@ mod test {
     fn verify_windows_load_os_client_cache() {
         use std::fs::File;
 
-        let mut dns_tracker = DnsTracker::new();
+        let mut dns_tracker = DnsTracker::new(10);
         let input = File::open(test_dir("tests/windows_get_dnsclientcache.txt")).unwrap();
         assert!(dns_tracker.load_windows_dns_cache(input).is_ok());
         assert_eq!(dns_tracker.reverse_map.len(), 24); // from the test data
@@ -466,7 +527,7 @@ mod test {
     #[test]
     fn verify_load_os_client_cache() {
         use std::net::ToSocketAddrs;
-        let mut dns_tracker = DnsTracker::new();
+        let mut dns_tracker = DnsTracker::new(10);
         // resolve google.com to add something to the OS cache; just the first one
         #[allow(unused)] // this var won't be used if not windows
         let addr = "google.com:443".to_socket_addrs().unwrap().next();
