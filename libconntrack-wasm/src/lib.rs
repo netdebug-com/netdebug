@@ -64,7 +64,7 @@ pub fn pretty_print_duration(d: &chrono::Duration) -> String {
  * ///  assert_eq!(TCP, IpProtocol::from_wire(TCP.to_wire()));
  */
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum IpProtocol {
     ICMP,
     TCP,

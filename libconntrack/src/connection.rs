@@ -1229,6 +1229,7 @@ impl Connection {
         };
         use IpProtocol::*;
         let ip_proto = IpProtocol::from_wire(self.connection_key.ip_proto);
+        let inaddr_any = IpAddr::from([0, 0, 0, 0]);
         let associated_apps = match ip_proto {
             TCP => {
                 if let Some(entry) = tcp_cache.get(&self.connection_key) {
@@ -1238,11 +1239,22 @@ impl Connection {
                 }
             }
             UDP => {
+                /*
+                 * UDP is a hard case to map, because depending on the application it may:
+                 * 1) Bind INADDR_ANY (0.0.0.0) or the specific interface when it listens
+                 * 2) May or may not connect(3) to the remote
+                 *
+                 * So we store the UDP data by (src_ip, port) pair and try both the interface
+                 * address and the INADDR_ANY address types to find it
+                 */
                 let key = (
                     self.connection_key.local_ip,
                     self.connection_key.local_l4_port,
                 );
+                let key_in_addr_any = (inaddr_any.clone(), self.connection_key.local_l4_port);
                 if let Some(entry) = udp_cache.get(&key) {
+                    entry.associated_apps.clone()
+                } else if let Some(entry) = udp_cache.get(&key_in_addr_any) {
                     entry.associated_apps.clone()
                 } else {
                     HashMap::new()
