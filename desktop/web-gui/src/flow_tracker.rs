@@ -43,15 +43,17 @@ impl FlowTracker {
         let content = d.get_element_by_id("tab_content").expect("tab content div");
         content.set_inner_html("");
 
-        let h1 = html!("th").unwrap();
-        h1.set_inner_html("Flow #");
-        let h2 = html!("th").unwrap();
-        h2.set_inner_html("Flow Key");
-        let h3 = html!("th").unwrap();
-        h3.set_inner_html("Application(s)");
-        let h4 = html!("th").unwrap();
-        h4.set_inner_html("Lifetime");
-        let thead = html!("thead", {}, html!("tr", {}, h1, h2, h3, h4).unwrap()).unwrap();
+        let th1 = html!("th").unwrap();
+        th1.set_inner_html("Flow #");
+        let th2 = html!("th").unwrap();
+        th2.set_inner_html("Flow Key");
+        let th3 = html!("th").unwrap();
+        th3.set_inner_html("Application(s)");
+        let th4 = html!("th").unwrap();
+        th4.set_inner_html("Lifetime");
+        let th5 = html!("th").unwrap();
+        th5.set_inner_html("Idle");
+        let thead = html!("thead", {}, html!("tr", {}, th1, th2, th3, th4, th5).unwrap()).unwrap();
         let table = html!(
             "table",
             {"class" => "content-table"},
@@ -129,9 +131,10 @@ pub fn handle_dumpflows_reply(
         .expect(FLOW_TRACKER_TABLE);
     tbody.set_inner_html(""); // clear the table (??)
     let now = Utc::now();
+    // sort by most recently active (lowest to highest), then start time
     flows.sort_by(|a, b| {
-        a.ip_proto
-            .cmp(&b.ip_proto)
+        b.last_packet_time
+            .cmp(&a.last_packet_time)
             .then(a.start_tracking_time.cmp(&b.start_tracking_time))
     });
     for (idx, measurments) in flows.into_iter().enumerate() {
@@ -180,8 +183,11 @@ pub fn handle_dumpflows_reply(
         let life_elm = html!("td").unwrap();
         let lifetime = now - measurments.start_tracking_time;
         life_elm.set_inner_html(format!("{} seconds", lifetime.num_seconds()).as_str());
+        let active_elm = html!("td").unwrap();
+        let activetime = now - measurments.last_packet_time;
+        active_elm.set_inner_html(format!("{} seconds", activetime.num_seconds()).as_str());
         tbody
-            .append_child(&html!("tr", {}, idx_elm, flow_elm, app_elm, life_elm).unwrap())
+            .append_child(&html!("tr", {}, idx_elm, flow_elm, app_elm, life_elm, active_elm).unwrap())
             .unwrap();
     }
     Ok(())

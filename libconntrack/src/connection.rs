@@ -279,6 +279,7 @@ where
         key: ConnectionKey,
         src_is_local: bool,
     ) {
+        let now = Utc::now();
         let mut connection = Connection {
             connection_key: key.clone(),
             local_syn: None,
@@ -305,7 +306,8 @@ where
             log_dir: self.log_dir.clone(),
             user_agent: None,
             associated_apps: None,
-            start_tracking_time: Utc::now(),
+            start_tracking_time: now,
+            last_packet_time: now,
         };
         info!("Tracking new connection: {}", &key);
 
@@ -415,6 +417,7 @@ enum ConnectionAction {
 pub struct Connection {
     pub connection_key: ConnectionKey,
     pub start_tracking_time: DateTime<Utc>,
+    pub last_packet_time: DateTime<Utc>,
     pub local_syn: Option<OwnedParsedPacket>,
     pub remote_syn: Option<OwnedParsedPacket>,
     pub local_seq: Option<u32>, // the most recent seq seen from local INCLUDING the TCP payload
@@ -450,6 +453,7 @@ impl Connection {
     where
         R: RawSocketWriter,
     {
+        self.last_packet_time = Utc::now();
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
                 if src_is_local {
@@ -1275,6 +1279,7 @@ impl Connection {
             user_agent: self.user_agent.clone(),
             associated_apps,
             start_tracking_time: self.start_tracking_time.clone(),
+            last_packet_time: self.last_packet_time,
         }
     }
 }

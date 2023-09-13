@@ -1,5 +1,6 @@
 {
   "start_tracking_time": "2023-09-12T04:37:39.556981400Z",
+  "last_packet_time": "2023-09-12T04:37:39.556981400Z",
   "connection_key": {
     "local_ip": "172.31.10.232",
     "remote_ip": "81.215.234.135",
