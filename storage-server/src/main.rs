@@ -1,3 +1,6 @@
+use std::net::{IpAddr, SocketAddr};
+
+use clap::Parser;
 use log::info;
 use pb_storage_service::storage_service_server::{StorageService, StorageServiceServer};
 use pb_storage_service::{StorageReply, StorageRequest};
@@ -59,6 +62,23 @@ impl StorageService for StorageServiceImpl {
     }
 }
 
+/// Netdebug Storage Server
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+pub struct Args {
+    /// Used to enable production flags vs. (default) dev mode
+    #[arg(long)]
+    pub production: bool,
+
+    /// which TCP port to listen on
+    #[arg(long, default_value_t = 50051)]
+    pub listen_port: u16,
+
+    /// path to sqlite database file
+    #[arg(long, default_value = "./connections.sqlite3")]
+    pub sqlite_db_file: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // if RUST_LOG isn't set explicitly, set RUST_LOG=info as a default
@@ -70,10 +90,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var("RUST_BACKTRACE", "1");
     }
     pretty_env_logger::init();
-    info!("Starting storage server");
+    let args = Args::parse();
 
-    let svc = StorageServiceImpl::new("./connections.sqlite3").await?;
-    let addr = "[::1]:50051".parse()?;
+    info!("Starting storage server");
+    info!("Opening SQLite DB {}", args.sqlite_db_file);
+    let svc = StorageServiceImpl::new(&args.sqlite_db_file).await?;
+    let ip: IpAddr = match args.production {
+        true => "::",
+        false => "::1",
+    }
+    .parse()?;
+    let addr = SocketAddr::new(ip, args.listen_port);
+    info!("Listening on {}", addr);
     Server::builder()
         .add_service(StorageServiceServer::new(svc))
         .serve(addr)
