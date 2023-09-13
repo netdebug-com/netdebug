@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::error::Error;
 use std::net::IpAddr;
 
 use chrono::Duration;
@@ -21,6 +22,11 @@ pub enum ProcessTrackerMessage {
         tx: UnboundedSender<Option<ProcessTrackerEntry>>,
     },
     UpdateCache,
+    UpdatePidMapping {
+        // enumerating processes is usually slow, so do this
+        // in a different task and send the results here periodically
+        pid2process: HashMap<u32, String>,
+    },
     DumpCache {
         // return the tcp_cache and the udp_cache
         tx: UnboundedSender<(
@@ -55,10 +61,22 @@ impl ProcessTracker {
         }
     }
 
+    /**
+     * Start the rx handler in the background
+     *
+     * and on supported OS's, also start a pid2process caching class
+     */
+
     pub async fn spawn(
         mut self,
         update_frequency: Duration,
     ) -> (UnboundedSender<ProcessTrackerMessage>, JoinHandle<()>) {
+        #[cfg(windows)]
+        {
+            let tx = self.tx.clone();
+            let _join_pid2process_loop =
+                tokio::spawn(async move { run_pid2process_loop(update_frequency, tx).await });
+        }
         let tx = self.tx.clone();
         let join = tokio::spawn(async move { self.do_async_loop(update_frequency).await });
         (tx, join)
@@ -85,6 +103,9 @@ impl ProcessTracker {
                     if let Err(e) = tx.send((self.tcp_cache.clone(), self.udp_cache.clone())) {
                         warn!("ProcessTracker :: dump cache sender failed: {}", e);
                     }
+                }
+                UpdatePidMapping { pid2process } => {
+                    self.pid2app_name_cache = pid2process;
                 }
             }
         }
@@ -179,6 +200,89 @@ impl ProcessTracker {
     }
 }
 
+/**
+ * This is only defined for windows, for now
+ *
+ * This can take a long time to run .. seconds even, so run in a diff
+ * task/thread and async post the data back to the main ProcessTracker
+ */
+#[cfg(windows)]
+async fn run_pid2process_loop(
+    update_frequency: Duration,
+    tx: UnboundedSender<ProcessTrackerMessage>,
+) {
+    use chrono::Utc;
+
+    loop {
+        let start = Utc::now();
+        let pid2process = match make_pid2process() {
+            Ok(map) => map,
+            Err(e) => {
+                warn!("ProcessTracker make_pid2process returned : {}", e);
+                continue; // try again!?
+            }
+        };
+
+        use ProcessTrackerMessage::*;
+        if let Err(e) = tx.send(UpdatePidMapping { pid2process }) {
+            warn!("Failed to send UpdatePidMapping to process tracker: {}", e);
+        }
+
+        let next_update = start + update_frequency;
+        let now = Utc::now();
+        if next_update > now {
+            let delta = next_update - now;
+            debug!("run_pid2process_loop sleeping for {}", delta);
+            tokio::time::sleep(delta.to_std().unwrap()).await;
+        }
+    }
+}
+
+#[cfg(windows)]
+fn make_pid2process() -> Result<HashMap<u32, String>, Box<dyn Error>> {
+    use std::io::BufRead;
+    use std::io::BufReader;
+    let mut pid2process = HashMap::new();
+    let cmd_output = std::process::Command::new("tasklist")
+        .arg("/fo")
+        .arg("CSV") // output in CSV format
+        .arg("/nh") // skip the CSV header
+        .output()?; // can this ever fail?
+    if !cmd_output.stderr.is_empty() {
+        return Err(format!(
+            "Error from pid2process(): {}",
+            String::from_utf8(cmd_output.stderr)?
+        )
+        .into());
+    }
+    let output = BufReader::new(cmd_output.stdout.as_slice());
+    for line in output.lines() {
+        if let Err(e) = line {
+            warn!("Unparsed string in run_pid2process!? {}", e);
+            continue;
+        }
+        let line = line.unwrap(); // ok, b/c we checked above
+        // TODO: find a real CSV parser library
+        let tokens = line.split(",").collect::<Vec<&str>>();
+        if tokens.len() < 3 {
+            warn!(
+                "Too short CSV string in run_pid2process!? {}",
+                tokens.join(",")
+            );
+            continue;
+        }
+        let process_name = tokens[0].replace("\"", "");
+        let pid: u32 = tokens[1].replace("\"", "").parse()?;
+        pid2process.insert(pid, process_name);
+    }
+    Ok(pid2process)
+}
+
+#[cfg(not(windows))]
+fn make_pid2process() -> Result<HashMap<u32, String>, Box<dyn Error>> {
+    panic!("DON'T call this on a non-windows platform - for now")
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -220,5 +324,18 @@ mod test {
             }
         }
         assert!(found_it);
+    }
+
+    /**
+     * Any system will have some threads; just make sure we get non-garbage data
+     * and make sure we find this process in it
+     */
+    #[cfg(windows)]
+    #[test]
+    fn test_make_pid2process() {
+        let my_pid = std::process::id();
+        let pid2process_cache = make_pid2process().unwrap();
+        assert_ne!(pid2process_cache.len(), 0);
+        assert!(pid2process_cache.contains_key(&my_pid));
     }
 }
