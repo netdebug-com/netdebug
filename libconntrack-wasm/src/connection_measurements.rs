@@ -27,5 +27,6 @@ pub struct ConnectionMeasurements {
     pub user_agent: Option<String>, // when created via a web request, store the user-agent header
     pub associated_apps: HashMap<u32, Option<String>>, // PID --> ProcessName, if we know it
     // TODO: add local_syn, remote_syn IP and TCP options
-    pub start_tracking_time: DateTime<Utc>, // time tracker first saw a packet
+    pub start_tracking_time: DateTime<Utc>, // time tracker: first saw a packet
+    pub last_packet_time: DateTime<Utc>, // time tracker: last saw a packet
 }
