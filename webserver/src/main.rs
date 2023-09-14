@@ -56,13 +56,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "Running webserver version: {}",
         common::get_git_hash_version()
     );
-    let listen_addr = if args.production {
-        info!("Running in production mode");
-        ([0, 0, 0, 0], args.listen_port)
-    } else {
-        info!("Running in development mode");
-        ([127, 0, 0, 1], args.listen_port)
-    };
+    let ip: std::net::IpAddr = match args.production {
+        true => {
+            info!("Running in production mode");
+            "::"
+        }
+        false => {
+            info!("Running in development mode");
+            "::1"
+        }
+    }
+    .parse()?;
+    let listen_addr = std::net::SocketAddr::new(ip, args.listen_port);
 
     warp::serve(make_webserver_http_routes(context).await)
         .run(listen_addr)
