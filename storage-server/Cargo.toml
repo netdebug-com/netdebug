@@ -13,6 +13,7 @@ path = "src/main.rs"
 # pls keep in alpha order
 bytes = "1.4"
 chrono = "0.4"
+clap = { version = "4.4.3", features = ["derive"] }
 log = "0.4.18"
 pb-conntrack-types = { path = "../protobuf/conntrack-types" }
 pb-storage-service = { path = "../protobuf/storage-service" }
