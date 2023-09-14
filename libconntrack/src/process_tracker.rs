@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::error::Error;
 use std::net::IpAddr;
 
 use chrono::Duration;
@@ -262,6 +261,7 @@ fn make_pid2process() -> Result<HashMap<u32, String>, Box<dyn Error>> {
             continue;
         }
         let line = line.unwrap(); // ok, b/c we checked above
+
         // TODO: find a real CSV parser library
         let tokens = line.split(",").collect::<Vec<&str>>();
         if tokens.len() < 3 {
@@ -276,11 +276,6 @@ fn make_pid2process() -> Result<HashMap<u32, String>, Box<dyn Error>> {
         pid2process.insert(pid, process_name);
     }
     Ok(pid2process)
-}
-
-#[cfg(not(windows))]
-fn make_pid2process() -> Result<HashMap<u32, String>, Box<dyn Error>> {
-    panic!("DON'T call this on a non-windows platform - for now")
 }
 
 #[cfg(test)]
