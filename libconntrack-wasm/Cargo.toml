@@ -7,11 +7,11 @@ edition = "2021"
 
 [dependencies]
 # this should be refactored to move some elements into this library
-common = { path = "../webserver/common"} 
-chrono = { version = "0.4.26", features = [ "serde"] }
-serde = { version = "1.0.188", features = [ "derive"]}
+common = { path = "../webserver/common" }
+chrono = { version = "0.4.26", features = ["serde"] }
+serde = { version = "1.0.188", features = ["derive"] }
 serde_json = "1.0.105"
-serde_with = {version = "3.3.0", features = ["chrono_0_4"] }
+serde_with = { version = "3.3.0", features = ["chrono_0_4"] }
 
 
 [dev-dependencies]
