@@ -14,7 +14,7 @@ default = ["console_error_panic_hook"]
 
 [dependencies]
 # alphabetical order please
-common = { path = "../common/"}
+common = { path = "../common/" }
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires
 # all the `std::fmt` and `std::panicking` infrastructure, so isn't great for
@@ -47,33 +47,33 @@ wasm-bindgen-test = "0.3.36"
 [dependencies.web-sys]
 version = "0.3.46"
 features = [
-    'BinaryType',
-    'Blob',
-    'CanvasRenderingContext2d',
-    'console',
-    'Document',
-    'Element',
-    'ErrorEvent',
-    'FileReader',
-    'Geolocation',
-    'Headers',
-    'HtmlButtonElement',
-    'HtmlCanvasElement',
-    'HtmlElement',
-# Just use the raw element access... 
-#    'HtmlTableElement',
-#    'HtmlTableRowElement',
-#    'HtmlTableSectionElement',
-    'HtmlTextAreaElement',
-    'Location',
-    'MessageEvent',
-    'Node',
-    'Performance',
-    'ProgressEvent',
-    'Request',
-    'RequestInit',
-    'RequestMode',
-    'Response',
-    'Window',
-    'WebSocket',
+  'BinaryType',
+  'Blob',
+  'CanvasRenderingContext2d',
+  'console',
+  'Document',
+  'Element',
+  'ErrorEvent',
+  'FileReader',
+  'Geolocation',
+  'Headers',
+  'HtmlButtonElement',
+  'HtmlCanvasElement',
+  'HtmlElement',
+  # Just use the raw element access... 
+  #    'HtmlTableElement',
+  #    'HtmlTableRowElement',
+  #    'HtmlTableSectionElement',
+  'HtmlTextAreaElement',
+  'Location',
+  'MessageEvent',
+  'Node',
+  'Performance',
+  'ProgressEvent',
+  'Request',
+  'RequestInit',
+  'RequestMode',
+  'Response',
+  'Window',
+  'WebSocket',
 ]
