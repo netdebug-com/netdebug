@@ -2,6 +2,7 @@ use std::{collections::HashSet, error::Error, net::IpAddr, sync::Arc};
 
 use clap::Parser;
 use log::info;
+use pb_storage_service::storage_service_client::StorageServiceClient;
 use pwhash::{sha512_crypt, HashSetup};
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
@@ -26,7 +27,6 @@ pub struct WebServerContext {
     pub local_ips: HashSet<IpAddr>,         // which IP addresses do we listen on?
     pub send_idle_probes: bool,             // should we also probe when the connection is idle?
     pub max_connections_per_tracker: usize, // how big to make the LruCache
-    pub log_dir: String,                    // where to put connection logfiles
     // communications channel to the connection_tracker
     // TODO: make a pool for multi-threading
     pub connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
@@ -66,30 +66,35 @@ impl WebServerContext {
             connection_tracker: tx,
             send_idle_probes: args.send_idle_probes,
             max_connections_per_tracker: args.max_connections_per_tracker,
-            log_dir: args.log_dir.clone(),
         };
 
-        if let Err(e) = check_log_dir(&context.log_dir) {
-            log::error!("Failed to create log_dir {} :: {}", context.log_dir, e);
-            std::process::exit(1); // fatal error
-        }
-        let context_clone = Arc::new(RwLock::new(context.clone()));
-        // Spawn a ConnectionTracker task
         // TODO Spawn lots for multi-processing
         if !args.web_server_only {
+            let (storage_server_url, log_dir, max_connections_per_tracker, device) = (
+                args.storage_server_url.clone(),
+                args.log_dir.clone(),
+                context.max_connections_per_tracker,
+                context.pcap_device.clone(),
+            );
+            if let Err(e) = check_log_dir(&args.log_dir) {
+                log::error!("Failed to create log_dir {} :: {}", args.log_dir, e);
+                std::process::exit(1); // fatal error
+            }
+            // Spawn a ConnectionTracker task
             tokio::spawn(async move {
                 info!("Launching the connection tracker (single instance for now)");
-                let (log_dir, max_connections_per_tracker, device) = {
-                    let ctx = context_clone.read().await;
-                    (
-                        ctx.log_dir.clone(),
-                        ctx.max_connections_per_tracker,
-                        ctx.pcap_device.clone(),
-                    )
+                let storage_service_client = if let Some(url) = storage_server_url {
+                    // TODO: better error handling than panic
+                    // Also, if we panic here we just kill the thread but not the
+                    // process.
+                    Some(StorageServiceClient::connect(url).await.unwrap())
+                } else {
+                    None
                 };
                 let raw_sock = bind_writable_pcap(device).unwrap();
                 let mut connection_tracker = ConnectionTracker::new(
                     log_dir,
+                    storage_service_client,
                     max_connections_per_tracker,
                     local_addrs,
                     raw_sock,
@@ -155,6 +160,10 @@ pub struct Args {
     /// How big to make the LRU Cache on each ConnectionTracker
     #[arg(long, default_value_t = 4096)]
     pub max_connections_per_tracker: usize,
+
+    /// The URL of the GRPC storage server. E.g., http://localhost:50051
+    #[arg(long, default_value=None)]
+    pub storage_server_url: Option<String>,
 }
 
 pub type Context = Arc<RwLock<WebServerContext>>;
@@ -249,7 +258,6 @@ pub mod test {
             connection_tracker: tx,
             send_idle_probes: false,
             max_connections_per_tracker: 4096,
-            log_dir: ".".to_string(),
         }))
     }
 }

@@ -13,6 +13,7 @@ use libconntrack_wasm::{DnsTrackerEntry, IpProtocol};
 #[cfg(not(test))]
 use log::{debug, info, warn};
 use netstat2::ProtocolSocketInfo;
+use pb_storage_service::storage_service_client::StorageServiceClient;
 use tokio::sync::mpsc::UnboundedSender; // Use log crate when building application
 
 #[cfg(test)]
@@ -181,6 +182,8 @@ where
     local_addrs: HashSet<IpAddr>,
     raw_sock: R,
     log_dir: String,
+    #[allow(dead_code)] // TODO:
+    storage_service_client: Option<StorageServiceClient<tonic::transport::Channel>>,
     dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
 }
 impl<R> ConnectionTracker<R>
@@ -189,6 +192,7 @@ where
 {
     pub async fn new(
         log_dir: String,
+        storage_service_client: Option<StorageServiceClient<tonic::transport::Channel>>,
         max_connections_per_tracker: usize,
         local_addrs: HashSet<IpAddr>,
         raw_sock: R,
@@ -198,6 +202,7 @@ where
             local_addrs,
             raw_sock,
             log_dir,
+            storage_service_client,
             dns_tx: None,
         }
     }
@@ -1374,14 +1379,20 @@ pub mod test {
     #[tokio::test]
     async fn connection_tracker_one_flow_outgoing() {
         let log_dir = ".".to_string();
+        let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let mut local_addrs = HashSet::new();
         let localhost_ip = IpAddr::from_str("127.0.0.1").unwrap();
         local_addrs.insert(localhost_ip);
-        let mut connection_tracker =
-            ConnectionTracker::new(log_dir, max_connections_per_tracker, local_addrs, raw_sock)
-                .await;
+        let mut connection_tracker = ConnectionTracker::new(
+            log_dir,
+            storage_service_client,
+            max_connections_per_tracker,
+            local_addrs,
+            raw_sock,
+        )
+        .await;
 
         let mut capture =
             // NOTE: this capture has no FINs so contracker will not remove it
@@ -1433,6 +1444,7 @@ pub mod test {
     async fn connection_tracker_one_flow_out_and_in() {
         pretty_env_logger::init();
         let log_dir = ".".to_string();
+        let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let mut local_addrs = HashSet::new();
@@ -1440,6 +1452,7 @@ pub mod test {
         local_addrs.insert(local_ip);
         let mut connection_tracker = ConnectionTracker::new(
             log_dir,
+            storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
             raw_sock,
@@ -1498,12 +1511,14 @@ pub mod test {
     async fn connection_tracker_probe_and_reply() {
         let raw_sock = MockRawSocketWriter::new();
         let log_dir = ".".to_string();
+        let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let mut local_addrs = HashSet::new();
         let local_ip = IpAddr::from_str("172.31.2.61").unwrap();
         local_addrs.insert(local_ip);
         let mut connection_tracker = ConnectionTracker::new(
             log_dir,
+            storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
             raw_sock,
@@ -1652,6 +1667,7 @@ pub mod test {
     #[tokio::test]
     async fn probe_on_idle_queued() {
         let log_dir = ".".to_string();
+        let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let local_ip = Ipv4Addr::from_str("192.168.1.37").unwrap();
         let local_addrs = HashSet::from([IpAddr::from(local_ip)]);
@@ -1675,6 +1691,7 @@ pub mod test {
 
         let mut connection_tracker = ConnectionTracker::new(
             log_dir,
+            storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
             raw_sock,
@@ -1753,11 +1770,13 @@ pub mod test {
     #[tokio::test]
     async fn three_way_fin_teardown() {
         let log_dir = ".".to_string();
+        let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.37").unwrap()]);
         let mut connection_tracker = ConnectionTracker::new(
             log_dir,
+            storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
             raw_sock,
@@ -1784,11 +1803,13 @@ pub mod test {
     #[tokio::test]
     async fn full_probe_report() {
         let log_dir = ".".to_string();
+        let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let local_addrs = HashSet::from([IpAddr::from_str("172.31.10.232").unwrap()]);
         let mut connection_tracker = ConnectionTracker::new(
             log_dir,
+            storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
             raw_sock,

@@ -130,6 +130,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let args = args_clone;
         let mut connection_tracker = ConnectionTracker::new(
             args.log_dir,
+            None, // connection_storage_client
             args.max_connections_per_tracker,
             local_addrs,
             raw_sock,
