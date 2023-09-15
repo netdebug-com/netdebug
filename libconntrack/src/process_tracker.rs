@@ -238,7 +238,7 @@ async fn run_pid2process_loop(
 }
 
 #[cfg(windows)]
-fn make_pid2process() -> Result<HashMap<u32, String>, Box<dyn Error>> {
+fn make_pid2process() -> Result<HashMap<u32, String>, Box<dyn std::error::Error>> {
     use std::io::BufRead;
     use std::io::BufReader;
     let mut pid2process = HashMap::new();

@@ -1,15 +1,81 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
 use std::net::IpAddr;
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use desktop_common::GuiToServerMessages;
 use libconntrack_wasm::{pretty_print_duration, DnsTrackerEntry};
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Element, MessageEvent, WebSocket};
 
 use crate::tabs::{Tab, Tabs};
 use crate::{console_log, html, log};
+
+/**
+ * We use this to sort/order/identify this row for comparisons purposes
+ *
+ * We can't sort on any field not represented in this key
+ */
+#[serde_with::serde_as]
+#[derive(Debug, Clone, Hash, Serialize, Deserialize, PartialEq, Eq)]
+struct DnsRowKey {
+    hostname: String,
+    #[serde_as(as = "Option<serde_with::DurationMicroSeconds<i64>>")]
+    rtt: Option<Duration>,
+}
+
+impl DnsRowKey {
+    fn new(dns_entry: &DnsTrackerEntry) -> DnsRowKey {
+        DnsRowKey {
+            hostname: dns_entry.hostname.clone(),
+            rtt: dns_entry.rtt.clone(),
+        }
+    }
+}
+
+impl Display for DnsRowKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", serde_json::to_string(self).unwrap())
+    }
+}
+impl From<DnsTrackerEntry> for DnsRowKey {
+    fn from(value: DnsTrackerEntry) -> Self {
+        DnsRowKey {
+            hostname: value.hostname.clone(),
+            rtt: value.rtt.clone(),
+        }
+    }
+}
+
+impl TryFrom<String> for DnsRowKey {
+    type Error = serde_json::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        serde_json::from_str(&value)
+    }
+}
+
+// define how we want keys (and thus rows) ordered
+impl std::cmp::Ord for DnsRowKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // sort by rtt from high to low first, then hostname
+        // TODO: add custom sorting functions so we can runtime sort by other things
+        other
+            .rtt
+            .cmp(&self.rtt)
+            .then(self.hostname.cmp(&other.hostname))
+    }
+}
+
+// ensure that PartialOrd agrees with (full)Ord
+impl std::cmp::PartialOrd for DnsRowKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        // we have a full ordering defined, so just always return that
+        Some(self.cmp(&other))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct DnsTracker {
@@ -90,7 +156,7 @@ impl DnsTracker {
         let window = web_sys::window().expect("window");
         match window.set_interval_with_callback_and_timeout_and_arguments_0(
             periodic.as_ref().unchecked_ref(),
-            3000,
+            1000,
         ) {
             // save the timeout id so we can cancel it later
             Ok(timeout) => dns_tracker.timeout_id = Some(timeout),
@@ -136,7 +202,6 @@ pub fn handle_dump_dns_cache_reply(
     let tbody = d
         .get_element_by_id(DNS_TRACKER_TABLE)
         .expect(DNS_TRACKER_TABLE);
-    tbody.set_inner_html(""); // clear the previous table
 
     // build a reverse map of DnsEntries to IPs
     let mut entries2ips: HashMap<DnsTrackerEntry, Vec<IpAddr>> = HashMap::new();
@@ -145,46 +210,144 @@ pub fn handle_dump_dns_cache_reply(
     }
     let mut sorted_cache: Vec<(DnsTrackerEntry, Vec<IpAddr>)> = entries2ips.into_iter().collect();
     let now = Utc::now();
-    sorted_cache.sort_by(|(a, ips_a), (b, ips_b)| {
-        // first by rtt (highest to lowest), then by hostname then IP
-        b.rtt
-            .cmp(&a.rtt)
-            .then(a.hostname.cmp(&b.hostname).then(ips_a.cmp(ips_b)))
-    });
-    for (dns_entry, ips) in &sorted_cache {
-        let hostname = html!("td").unwrap();
-        hostname.set_inner_html(&dns_entry.hostname);
-        let ip = generate_ips_details(ips);
-        let created_time = now - dns_entry.created;
-        let created = html!("td").unwrap();
-        created.set_inner_html(format!("{} ago", pretty_print_duration(&created_time)).as_str());
-        let ttl = html!("td").unwrap();
-        if let Some(ttl_value) = dns_entry.ttl {
-            ttl.set_inner_html(pretty_print_duration(&ttl_value).as_str());
-        } else {
-            ttl.set_inner_html("-");
-        }
-        let rtt = html!("td").unwrap();
-        if let Some(rtt_value) = dns_entry.rtt {
-            rtt.set_inner_html(pretty_print_duration(&rtt_value).as_str());
-            // TODO: normalize these numbers by some fraction of typical RTT, e.g., 20%
-            if rtt_value > Duration::milliseconds(10) {
-                rtt.set_attribute("style", "color:red;background-color:black")
-                    .unwrap();
-            } else if rtt_value > Duration::milliseconds(5) {
-                rtt.set_attribute("style", "color:yellow;background-color:black")
-                    .unwrap();
+    sorted_cache.sort_by(|(a, _a), (b, _b)| DnsRowKey::new(a).cmp(&DnsRowKey::new(b)));
+    // merge sort-esque merge the new data with the old, updating where it already exists
+    // NOTE: it seems like it's hard to get a persistent/non-dynamic list of children from the DOM
+    // so we do two passes: one to add/update rows, and one to remove old rows
+    let mut old_row_index = 0;
+    let mut new_rows = sorted_cache.iter();
+    let old_rows = tbody.children();
+    let mut new_row = new_rows.next();
+    // rust is annoying in that you can't YET have two let statement in the same clause
+    // otherwise, would have written:
+    // while let Some(new_row) = new_rows.next() AND let Some(old_row) = old_rows.items(old_row_index)
+    // this should be equivalent to that
+    let mut keep_these_keys = HashSet::new();
+    loop {
+        let (dns_entry, ips) = match new_row {
+            Some((dns_entry, ips)) => (dns_entry, ips),
+            None => {
+                break;
             }
+        };
+        let old_row = match old_rows.item(old_row_index) {
+            Some(old_row) => old_row,
+            None => {
+                break;
+            }
+        };
+        let new_row_key = DnsRowKey::new(dns_entry);
+        let old_row_key = DnsRowKey::try_from(old_row.get_attribute("name").unwrap()).unwrap();
+        if old_row_key.hostname == dns_entry.hostname {
+            // old and new rows are the same, just update
+            update_dns_entry_row(dns_entry, &ips, &old_row, &now);
+            keep_these_keys.insert(new_row_key.to_string());
+            new_row = new_rows.next();
+            old_row_index += 1; // this keeps us pointing a the same old_row
+            continue;
         } else {
-            rtt.set_inner_html("-");
+            match new_row_key.cmp(&old_row_key) {
+                std::cmp::Ordering::Less => {
+                    // add the new entry
+                    let new_row_elm = new_dns_entry_row(&dns_entry, &ips, &now).unwrap();
+                    old_row
+                        .insert_adjacent_element("beforebegin", &new_row_elm)
+                        .unwrap();
+                    keep_these_keys.insert(new_row_key.to_string());
+                    new_row = new_rows.next();
+                    old_row_index += 1; // to keep looking at the same old_row, after we added this item
+                }
+                std::cmp::Ordering::Greater => {
+                    // remove the stale entry
+                    old_row.remove();
+                    // no change to old_row_index; the list got smaller
+                }
+                // Don't use this for testing equality b/c the rtt's might not precisely match
+                // that's why we check above by hostname
+                std::cmp::Ordering::Equal => {
+                    panic!("This should never happen; already checked dns_entires for eq")
+                }
+            }
         }
-        // these fields need to be inserted into the tr in the same order
-        // as the headers were created in the on_activate() code
-        tbody
-            .append_child(&html!("tr", {}, hostname, ip, created, ttl, rtt).unwrap())
-            .unwrap();
+    }
+    // after we exit, one of these iterators will be done, so only one clause will be run
+    // add any remaining new rows
+    while let Some((dns_entry, ips)) = new_rows.next() {
+        let new_row_key = DnsRowKey::new(&dns_entry);
+        keep_these_keys.insert(new_row_key.to_string());
+        let new_row_elm = new_dns_entry_row(&dns_entry, &ips, &now).unwrap();
+        tbody.append_child(&new_row_elm).unwrap();
+    }
+    // now walk the list of rows in the table and remove any we don't want to keep
+    // wish the DOM API implemented a rust-style Iterator()
+    while old_row_index < old_rows.length() {
+        let old_row = old_rows.item(old_row_index).unwrap();
+        let old_row_key = old_row.get_attribute("name").unwrap();
+        if !keep_these_keys.contains(&old_row_key) {
+            old_row.remove();
+        } else {
+            old_row_index += 1;
+        }
     }
     Ok(())
+}
+
+fn new_dns_entry_row(
+    dns_entry: &&DnsTrackerEntry,
+    ips: &[IpAddr],
+    now: &DateTime<Utc>,
+) -> Result<Element, JsValue> {
+    let hostname = html!("td").unwrap();
+    hostname.set_inner_html(&dns_entry.hostname);
+    let ip = generate_ips_details(ips);
+    let ttl = html!("td").unwrap();
+    if let Some(ttl_value) = dns_entry.ttl {
+        ttl.set_inner_html(pretty_print_duration(&ttl_value).as_str());
+    } else {
+        ttl.set_inner_html("-");
+    }
+    let created = html!("td").unwrap();
+    write_created_td(&now, &dns_entry.created, &created);
+    let rtt = html!("td").unwrap();
+    if let Some(rtt_value) = dns_entry.rtt {
+        rtt.set_inner_html(pretty_print_duration(&rtt_value).as_str());
+        // TODO: normalize these numbers by some fraction of typical RTT, e.g., 20%
+        if rtt_value > Duration::milliseconds(10) {
+            rtt.set_attribute("style", "color:red;background-color:black")
+                .unwrap();
+        } else if rtt_value > Duration::milliseconds(5) {
+            rtt.set_attribute("style", "color:yellow;background-color:black")
+                .unwrap();
+        }
+    } else {
+        rtt.set_inner_html("-");
+    }
+    // these fields need to be inserted into the tr in the same order
+    // as the headers were created in the on_activate() code
+    let row_key = DnsRowKey::new(&dns_entry).to_string();
+    html!("tr", { "name" => row_key.as_str() }, hostname, ip, created, ttl, rtt)
+}
+
+fn write_created_td(now: &DateTime<Utc>, created: &DateTime<Utc>, created_elm: &Element) {
+    let created_time = *now - created;
+    created_elm.set_inner_html(format!("{} seconds ago", created_time.num_seconds()).as_str());
+}
+
+/**
+ * Update a DNS entry
+ *
+ * The only thing that needs to change from update to update is the 'created' field,
+ */
+fn update_dns_entry_row(
+    dns_entry: &DnsTrackerEntry,
+    _ips: &[IpAddr],
+    old_row: &Element,
+    now: &DateTime<Utc>,
+) {
+    const CREATED_FIELD: u32 = 2;
+    if let Some(created) = old_row.children().item(CREATED_FIELD) {
+        write_created_td(now, &dns_entry.created, &created);
+    }
 }
 
 /*  Show the list of IPs as
