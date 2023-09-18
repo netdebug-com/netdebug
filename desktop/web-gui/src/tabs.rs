@@ -9,7 +9,7 @@ pub type TabId = String;
 pub type Tabs = Arc<std::sync::Mutex<TabsContext>>;
 
 // the id of the main DIV where we put tab content
-pub const TAB_CONTENT: &str= "tab_content";
+pub const TAB_CONTENT: &str = "tab_content";
 
 pub struct TabsContext {
     tabs: HashMap<String, Tab>,
@@ -53,6 +53,7 @@ impl TabsContext {
     pub(crate) fn construct(&mut self, tabs_clone: Tabs, ws: WebSocket) -> Result<(), JsValue> {
         let root_div = html!("div", {
             "name" => "tab",
+            "class" => "tab",
         })?;
         for tab_id in &self.tab_order {
             let tabs = tabs_clone.clone();
@@ -68,7 +69,6 @@ impl TabsContext {
             });
             let tab = self.tabs.get(tab_id).expect("missing tab!?");
             let button = html!("button", {
-                "class" => "tablinks",
                 "id" => TabsContext::tab_id_to_dom_id(&tab.name).as_str(),
             })?
             .dyn_into::<HtmlElement>()
@@ -86,7 +86,7 @@ impl TabsContext {
             .body()
             .expect("body");
         body.append_child(&root_div)?;
-        let container = html!("div", {"id" => TAB_CONTENT, "class" => "tabs_content"})?;
+        let container = html!("div", {"id" => TAB_CONTENT, "class" => "tabcontent"})?;
         body.append_child(&container)?;
         // do this after we've added everything to the DOM
         let active_tab = self
@@ -140,6 +140,7 @@ impl TabsContext {
                 .get_element_by_id(&TabsContext::tab_id_to_dom_id(&new_tab.name))
                 .unwrap();
             button.set_attribute("checked", "true")?;
+
         } else {
             return Err(JsValue::from_str(
                 format!("tab {} not in tabs list", tab).as_str(),

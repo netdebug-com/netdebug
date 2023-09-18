@@ -25,13 +25,15 @@ body {
 }
 
 /* Create an active/current tablink class */
-.tab button.active {
+.tab button:checked,
+.tab button:active {
   background-color: #ccc;
 }
 
 /* Style the tab content */
 .tabcontent {
-  padding: 6px 12px;
+  overflow: scroll;
+  padding: 6px 6px;
   border: 1px solid #ccc;
   border-top: none;
 }
