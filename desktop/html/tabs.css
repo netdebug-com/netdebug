@@ -32,10 +32,27 @@ body {
 
 /* Style the tab content */
 .tabcontent {
-  overflow: scroll;
+  overflow: auto;
   padding: 6px 6px;
   border: 1px solid #ccc;
   border-top: none;
+}
+
+.flow_table {
+  width: 50%;
+  overflow: auto;
+  position: relative;
+  float: left;
+  left: 0px;
+}
+.flow_details {
+  margin: 25px 0;
+  width: 50%;
+  overflow: auto;
+  position: relative;
+  float: right;
+  right: 0px;
+  background-color: #f3f3f3;
 }
 
 /* 
