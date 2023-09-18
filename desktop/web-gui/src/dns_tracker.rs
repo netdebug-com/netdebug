@@ -192,7 +192,7 @@ pub fn handle_dump_dns_cache_reply(
     // this message is just for the dns tracker tab; ignore if it's not active
     // note that even when we cancel the timer event for the dns tracker and change the
     // active tab to something else, we could still get this event if we lose the race
-    if tabs.lock().unwrap().get_active_tab() != DNS_TRACKER_TAB {
+    if tabs.lock().unwrap().get_active_tab_name() != DNS_TRACKER_TAB {
         return Ok(());
     }
     let d = web_sys::window()

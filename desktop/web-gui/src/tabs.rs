@@ -30,8 +30,12 @@ impl TabsContext {
         }
     }
 
-    pub fn get_active_tab(&self) -> TabId {
+    pub fn get_active_tab_name(&self) -> TabId {
         self.active_tab.clone()
+    }
+
+    pub fn get_active_tab(&mut self) -> Option<&mut Tab> {
+        self.tabs.get_mut(&self.active_tab)
     }
 
     /**
