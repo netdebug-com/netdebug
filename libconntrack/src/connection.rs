@@ -259,33 +259,32 @@ where
 
     pub fn add(&mut self, packet: OwnedParsedPacket) {
         if let Some((key, src_is_local)) = packet.to_connection_key(&self.local_addrs) {
-            if let Some(connection) = self.connections.get_mut(&key) {
-                let action =
-                    connection.update(packet, &mut self.raw_sock, &key, src_is_local, &self.dns_tx);
-                use ConnectionAction::*;
-                match action {
-                    Noop => (),
-                    Close => {
-                        info!("Deleting from connection tracker: {}", key);
-                        self.connections.remove(&key);
-                    }
+            let connection = match self.connections.get_mut(&key) {
+                Some(connection) => connection,
+                None => {
+                    // else create the state and look it up again
+                    self.new_connection(key.clone());
+                    self.connections.get_mut(&key).unwrap()
                 }
-            } else {
-                self.new_connection(packet, key, src_is_local)
+            };
+            let action =
+                connection.update(packet, &mut self.raw_sock, &key, src_is_local, &self.dns_tx);
+            use ConnectionAction::*;
+            match action {
+                Noop => (),
+                Close => {
+                    info!("Deleting from connection tracker: {}", key);
+                    self.connections.remove(&key);
+                }
             }
         }
         // if we got here, the packet didn't have enough info to be called a 'connection'
         // just return and move on for now
     }
 
-    fn new_connection(
-        &mut self,
-        packet: OwnedParsedPacket,
-        key: ConnectionKey,
-        src_is_local: bool,
-    ) {
+    fn new_connection(&mut self, key: ConnectionKey) {
         let now = Utc::now();
-        let mut connection = Connection {
+        let connection = Connection {
             connection_key: key.clone(),
             local_syn: None,
             remote_syn: None,
@@ -316,7 +315,6 @@ where
         };
         info!("Tracking new connection: {}", &key);
 
-        connection.update(packet, &mut self.raw_sock, &key, src_is_local, &self.dns_tx);
         self.connections.insert(key, connection);
     }
 
@@ -1956,5 +1954,36 @@ pub mod test {
 
         let probe_id = Connection::is_probe_heuristic(true, &probe32).unwrap();
         assert_eq!(probe_id, 32);
+    }
+
+    /***
+     * If we get a RST from the remote side from a connection we're not tracking, then make sure
+     * to not track that connection _based_ on the RST.
+     */
+    #[tokio::test]
+    async fn dont_track_remote_rsts() {
+        let remote_rst = [
+            0x7c, 0x8a, 0xe1, 0x5a, 0xac, 0xc2, 0xf8, 0x0d, 0xac, 0xd4, 0x91, 0x89, 0x08, 0x00,
+            0x45, 0x00, 0x00, 0x28, 0xdb, 0x89, 0x00, 0x00, 0x40, 0x06, 0x1b, 0x45, 0xc0, 0xa8,
+            0x01, 0x4a, 0xc0, 0xa8, 0x01, 0x67, 0x02, 0x77, 0xcd, 0x35, 0xde, 0xde, 0x42, 0xa5,
+            0x00, 0x00, 0x00, 0x00, 0x50, 0x04, 0x00, 0x00, 0x3a, 0xae, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ];
+        let remote_rst = OwnedParsedPacket::try_from_fake_time(remote_rst.to_vec()).unwrap();
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.103").unwrap()]);
+        let log_dir = ".".to_string();
+        let storage_service_client = None;
+        let max_connections_per_tracker = 32;
+        let raw_sock = MockRawSocketWriter::new();
+        let mut connection_tracker = ConnectionTracker::new(
+            log_dir,
+            storage_service_client,
+            max_connections_per_tracker,
+            local_addrs,
+            raw_sock,
+        )
+        .await;
+        connection_tracker.add(remote_rst);
+        assert_eq!(connection_tracker.connections.len(), 0);
     }
 }
