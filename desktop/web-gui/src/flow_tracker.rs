@@ -23,14 +23,14 @@ struct FlowRowKey {
     // TODO: add some perf information, e.g., pkt loss rate or bandwidth
 }
 impl FlowRowKey {
-    fn new(measurments: &ConnectionMeasurements) -> FlowRowKey {
+    fn new(measurements: &ConnectionMeasurements) -> FlowRowKey {
         FlowRowKey {
-            local_ip: measurments.local_ip,
-            local_l4_port: measurments.local_l4_port,
-            remote_ip: measurments.remote_ip,
-            remote_l4_port: measurments.remote_l4_port,
-            ip_proto: measurments.ip_proto.clone(),
-            last_packet_time: measurments.last_packet_time,
+            local_ip: measurements.local_ip,
+            local_l4_port: measurements.local_l4_port,
+            remote_ip: measurements.remote_ip,
+            remote_l4_port: measurements.remote_l4_port,
+            ip_proto: measurements.ip_proto.clone(),
+            last_packet_time: measurements.last_packet_time,
         }
     }
 }
@@ -85,6 +85,7 @@ pub struct FlowTracker {
 
 pub const FLOW_TRACKER_TAB: &str = "flow_tracker";
 pub const FLOW_TRACKER_TABLE: &str = "__TABLE_flow_tracker";
+pub const FLOW_TRACKER_DETAILS: &str = "__DIV_flow_tracker_details";
 
 impl FlowTracker {
     pub(crate) fn new() -> Tab {
@@ -105,7 +106,8 @@ impl FlowTracker {
     }
 
     /**
-     * Setup a periodic timer to send out DumpFlow messages
+     * Setup a periodic timer to send out DumpFlow messages and split the
+     * tabcontent div in half for the flows view (left) and the detailed view (right)
      */
 
     pub fn on_activate(tab: &mut Tab, ws: WebSocket) {
@@ -118,20 +120,18 @@ impl FlowTracker {
             .expect("tab content div");
         content.set_inner_html("");
 
-        let th1 = html!("th").unwrap();
-        th1.set_inner_html("Flow #");
-        let th2 = html!("th").unwrap();
-        th2.set_inner_html("Flow Key");
-        let th3 = html!("th").unwrap();
-        th3.set_inner_html("Application(s)");
-        let th4 = html!("th").unwrap();
-        th4.set_inner_html("Lifetime");
-        let th5 = html!("th").unwrap();
-        th5.set_inner_html("Idle");
+        let th_flow_key = html!("th").unwrap();
+        th_flow_key.set_inner_html("Flow Key");
+        let th_applications = html!("th").unwrap();
+        th_applications.set_inner_html("Application(s)");
+        let th_lifetime = html!("th").unwrap();
+        th_lifetime.set_inner_html("Lifetime");
+        let th_idle = html!("th").unwrap();
+        th_idle.set_inner_html("Idle");
         let thead = html!(
             "thead",
             {},
-            html!("tr", {}, th1, th2, th3, th4, th5).unwrap()
+            html!("tr", {}, th_flow_key, th_applications, th_lifetime, th_idle).unwrap()
         )
         .unwrap();
         let table = html!(
@@ -141,7 +141,14 @@ impl FlowTracker {
             html!("tbody", { "id" => FLOW_TRACKER_TABLE}).unwrap()
         )
         .expect("table");
-        content.append_child(&table).expect("context.append");
+        let table_div = html!("div", {"class" => "flow_table"}, table).unwrap();
+        content.append_child(&table_div).expect("content.append");
+        // create the div for the detailed flow/right view
+        let detailed_div =
+            html!("div", { "id"=> FLOW_TRACKER_DETAILS, "class" => "flow_details"}).unwrap();
+        content
+            .append_child(&detailed_div)
+            .expect("content2.append");
         // send one message immediately to get us started
         let msg = GuiToServerMessages::DumpFlows();
         if let Err(e) = ws.send_with_str(&serde_json::to_string(&msg).unwrap()) {
@@ -190,19 +197,43 @@ pub fn handle_dumpflows_reply(
     _ws: WebSocket,
     tabs: Tabs,
 ) -> Result<(), JsValue> {
-    // this message is just for the flow tracker tab; ignore if it's not active
-    // note that even when we cancel the timer event for the flow tracker and change the
-    // active tab to something else, we could still get this event if we lose the race
-    // use all of this to figure out if the user has selected a flow for inspection
+    // first, sort the flows
+    flows.sort_by(|a, b| {
+        b.last_packet_time
+            .cmp(&a.last_packet_time)
+            .then(a.start_tracking_time.cmp(&b.start_tracking_time))
+    });
+    // put all of the locked tabs code in the same block
     let selected_flow = match tabs.lock() {
         Ok(mut tabs) => {
+            // this message is just for the flow tracker tab; ignore if it's not active
+            // note that even when we cancel the timer event for the flow tracker and change the
+            // active tab to something else, we could still get this event if we lose the race
+            // use all of this to figure out if the user has selected a flow for inspection
             if tabs.get_active_tab_name() != FLOW_TRACKER_TAB {
                 return Ok(()); // if the user switched contexts, just ignore this message
             } else {
-                tabs.get_active_tab_data::<FlowTracker>()
+                match tabs
+                    .get_active_tab_data::<FlowTracker>()
                     .expect("Not a flowtracker!?")
                     .selected_flow
                     .clone()
+                {
+                    Some(selected_key) => Some(selected_key),
+                    None => {
+                        // if there is no key selected, e.g., if this is the first time
+                        // loading this page, just select the first key, if there are any
+                        if let Some(measurements) = flows.iter().next() {
+                            let selected_key = Some(FlowRowKey::new(measurements));
+                            tabs.get_active_tab_data::<FlowTracker>()
+                                .expect("flowtracker")
+                                .selected_flow = selected_key.clone();
+                            selected_key
+                        } else {
+                            None     // no keys, don't select anything
+                        }
+                    }
+                }
             }
         }
         Err(e) => {
@@ -222,21 +253,9 @@ pub fn handle_dumpflows_reply(
     tbody.set_inner_html(""); // clear the table (??)
     let now = Utc::now();
     // sort by most recently active (lowest to highest), then start time
-    flows.sort_by(|a, b| {
-        b.last_packet_time
-            .cmp(&a.last_packet_time)
-            .then(a.start_tracking_time.cmp(&b.start_tracking_time))
-    });
-    for (idx, measurments) in flows.into_iter().enumerate() {
+    for measurments in flows.into_iter() {
         let flow_row_key = FlowRowKey::new(&measurments);
-        let idx_elm = html!("td").unwrap();
-        idx_elm.set_inner_html(format!("{}", idx).as_str());
         let flow_elm = html!("td").unwrap();
-        let local = if let Some(local) = &measurments.local_hostname {
-            local.clone()
-        } else {
-            format!("[{}]", &measurments.local_ip)
-        };
         let remote = if let Some(remote) = &measurments.remote_hostname {
             remote.clone()
         } else {
@@ -244,12 +263,8 @@ pub fn handle_dumpflows_reply(
         };
         flow_elm.set_inner_html(
             format!(
-                "{} {}::{} --> {}::{}",
-                measurments.ip_proto,
-                local,
-                measurments.local_l4_port,
-                remote,
-                measurments.remote_l4_port
+                "{} ::{} --> {}::{}",
+                measurments.ip_proto, measurments.local_l4_port, remote, measurments.remote_l4_port
             )
             .as_str(),
         );
@@ -273,13 +288,13 @@ pub fn handle_dumpflows_reply(
         app_elm.set_inner_html(&apps);
         let life_elm = html!("td").unwrap();
         let lifetime = now - measurments.start_tracking_time;
-        life_elm.set_inner_html(format!("{} seconds", lifetime.num_seconds()).as_str());
+        life_elm.set_inner_html(format!("{} s", lifetime.num_seconds()).as_str());
         let active_elm = html!("td").unwrap();
         let activetime = now - measurments.last_packet_time;
-        active_elm.set_inner_html(format!("{} seconds", activetime.num_seconds()).as_str());
+        active_elm.set_inner_html(format!("{} s", activetime.num_seconds()).as_str());
         let row = html!("tr", 
                     {"name" => flow_row_key.to_string().as_str()
-                }, idx_elm, flow_elm, app_elm, life_elm, active_elm)
+                }, flow_elm, app_elm, life_elm, active_elm)
         .unwrap()
         .dyn_into::<HtmlElement>()
         .unwrap();
@@ -334,6 +349,8 @@ fn update_flow_tracker_detail(flow_tracker: &mut FlowTracker, e: MessageEvent) {
             .get_element_by_id(FLOW_TRACKER_TABLE)
             .expect(FLOW_TRACKER_TABLE);
         let old_flow_key_str = old_row_key.to_string();
+        // walk the list of flows to turn off the prev selected flow
+        // TODO: figure out if we care about O(N) perf here
         for i in 0..tbody.children().length() {
             let row = tbody.children().item(i).unwrap();
             if row.get_attribute("name").unwrap() == old_flow_key_str {
@@ -348,5 +365,12 @@ fn update_flow_tracker_detail(flow_tracker: &mut FlowTracker, e: MessageEvent) {
 }
 
 fn draw_details(measurements: &ConnectionMeasurements) {
-    console_log!("Detailed measurements: {:?}", measurements);
+    let json = serde_json::to_string_pretty(measurements).unwrap();
+    let document = window().expect("window").document().expect("document");
+    let details_view = document.get_element_by_id(FLOW_TRACKER_DETAILS).unwrap();
+    let pre_formated = html!("pre").unwrap();
+    details_view.set_inner_html(""); // clear previous
+
+    pre_formated.set_inner_html(&json);
+    details_view.append_child(&pre_formated).unwrap();
 }
