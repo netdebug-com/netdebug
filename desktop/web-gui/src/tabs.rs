@@ -8,6 +8,9 @@ use crate::{console_log, html, log};
 pub type TabId = String;
 pub type Tabs = Arc<std::sync::Mutex<TabsContext>>;
 
+// the id of the main DIV where we put tab content
+pub const TAB_CONTENT: &str= "tab_content";
+
 pub struct TabsContext {
     tabs: HashMap<String, Tab>,
     tab_order: Vec<TabId>,
@@ -83,7 +86,7 @@ impl TabsContext {
             .body()
             .expect("body");
         body.append_child(&root_div)?;
-        let container = html!("div", {"id" => "tab_content", "class" => "tabs_content"})?;
+        let container = html!("div", {"id" => TAB_CONTENT, "class" => "tabs_content"})?;
         body.append_child(&container)?;
         // do this after we've added everything to the DOM
         let active_tab = self
@@ -149,6 +152,13 @@ impl TabsContext {
     fn tab_id_to_dom_id(tab_id: &str) -> String {
         format!("__tab_id_{}", tab_id)
     }
+
+    /**
+     * Get the internal data for the current tab
+     */
+    pub fn get_active_tab_data<T: Any>(&mut self) -> Option<&mut T> {
+        self.get_active_tab().unwrap().get_tab_data()
+    }
 }
 
 pub struct Tab {
@@ -162,4 +172,16 @@ pub struct Tab {
     pub on_deactivate: Option<fn(&mut Tab, WebSocket)>,
     // place for private data for the tab
     pub data: Option<Box<dyn Any>>,
+}
+
+impl Tab {
+    /**
+     * Get a refernce to the internal data structure for the tab and
+     * try to cast it to the requested type.  Via the Rust Any trait, the
+     * cast will tried at runtime so this is safe, but may fail if it's being
+     * asked to cast to the wrong type.
+     */
+    pub fn get_tab_data<T: Any>(&mut self) -> Option<&mut T> {
+        self.data.as_mut().expect("no tab data!?").downcast_mut()
+    }
 }

@@ -53,7 +53,9 @@ fn init_tabs(ws: WebSocket) -> Result<Tabs, JsValue> {
                     .expect("window")
                     .document()
                     .expect("document");
-                let content = d.get_element_by_id("tab_content").expect("tab content div");
+                let content = d
+                    .get_element_by_id(tabs::TAB_CONTENT)
+                    .expect("tab content div");
                 content.set_inner_html(format!("Content for the {} tab", tab.name).as_str());
             }),
             on_deactivate: None,

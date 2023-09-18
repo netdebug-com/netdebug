@@ -38,8 +38,7 @@ impl FlowRowKey {
 impl Ord for FlowRowKey {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // most recently updated flows first, then by IP
-        self
-            .last_packet_time
+        self.last_packet_time
             .cmp(&other.last_packet_time)
             .then(self.remote_ip.cmp(&other.remote_ip))
     }
@@ -114,7 +113,9 @@ impl FlowTracker {
             .expect("window")
             .document()
             .expect("document");
-        let content = d.get_element_by_id("tab_content").expect("tab content div");
+        let content = d
+            .get_element_by_id(crate::tabs::TAB_CONTENT)
+            .expect("tab content div");
         content.set_inner_html("");
 
         let th1 = html!("th").unwrap();
@@ -154,10 +155,7 @@ impl FlowTracker {
             }
         });
         let flow_tracker = tab
-            .data
-            .as_mut()
-            .expect("No flowtracker data!?")
-            .downcast_mut::<FlowTracker>()
+            .get_tab_data::<FlowTracker>()
             .expect("no flowtracker data!?");
         let window = web_sys::window().expect("window");
         match window.set_interval_with_callback_and_timeout_and_arguments_0(
@@ -176,10 +174,7 @@ impl FlowTracker {
      */
     pub fn on_deactivate(tab: &mut Tab, _ws: WebSocket) {
         let flow_tracker = tab
-            .data
-            .as_mut()
-            .expect("No flowtracker data!?")
-            .downcast_mut::<FlowTracker>()
+            .get_tab_data::<FlowTracker>()
             .expect("no flowtracker data!?");
         let window = web_sys::window().expect("window");
         if let Some(timeout_id) = flow_tracker.timeout_id {
@@ -204,12 +199,7 @@ pub fn handle_dumpflows_reply(
             if tabs.get_active_tab_name() != FLOW_TRACKER_TAB {
                 return Ok(()); // if the user switched contexts, just ignore this message
             } else {
-                tabs.get_active_tab()
-                    .unwrap()
-                    .data
-                    .as_mut()
-                    .expect("no flowtracker data?")
-                    .downcast_mut::<FlowTracker>()
+                tabs.get_active_tab_data::<FlowTracker>()
                     .expect("Not a flowtracker!?")
                     .selected_flow
                     .clone()
@@ -217,8 +207,10 @@ pub fn handle_dumpflows_reply(
         }
         Err(e) => {
             console_log!("Error getting tabs lock: {}", e);
-            return Err(JsValue::from_str(format!("Error getting tabs lock: {}", e).as_str()));
-        },
+            return Err(JsValue::from_str(
+                format!("Error getting tabs lock: {}", e).as_str(),
+            ));
+        }
     };
     let d = web_sys::window()
         .expect("window")
@@ -285,21 +277,19 @@ pub fn handle_dumpflows_reply(
         let active_elm = html!("td").unwrap();
         let activetime = now - measurments.last_packet_time;
         active_elm.set_inner_html(format!("{} seconds", activetime.num_seconds()).as_str());
-        let row = 
-                html!("tr", {"name" => flow_row_key.to_string().as_str()}, idx_elm, flow_elm, app_elm, life_elm, active_elm).unwrap().
-            dyn_into::<HtmlElement>().unwrap();
+        let row = html!("tr", 
+                    {"name" => flow_row_key.to_string().as_str()
+                }, idx_elm, flow_elm, app_elm, life_elm, active_elm)
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
         let tabs_clone = tabs.clone();
         let on_click = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
             // all of these clone()'s are so that we can call this function many times
             // instead of just once, e.g., so it's a FnMut rather than a FnOnce
             let mut tabs_lock = tabs_clone.lock().unwrap();
             let flow_tracker = tabs_lock
-                .get_active_tab()
-                .unwrap()
-                .data
-                .as_mut()
-                .expect("no flowtracker data?")
-                .downcast_mut::<FlowTracker>()
+                .get_active_tab_data()
                 .expect("Not a flowtracker!?");
             update_flow_tracker_detail(flow_tracker, e);
         });
