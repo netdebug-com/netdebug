@@ -110,7 +110,9 @@ impl DnsTracker {
             .expect("window")
             .document()
             .expect("document");
-        let content = d.get_element_by_id("tab_content").expect("tab content div");
+        let content = d
+            .get_element_by_id(crate::tabs::TAB_CONTENT)
+            .expect("tab content div");
         content.set_inner_html("");
 
         let headers = ["Hostname", "IP Address", "Created", "TTL", "RTT"]
@@ -148,10 +150,7 @@ impl DnsTracker {
             }
         });
         let dns_tracker = tab
-            .data
-            .as_mut()
-            .expect("No dns_tracker data!?")
-            .downcast_mut::<DnsTracker>()
+            .get_tab_data::<DnsTracker>()
             .expect("no dns_tracker data!?");
         let window = web_sys::window().expect("window");
         match window.set_interval_with_callback_and_timeout_and_arguments_0(
@@ -170,10 +169,7 @@ impl DnsTracker {
      */
     pub fn on_deactivate(tab: &mut Tab, _ws: WebSocket) {
         let dns_tracker = tab
-            .data
-            .as_mut()
-            .expect("No dns tracker data!?")
-            .downcast_mut::<DnsTracker>()
+            .get_tab_data::<DnsTracker>()
             .expect("no dns tracker data!?");
         let window = web_sys::window().expect("window");
         if let Some(timeout_id) = dns_tracker.timeout_id {
