@@ -5,8 +5,8 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use common::{
-    analysis_messages::AnalysisInsights, ProbeId, ProbeReport, ProbeReportEntry,
-    ProbeReportSummary, PROBE_MAX_TTL,
+    analysis_messages::AnalysisInsights, evicting_hash_map::EvictingHashMap, ProbeId, ProbeReport,
+    ProbeReportEntry, ProbeReportSummary, PROBE_MAX_TTL,
 };
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{DnsTrackerEntry, IpProtocol};
@@ -174,11 +174,11 @@ pub enum ConnectionTrackerMsg {
  * then we would spin up new ConnectionTracker instances.
  */
 
-pub struct ConnectionTracker<R>
+pub struct ConnectionTracker<'a, R>
 where
     R: RawSocketWriter,
 {
-    connections: hashlru::Cache<ConnectionKey, Connection>,
+    connections: EvictingHashMap<'a, ConnectionKey, Connection>,
     local_addrs: HashSet<IpAddr>,
     raw_sock: R,
     log_dir: String,
@@ -186,19 +186,19 @@ where
     storage_service_client: Option<StorageServiceClient<tonic::transport::Channel>>,
     dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
 }
-impl<R> ConnectionTracker<R>
+impl<'a, R> ConnectionTracker<'a, R>
 where
     R: RawSocketWriter,
 {
-    pub async fn new(
+    pub fn new(
         log_dir: String,
         storage_service_client: Option<StorageServiceClient<tonic::transport::Channel>>,
         max_connections_per_tracker: usize,
         local_addrs: HashSet<IpAddr>,
         raw_sock: R,
-    ) -> ConnectionTracker<R> {
+    ) -> ConnectionTracker<'a, R> {
         ConnectionTracker {
-            connections: hashlru::Cache::new(max_connections_per_tracker),
+            connections: EvictingHashMap::new(max_connections_per_tracker, |_, _| {}),
             local_addrs,
             raw_sock,
             log_dir,
@@ -1389,8 +1389,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs,
             raw_sock,
-        )
-        .await;
+        );
 
         let mut capture =
             // NOTE: this capture has no FINs so contracker will not remove it
@@ -1454,8 +1453,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs.clone(),
             raw_sock,
-        )
-        .await;
+        );
 
         let mut connection_key: Option<ConnectionKey> = None;
         let mut capture = pcap::Capture::from_file(test_dir(
@@ -1477,7 +1475,8 @@ pub mod test {
         // just grab the first connection .. the only connection
         let mut connection = connection_tracker
             .connections
-            .into_values()
+            .values()
+            .cloned()
             .into_iter()
             .next()
             .unwrap();
@@ -1520,8 +1519,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs.clone(),
             raw_sock,
-        )
-        .await;
+        );
 
         let probe = OwnedParsedPacket::try_from_fake_time(TEST_PROBE.to_vec()).unwrap();
 
@@ -1693,8 +1691,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs.clone(),
             raw_sock,
-        )
-        .await;
+        );
 
         connection_tracker.add(syn);
         connection_tracker.add(synack);
@@ -1778,8 +1775,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs.clone(),
             raw_sock,
-        )
-        .await;
+        );
 
         let mut capture =
             pcap::Capture::from_file(test_dir("tests/simple_clear_text_with_fins.pcap")).unwrap();
@@ -1811,8 +1807,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs.clone(),
             raw_sock,
-        )
-        .await;
+        );
 
         let mut connection_key: Option<ConnectionKey> = None;
         let mut capture = pcap::Capture::from_file(test_dir(
@@ -1981,8 +1976,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs,
             raw_sock,
-        )
-        .await;
+        );
         connection_tracker.add(remote_rst);
         assert_eq!(connection_tracker.connections.len(), 0);
     }

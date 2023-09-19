@@ -7,7 +7,7 @@ pub struct EvictingHashMap<'a, K, V> {
     // Fun with callbacks: https://stackoverflow.com/questions/41081240/idiomatic-callbacks-in-rust
     map: LinkedHashMap<K, V>,
     max_elements: usize,
-    cb: Box<dyn FnMut(K, V) + 'a>,
+    cb: Box<dyn FnMut(K, V) + Send + 'a>,
 }
 
 /// A hash-map with a limited max capacity. Once capacity is reached, adding
@@ -20,7 +20,7 @@ where
     /// Create a new map with maximum size `max_elements`
     /// If an entry is evicted due to max size, `eviction_cb()` will be called with the
     /// evicted key,value pair.
-    pub fn new(max_elements: usize, eviction_cb: impl FnMut(K, V) + 'a) -> Self {
+    pub fn new(max_elements: usize, eviction_cb: impl FnMut(K, V) + Send + 'a) -> Self {
         EvictingHashMap {
             map: LinkedHashMap::with_capacity(max_elements),
             max_elements: max_elements,
@@ -62,6 +62,10 @@ where
         self.map.get(k)
     }
 
+    pub fn values(&self) -> linked_hash_map::Values<K, V> {
+        self.map.values()
+    }
+
     /// Remove the value corresponding to the key. If value was in the map,
     /// it will be returned.
     pub fn remove<Q: ?Sized>(&mut self, k: &Q) -> Option<V>
@@ -75,15 +79,25 @@ where
     pub fn len(&self) -> usize {
         self.map.len()
     }
+
+    pub fn clear(&mut self) {
+        self.map.clear()
+    }
 }
 
 #[cfg(test)]
 pub mod test {
+    use itertools::Itertools;
+
     use super::*;
     use std::sync::mpsc::{self, TryRecvError};
 
     fn get_keys(map: &EvictingHashMap<i32, String>) -> Vec<i32> {
         map.keys().cloned().collect()
+    }
+
+    fn get_values<'a>(map: &'a EvictingHashMap<i32, String>) -> Vec<&'a str> {
+        map.values().map(|s| s.as_str()).collect_vec()
     }
 
     #[test]
@@ -103,6 +117,7 @@ pub mod test {
         assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
 
         assert_eq!(get_keys(&m), vec![1, 2, 3]);
+        assert_eq!(get_values(&m), vec!["a", "b", "c"]);
 
         // access element w/o LRU update
         assert_eq!(m.get_no_lru(&1), Some(&"a".to_string()));
@@ -111,6 +126,9 @@ pub mod test {
         // bump access to 1
         assert_eq!(m.get_mut(&1), Some(&mut "a".to_string()));
         assert_eq!(get_keys(&m), vec![2, 3, 1]);
+
+        // values
+        assert_eq!(get_values(&m), vec!["b", "c", "a"]);
 
         m.insert(4, "d".to_string());
         assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
@@ -133,5 +151,9 @@ pub mod test {
         // removal
         assert_eq!(m.remove(&1), Some("a".to_string()));
         assert_eq!(get_keys(&m), vec![3, 5, 6, 4]);
+
+        m.clear();
+        assert_eq!(m.len(), 0);
+        assert_eq!(get_keys(&m), Vec::<i32>::new())
     }
 }
