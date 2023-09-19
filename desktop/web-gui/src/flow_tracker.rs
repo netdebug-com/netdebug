@@ -11,6 +11,7 @@ use web_sys::{window, Element, HtmlElement, MessageEvent, WebSocket};
 
 use crate::tabs::{Tab, Tabs};
 use crate::{console_log, html, log};
+use itertools::Itertools;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct FlowRowKey {
@@ -230,7 +231,7 @@ pub fn handle_dumpflows_reply(
                                 .selected_flow = selected_key.clone();
                             selected_key
                         } else {
-                            None     // no keys, don't select anything
+                            None // no keys, don't select anything
                         }
                     }
                 }
@@ -337,7 +338,6 @@ fn update_flow_tracker_detail(flow_tracker: &mut FlowTracker, e: MessageEvent) {
     }
     let new_row = target;
     // unselect old row
-    console_log!("Got on_click event for {:?}", new_row);
     new_row.set_class_name("active-row"); // matches string in CSS
     let new_row_name = new_row.get_attribute("name").unwrap();
     let new_row_key = FlowRowKey::try_from(new_row_name).unwrap();
@@ -370,9 +370,79 @@ fn update_flow_tracker_detail(flow_tracker: &mut FlowTracker, e: MessageEvent) {
 fn draw_details(measurements: &ConnectionMeasurements) {
     let document = window().expect("window").document().expect("document");
     let details_view = document.get_element_by_id(FLOW_TRACKER_DETAILS).unwrap();
-    let list = html!("ol").unwrap();
-    for ttl in measurements.probe_report_summary {
-        
+    details_view.set_inner_html(""); // clear the DIV
+    if measurements.probe_report_summary.summary.is_empty() {
+        // default to printing the json if we don't know anything prettier
+        let json = serde_json::to_string_pretty(measurements).unwrap();
+        let pre_format = html!("pre").unwrap();
+        pre_format.set_inner_html(&json);
+        details_view.append_child(&pre_format).unwrap();
+    } else {
+        let list = render_measurement_ttl_list(measurements);
+        details_view.append_child(&list).unwrap();
     }
-    details_view.append_child(&pre_formated).unwrap();
+}
+
+/**
+ * Convert a ProbeReportSummary to a nice(ish) html text format.
+ *
+ * TODO: replace this with a graphical representation
+ */
+
+fn render_measurement_ttl_list(measurements: &ConnectionMeasurements) -> Element {
+    let list = html!("ol").unwrap();
+    let n_nodes = measurements.probe_report_summary.raw_reports.len(); // each report should have 1 result per ttl
+    for ttl in measurements.probe_report_summary.summary.keys().sorted() {
+        let nodes = measurements.probe_report_summary.summary.get(ttl).unwrap();
+        if nodes.len() == 1 {
+            // simple and hopefully common case; all probes have the same reply type
+            let li = html!("li").unwrap();
+            let node = nodes.first().unwrap();
+            let comments = node.comments.iter().join(",");
+            li.set_inner_html(
+                format!(
+                    "{} {} {} {}",
+                    node.name(),
+                    if let Some(ip) = node.ip {
+                        ip.to_string()
+                    } else {
+                        "".to_string()
+                    },
+                    if let Some((min, avg, max)) = node.stats() {
+                        format!("RTT stats: min={}, avg={}, max={}", min, avg, max,)
+                    } else {
+                        "".to_string()
+                    },
+                    if comments.is_empty() {
+                        // do we have any comments from probe reassembly?
+                        "".to_string()
+                    } else {
+                        format!("({} :: \"{}\")", node.comments.len(), comments)
+                    },
+                )
+                .as_str(),
+            );
+            list.append_child(&li).unwrap();
+        } else {
+            // multiple different replies for the same TTL
+            // this can happen with packet loss or route flapping
+            // it shouldn't happen often as all packets in a probe report should hit
+            // the same ECMP bucket
+            let para = html!("p").unwrap();
+            para.set_inner_html(format!("TTL {:3} -------", ttl).as_str());
+            let sub_list = html!("ol").unwrap();
+            para.append_child(&sub_list).unwrap();
+            list.append_child(&html!("li", {}, para).unwrap()).unwrap();
+            for node in nodes {
+                let n_replies = node.comments.len(); // one comment per reply
+                let percent = 100.0 * n_replies as f64 / n_nodes as f64;
+                // TODO: sort by frequency?
+                let sub_li = html!("li").unwrap();
+                sub_li
+                    .set_inner_html(format!("{:4}% - {} :: {}", percent, n_replies, node).as_str());
+                sub_list.append_child(&sub_li).unwrap();
+            }
+        }
+    }
+    list
 }

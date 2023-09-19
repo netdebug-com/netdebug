@@ -249,6 +249,20 @@ impl ProbeReportEntry {
             } => None,
         }
     }
+
+    fn get_rtt(&self) -> Option<f64> {
+        use ProbeReportEntry::*;
+        match self {
+            RouterReplyFound { rtt_ms, ..} |
+            NatReplyFound { rtt_ms, ..} |
+            EndHostReplyFound { rtt_ms, ..} => Some(*rtt_ms),
+            NoReply { ..} |
+            NoOutgoing { ..} |
+            RouterReplyNoProbe { ..} |
+            NatReplyNoProbe { ..} |
+            EndHostNoProbe { ..} => None,
+        }
+    }
 }
 
 impl Eq for ProbeReportEntry {}
@@ -294,6 +308,21 @@ impl ProbeReportSummaryNode {
             None
         }
     }
+
+    pub fn name(&self) -> String {
+        use ProbeReportEntry::*;
+        match self.probe_type {
+            RouterReplyFound { .. } => "Router",
+            NatReplyFound { .. } => "NAT",
+            NoReply { .. } => "*",
+            NoOutgoing { .. } => "???", // missing outgoing, how do we represent this to the user?
+            RouterReplyNoProbe { .. } => "Router?",
+            NatReplyNoProbe { .. } => "NAT?",
+            EndHostReplyFound { .. } => "Host",
+            EndHostNoProbe { .. } => "Host?",
+        }
+        .to_string()
+    }
 }
 
 impl Display for ProbeReportSummaryNode {
@@ -327,6 +356,8 @@ impl ProbeReportSummary {
 
     /**
      * For each ttl, we can have multiple events (e.g., sometimes a packet is dropped, sometime not)
+     * 
+     * Take this new probe report, and aggregate the information into the ProbeReportSummary
      *
      */
     pub fn update(&mut self, report: ProbeReport) {
@@ -356,7 +387,9 @@ impl ProbeReportSummary {
                             if src_ip == &node.ip.unwrap() {
                                 // these variants should always have an IP
                                 node.rtts.push(*rtt_ms);
-                                node.comments.push(comment.clone());
+                                if !comment.is_empty() {
+                                    node.comments.push(comment.clone());
+                                }
                                 inserted = true;
                                 break;
                             }
@@ -369,7 +402,9 @@ impl ProbeReportSummary {
                             comment,
                         } => {
                             node.rtts.push(*rtt_ms);
-                            node.comments.push(comment.clone());
+                            if !comment.is_empty() {
+                                node.comments.push(comment.clone());
+                            }
                             inserted = true;
                             break;
                         }
@@ -384,7 +419,9 @@ impl ProbeReportSummary {
                             in_timestamp_ms: _,
                             comment,
                         } => {
-                            node.comments.push(comment.clone());
+                            if !comment.is_empty() {
+                                node.comments.push(comment.clone());
+                            }
                             inserted = true;
                             break;
                         }
@@ -402,7 +439,9 @@ impl ProbeReportSummary {
                         } => {
                             if src_ip == &node.ip.unwrap() {
                                 // these variants should always have an IP
-                                node.comments.push(comment.clone());
+                                if !comment.is_empty() {
+                                    node.comments.push(comment.clone());
+                                }
                                 inserted = true;
                                 break;
                             }
@@ -417,8 +456,16 @@ impl ProbeReportSummary {
                     probe_type: probe.clone(),
                     ttl: *ttl,
                     ip: probe.get_ip(),
-                    rtts: Vec::new(),
-                    comments: Vec::from([probe.get_comment()]),
+                    rtts: if let Some(rtt_ms) = probe.get_rtt() {
+                        vec![rtt_ms]
+                    } else {
+                        Vec::new()
+                    },
+                    comments: if !probe.get_comment().is_empty() {
+                        vec![probe.get_comment()]
+                    } else {
+                        Vec::new()
+                    }
                 };
                 // get nodes again from the summary is it went into the above for loop's into_iter()
                 let nodes = self.summary.entry(*ttl).or_insert(Vec::new());
