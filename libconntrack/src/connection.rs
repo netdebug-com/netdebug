@@ -3,7 +3,7 @@ use std::{
     net::{IpAddr, SocketAddr},
 };
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Duration};
 use common::{
     analysis_messages::AnalysisInsights, evicting_hash_map::EvictingHashMap, ProbeId, ProbeReport,
     ProbeReportEntry, ProbeReportSummary, PROBE_MAX_TTL,
@@ -1259,11 +1259,26 @@ impl Connection {
     }
 
     pub fn to_connection_measurements(
-        &self,
+        &mut self,
         dns_cache: &HashMap<IpAddr, DnsTrackerEntry>,
         tcp_cache: &HashMap<ConnectionKey, ProcessTrackerEntry>,
         udp_cache: &HashMap<(IpAddr, u16), ProcessTrackerEntry>,
+        probe_timeout : Option<Duration>,
     ) -> libconntrack_wasm::ConnectionMeasurements {
+
+        // if there's an active probe round going, finish it/generate the report if it's been longer
+        // then probe_timeout
+        if let Some(probe_round) = self.probe_round.as_ref() {
+            let now = Utc::now();
+            let delta = now - self.start_tracking_time;
+            let timeout = match probe_timeout {
+                Some(timeout) => timeout,
+                None => Duration::milliseconds(500),
+            };
+            if delta > timeout {
+                self.generate_probe_report(probe_round.round_number as u32, None, false);
+            }
+        }
         let local_hostname = if let Some(entry) = dns_cache.get(&self.connection_key.local_ip) {
             Some(entry.hostname.clone())
         } else {
