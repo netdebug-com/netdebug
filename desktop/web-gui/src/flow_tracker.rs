@@ -364,13 +364,15 @@ fn update_flow_tracker_detail(flow_tracker: &mut FlowTracker, e: MessageEvent) {
     // we'd have to keep the measurements state for each flow, which might be a PITA
 }
 
+/**
+ * Update the right 'details' DIV with the details on a selected flow
+ */
 fn draw_details(measurements: &ConnectionMeasurements) {
-    let json = serde_json::to_string_pretty(measurements).unwrap();
     let document = window().expect("window").document().expect("document");
     let details_view = document.get_element_by_id(FLOW_TRACKER_DETAILS).unwrap();
-    let pre_formated = html!("pre").unwrap();
-    details_view.set_inner_html(""); // clear previous
-
-    pre_formated.set_inner_html(&json);
+    let list = html!("ol").unwrap();
+    for ttl in measurements.probe_report_summary {
+        
+    }
     details_view.append_child(&pre_formated).unwrap();
 }
