@@ -2497,6 +2497,7 @@ dependencies = [
  "chrono",
  "console_error_panic_hook",
  "desktop_common",
+ "itertools 0.11.0",
  "libconntrack-wasm",
  "serde",
  "serde-wasm-bindgen",
