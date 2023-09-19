@@ -97,9 +97,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (process_tracker, _join) = process_tracker.spawn(Duration::milliseconds(500)).await;
 
     // launch the DNS tracker; cache localhost entries
-    let (dns_tx, _) = DnsTracker::new(/* expiring cache capacity */ 4096)
-        .spawn()
-        .await;
+    let (dns_tx, _) = DnsTracker::spawn(/* expiring cache capacity */ 4096).await;
     let dns_tx_clone = dns_tx.clone();
     for ip in local_addrs.clone() {
         dns_tx
@@ -134,8 +132,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             args.max_connections_per_tracker,
             local_addrs,
             raw_sock,
-        )
-        .await;
+        );
         connection_tracker.set_dns_tracker(dns_tx_clone);
         // loop forever tracking messages sent on the channel
         connection_tracker.rx_loop(rx).await;

@@ -1,3 +1,4 @@
+use common::evicting_hash_map::EvictingHashMap;
 #[cfg(not(test))]
 use log::{debug, warn};
 #[cfg(test)]
@@ -26,9 +27,9 @@ pub struct DnsPendingKey {
     transaction_id: u16,
 }
 
-pub struct DnsTracker {
+pub struct DnsTracker<'a> {
     pub reverse_map: HashMap<IpAddr, DnsTrackerEntry>,
-    pub reverse_map_recently_expired: hashlru::Cache<IpAddr, DnsTrackerEntry>,
+    pub reverse_map_recently_expired: EvictingHashMap<'a, IpAddr, DnsTrackerEntry>,
     pub pending: HashMap<DnsPendingKey, DnsPendingEntry>,
 }
 
@@ -60,13 +61,13 @@ pub enum DnsTrackerMessage {
     },
 }
 
-impl DnsTracker {
+impl<'a> DnsTracker<'a> {
     /// New DnsTracker
-    pub fn new(expired_entries_capacity: usize) -> DnsTracker {
+    pub fn new(expired_entries_capacity: usize) -> DnsTracker<'a> {
         DnsTracker {
             reverse_map: HashMap::new(),
             pending: HashMap::new(),
-            reverse_map_recently_expired: hashlru::Cache::new(expired_entries_capacity),
+            reverse_map_recently_expired: EvictingHashMap::new(expired_entries_capacity, |_, _| {}),
         }
     }
 
@@ -96,9 +97,12 @@ impl DnsTracker {
         Ok(())
     }
 
-    pub async fn spawn(mut self) -> (UnboundedSender<DnsTrackerMessage>, JoinHandle<()>) {
+    pub async fn spawn(
+        expired_entries_capacity: usize,
+    ) -> (UnboundedSender<DnsTrackerMessage>, JoinHandle<()>) {
+        let mut dns_tracker = DnsTracker::new(expired_entries_capacity);
         let (tx, rx) = unbounded_channel::<DnsTrackerMessage>();
-        let join = tokio::spawn(async move { self.do_async_loop(rx).await });
+        let join = tokio::spawn(async move { dns_tracker.do_async_loop(rx).await });
         (tx, join)
     }
 
@@ -381,7 +385,7 @@ impl DnsTracker {
             if let Some(entry) = self.reverse_map.get(&ip) {
                 answer.insert(ip, entry.clone());
             } else if use_expired {
-                if let Some(entry) = self.reverse_map_recently_expired.get(&ip) {
+                if let Some(entry) = self.reverse_map_recently_expired.get_mut(&ip) {
                     answer.insert(ip, entry.clone());
                 }
             }

@@ -13,7 +13,6 @@ dns-parser = "0.8.0"
 etherparse = { git = "https://github.com/robs-zeynet/etherparse", branch = "tcp_header" }
 futures = "0.3.28"
 futures-util = "0.3.28"
-hashlru = "0.11.0"
 itertools = "0.11.0"
 libc = "0.2.146"
 libconntrack-wasm = { path = "../libconntrack-wasm" }

@@ -98,8 +98,7 @@ impl WebServerContext {
                     max_connections_per_tracker,
                     local_addrs,
                     raw_sock,
-                )
-                .await;
+                );
                 let _ret: () = connection_tracker.rx_loop(rx).await;
             });
         }
