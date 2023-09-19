@@ -292,9 +292,7 @@ where
             local_ack: None,
             remote_ack: None,
             local_data: None,
-            next_end_host_reply: None,
-            outgoing_probe_timestamps: HashMap::new(),
-            incoming_reply_timestamps: HashMap::new(),
+            probe_round: None,
             send_probes_on_idle: false,
             #[cfg(test)]
             needs_logging: false, // logging is off for testing, but on for production
@@ -411,6 +409,36 @@ enum ConnectionAction {
 }
 
 /**
+ * TODO: move Probe stuff to a separate file.
+ * 
+ * There are 'ProbeRounds' which is the state for an active set ("round") of probes
+ * while it's in process.  A "ProbeReport" which is a finished set of probes where
+ * we match the incoming replies to the outgoing original packets ("probes").  There
+ * is also a "ProbeReportSummary" which summarizes multiple probe reports.
+ */
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProbeRound {
+    pub round_number: usize,
+    pub start_time: DateTime<Utc>,
+    pub next_end_host_reply: ProbeId, // used for idle probes
+    // current probes: outgoing probes and incoming replies
+    pub outgoing_probe_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
+    pub incoming_reply_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
+}
+impl ProbeRound {
+    fn new(round_number: usize) -> ProbeRound {
+        ProbeRound {
+            round_number,
+            start_time: Utc::now(),
+            next_end_host_reply: PROBE_MAX_TTL - 1,
+            outgoing_probe_timestamps: HashMap::new(),
+            incoming_reply_timestamps: HashMap::new(),
+        }
+    }
+}
+
+/**
  * Main connection tracking structure - one per connection.
  *
  * NOTE: everything in this struct will get serialized to a logfile on the connection's close
@@ -427,10 +455,7 @@ pub struct Connection {
     pub local_ack: Option<u32>,
     pub remote_ack: Option<u32>,
     pub local_data: Option<OwnedParsedPacket>, // data sent for retransmits
-    pub next_end_host_reply: Option<ProbeId>,
-    // current probes: outgoing probes and incoming replies
-    pub outgoing_probe_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
-    pub incoming_reply_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
+    pub probe_round: Option<ProbeRound>,
     pub send_probes_on_idle: bool, // should we send probes when the connection is idle?
     pub needs_logging: bool,       // on connection close, should we log state to disk?
     pub close_time: Option<String>, // Grr! none of the time instants/DataTIme's implement Serialize!!
@@ -585,18 +610,23 @@ impl Connection {
             self.local_data = Some(packet.clone());
             if first_time {
                 // reset the probe state
-                self.next_end_host_reply = Some(PROBE_MAX_TTL - 1);
+                self.probe_round =
+                    Some(ProbeRound::new(self.probe_report_summary.raw_reports.len()));
                 tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock, false).unwrap();
             }
         }
-        if let Some(ttl) = Connection::is_probe_heuristic(true, packet) {
-            // there's some super clean rust-ish way to compress this; don't care for now
-            if let Some(probes) = self.outgoing_probe_timestamps.get_mut(&ttl) {
-                probes.insert(packet.clone());
-            } else {
-                let mut probes = HashSet::new();
-                probes.insert(packet.clone());
-                self.outgoing_probe_timestamps.insert(ttl, probes);
+        if let Some(active_probe_round) = self.probe_round.as_mut() {
+            if let Some(ttl) = Connection::is_probe_heuristic(true, packet) {
+                // there's some super clean rust-ish way to compress this; don't care for now
+                if let Some(probes) = active_probe_round.outgoing_probe_timestamps.get_mut(&ttl) {
+                    probes.insert(packet.clone());
+                } else {
+                    let mut probes = HashSet::new();
+                    probes.insert(packet.clone());
+                    active_probe_round
+                        .outgoing_probe_timestamps
+                        .insert(ttl, probes);
+                }
             }
         }
         if tcp.fin {
@@ -667,19 +697,23 @@ impl Connection {
                                     // SEQ wrapped!  (or maybe a malicious receiver?)
                                     (u32::MAX - left) + right
                                 };
-                                if probe_id <= PROBE_MAX_TTL as u32 {
-                                    // record the reply
-                                    let probe_id = probe_id as u8; // safe because we just checked
-                                    if let Some(replies) =
-                                        self.incoming_reply_timestamps.get_mut(&probe_id)
-                                    {
-                                        replies.insert(packet.clone());
+                                if let Some(active_probe_round) = self.probe_round.as_mut() {
+                                    if probe_id <= PROBE_MAX_TTL as u32 {
+                                        // record the reply
+                                        let probe_id = probe_id as u8; // safe because we just checked
+                                        if let Some(replies) = active_probe_round
+                                            .incoming_reply_timestamps
+                                            .get_mut(&probe_id)
+                                        {
+                                            replies.insert(packet.clone());
+                                        } else {
+                                            active_probe_round
+                                                .incoming_reply_timestamps
+                                                .insert(probe_id, HashSet::from([packet.clone()]));
+                                        }
                                     } else {
-                                        self.incoming_reply_timestamps
-                                            .insert(probe_id, HashSet::from([packet.clone()]));
+                                        info!("Looks like we got a dupACK but the probe_id is too big {} :: {:?}", probe_id, packet);
                                     }
-                                } else {
-                                    info!("Looks like we got a dupACK but the probe_id is too big {} :: {:?}", probe_id, packet);
                                 }
                             }
                         }
@@ -826,12 +860,18 @@ impl Connection {
         ) {
             Ok((pkt, _partial)) => {
                 if let Some(probe_id) = self.is_reply_heuristic(&pkt) {
-                    if let Some(hash) = self.incoming_reply_timestamps.get_mut(&probe_id) {
-                        hash.insert(pkt);
-                    } else {
-                        self.incoming_reply_timestamps
-                            // careful to store the original packet and not the embedded one
-                            .insert(probe_id, HashSet::from([packet.clone()]));
+                    if let Some(active_probe_round) = self.probe_round.as_mut() {
+                        if let Some(hash) = active_probe_round
+                            .incoming_reply_timestamps
+                            .get_mut(&probe_id)
+                        {
+                            hash.insert(pkt);
+                        } else {
+                            active_probe_round
+                                .incoming_reply_timestamps
+                                // careful to store the original packet and not the embedded one
+                                .insert(probe_id, HashSet::from([packet.clone()]));
+                        }
                     }
                 }
                 ConnectionAction::Noop
@@ -908,156 +948,158 @@ impl Connection {
         clear: bool,
     ) -> ProbeReport {
         let mut report = HashMap::new();
-        if self.outgoing_probe_timestamps.len() > PROBE_MAX_TTL as usize {
-            warn!(
-                "Extra probes {} in {:?}",
-                self.outgoing_probe_timestamps.len(),
-                self
-            );
-        }
-        if self.incoming_reply_timestamps.len() > PROBE_MAX_TTL as usize {
-            warn!(
-                "Extra replies {} in {:?}",
-                self.incoming_reply_timestamps.len(),
-                self
-            );
-        }
-        for ttl in 1..=PROBE_MAX_TTL {
-            let mut comment = String::new(); // no comment by default
-            if let Some(probe_set) = self.outgoing_probe_timestamps.get(&ttl) {
-                if probe_set.len() != 1 {
-                    comment.push_str(
-                        format!(
-                            "Weird: {} probes found; guessing first one.",
-                            probe_set.len()
-                        )
-                        .as_str(),
-                    );
-                }
-                let probe = probe_set.iter().next().unwrap();
-                let out_timestamp_ms = timeval_to_ms(probe.pcap_header.ts);
-                if let Some(reply_set) = self.incoming_reply_timestamps.get(&ttl) {
-                    if reply_set.len() != 1 {
+        if let Some(probe_round) = self.probe_round.as_mut() {
+            if probe_round.outgoing_probe_timestamps.len() > PROBE_MAX_TTL as usize {
+                warn!(
+                    "Extra probes {} in {:?}",
+                    probe_round.outgoing_probe_timestamps.len(),
+                    self.connection_key,
+                );
+            }
+            if probe_round.incoming_reply_timestamps.len() > PROBE_MAX_TTL as usize {
+                warn!(
+                    "Extra replies {} in {:?}",
+                    probe_round.incoming_reply_timestamps.len(),
+                    self.connection_key,
+                );
+            }
+            for ttl in 1..=PROBE_MAX_TTL {
+                let mut comment = String::new(); // no comment by default
+                if let Some(probe_set) = probe_round.outgoing_probe_timestamps.get(&ttl) {
+                    if probe_set.len() != 1 {
                         comment.push_str(
                             format!(
-                                " Weird: {} replies found; guessing first one.",
-                                reply_set.len()
+                                "Weird: {} probes found; guessing first one.",
+                                probe_set.len()
                             )
                             .as_str(),
                         );
                     }
-                    // found a probe and a reply!
-                    let reply = reply_set.iter().next().unwrap();
-                    let rtt_ms = calc_rtt_ms(reply.pcap_header, probe.pcap_header);
-                    if matches!(&reply.transport, Some(TransportHeader::Tcp(_tcph))) {
+                    let probe = probe_set.iter().next().unwrap();
+                    let out_timestamp_ms = timeval_to_ms(probe.pcap_header.ts);
+                    if let Some(reply_set) = probe_round.incoming_reply_timestamps.get(&ttl) {
+                        if reply_set.len() != 1 {
+                            comment.push_str(
+                                format!(
+                                    " Weird: {} replies found; guessing first one.",
+                                    reply_set.len()
+                                )
+                                .as_str(),
+                            );
+                        }
+                        // found a probe and a reply!
+                        let reply = reply_set.iter().next().unwrap();
+                        let rtt_ms = calc_rtt_ms(reply.pcap_header, probe.pcap_header);
+                        if matches!(&reply.transport, Some(TransportHeader::Tcp(_tcph))) {
+                            report.insert(
+                                ttl,
+                                ProbeReportEntry::EndHostReplyFound {
+                                    ttl,
+                                    out_timestamp_ms,
+                                    rtt_ms,
+                                    comment,
+                                },
+                            );
+                        } else {
+                            // else is an ICMP reply
+                            // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
+                            let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
+                            // NAT check - does the dst of the connection key == this src_ip?
+                            if src_ip == self.connection_key.remote_ip {
+                                report.insert(
+                                    ttl,
+                                    ProbeReportEntry::NatReplyFound {
+                                        ttl,
+                                        out_timestamp_ms,
+                                        rtt_ms,
+                                        src_ip,
+                                        comment,
+                                    },
+                                );
+                            } else {
+                                report.insert(
+                                    ttl,
+                                    ProbeReportEntry::RouterReplyFound {
+                                        ttl,
+                                        out_timestamp_ms,
+                                        rtt_ms,
+                                        src_ip,
+                                        comment,
+                                    },
+                                );
+                            }
+                        }
+                    } else {
+                        // missing reply - unfortunately common
                         report.insert(
                             ttl,
-                            ProbeReportEntry::EndHostReplyFound {
+                            ProbeReportEntry::NoReply {
                                 ttl,
                                 out_timestamp_ms,
-                                rtt_ms,
                                 comment,
                             },
                         );
-                    } else {
-                        // else is an ICMP reply
+                    }
+                } else {
+                    // sigh, duplicate code
+                    if let Some(reply_set) = probe_round.incoming_reply_timestamps.get(&ttl) {
+                        if reply_set.len() != 1 {
+                            comment.push_str(
+                                format!(
+                                    " Weird: {} replies found; guessing first one.",
+                                    reply_set.len()
+                                )
+                                .as_str(),
+                            );
+                        }
+                        // found a reply with out a probe (?) - can happen when pcap drops packets
+                        let reply = reply_set.iter().next().unwrap();
                         // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
-                        let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
-                        // NAT check - does the dst of the connection key == this src_ip?
-                        if src_ip == self.connection_key.remote_ip {
+                        let in_timestamp_ms = timeval_to_ms(reply.pcap_header.ts);
+                        if matches!(&reply.transport, Some(TransportHeader::Tcp(_tcp))) {
                             report.insert(
                                 ttl,
-                                ProbeReportEntry::NatReplyFound {
+                                ProbeReportEntry::EndHostNoProbe {
                                     ttl,
-                                    out_timestamp_ms,
-                                    rtt_ms,
-                                    src_ip,
+                                    in_timestamp_ms,
                                     comment,
                                 },
                             );
                         } else {
-                            report.insert(
-                                ttl,
-                                ProbeReportEntry::RouterReplyFound {
+                            // ICMP reply
+                            let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
+                            // NAT check - does the dst of the connection key == this src_ip?
+                            if src_ip == self.connection_key.remote_ip {
+                                report.insert(
                                     ttl,
-                                    out_timestamp_ms,
-                                    rtt_ms,
-                                    src_ip,
-                                    comment,
-                                },
-                            );
+                                    ProbeReportEntry::NatReplyNoProbe {
+                                        ttl,
+                                        in_timestamp_ms,
+                                        src_ip,
+                                        comment,
+                                    },
+                                );
+                            } else {
+                                report.insert(
+                                    ttl,
+                                    ProbeReportEntry::RouterReplyNoProbe {
+                                        ttl,
+                                        in_timestamp_ms,
+                                        src_ip,
+                                        comment,
+                                    },
+                                );
+                            }
                         }
-                    }
-                } else {
-                    // missing reply - unfortunately common
-                    report.insert(
-                        ttl,
-                        ProbeReportEntry::NoReply {
-                            ttl,
-                            out_timestamp_ms,
-                            comment,
-                        },
-                    );
-                }
-            } else {
-                // sigh, duplicate code
-                if let Some(reply_set) = self.incoming_reply_timestamps.get(&ttl) {
-                    if reply_set.len() != 1 {
-                        comment.push_str(
-                            format!(
-                                " Weird: {} replies found; guessing first one.",
-                                reply_set.len()
-                            )
-                            .as_str(),
-                        );
-                    }
-                    // found a reply with out a probe (?) - can happen when pcap drops packets
-                    let reply = reply_set.iter().next().unwrap();
-                    // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
-                    let in_timestamp_ms = timeval_to_ms(reply.pcap_header.ts);
-                    if matches!(&reply.transport, Some(TransportHeader::Tcp(_tcp))) {
-                        report.insert(
-                            ttl,
-                            ProbeReportEntry::EndHostNoProbe {
-                                ttl,
-                                in_timestamp_ms,
-                                comment,
-                            },
-                        );
                     } else {
-                        // ICMP reply
-                        let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
-                        // NAT check - does the dst of the connection key == this src_ip?
-                        if src_ip == self.connection_key.remote_ip {
-                            report.insert(
-                                ttl,
-                                ProbeReportEntry::NatReplyNoProbe {
-                                    ttl,
-                                    in_timestamp_ms,
-                                    src_ip,
-                                    comment,
-                                },
-                            );
-                        } else {
-                            report.insert(
-                                ttl,
-                                ProbeReportEntry::RouterReplyNoProbe {
-                                    ttl,
-                                    in_timestamp_ms,
-                                    src_ip,
-                                    comment,
-                                },
-                            );
-                        }
+                        // missing both reply and probe - a bad day
+                        report.insert(ttl, ProbeReportEntry::NoOutgoing { ttl, comment });
                     }
-                } else {
-                    // missing both reply and probe - a bad day
-                    report.insert(ttl, ProbeReportEntry::NoOutgoing { ttl, comment });
                 }
             }
-        }
-        if clear {
-            self.clear_probe_data(true);
+            if clear {
+                self.clear_probe_data(true);
+            }
         }
         let probe_report = ProbeReport::new(report, probe_round, application_rtt);
         // one copy for us and one for the caller
@@ -1073,7 +1115,7 @@ impl Connection {
         if self.local_seq.is_some() && self.remote_ack >= self.local_seq {
             // are we idle now?
             self.clear_probe_data(false);
-            self.next_end_host_reply = Some(PROBE_MAX_TTL - 1);
+            self.probe_round = Some(ProbeRound::new(self.probe_report_summary.raw_reports.len()));
             tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock, false).unwrap();
         } else {
             self.send_probes_on_idle = true; // queue up that we want to send the probes
@@ -1089,9 +1131,7 @@ impl Connection {
 
     fn clear_probe_data(&mut self, flush_local_data: bool) {
         // clear any old probe data
-        self.incoming_reply_timestamps.clear();
-        self.outgoing_probe_timestamps.clear();
-        self.next_end_host_reply = Some(PROBE_MAX_TTL - 1);
+        self.probe_round = None;
         if flush_local_data {
             self.local_data = None;
         }
@@ -1157,7 +1197,7 @@ impl Connection {
     }
 
     fn in_active_probe_session(&self) -> bool {
-        !self.incoming_reply_timestamps.is_empty() || !self.outgoing_probe_timestamps.is_empty()
+        self.probe_round.is_some()
     }
 
     // Write Connection details and stats out to a logfile when it goes away
@@ -1407,12 +1447,13 @@ pub mod test {
         let _remote_syn = connection.remote_syn.as_ref().unwrap();
 
         // verify we captured each of the outgoing probes
+        let probe_round = connection.probe_round.as_ref().unwrap();
         assert_eq!(
-            connection.outgoing_probe_timestamps.len(),
+            probe_round.outgoing_probe_timestamps.len(),
             16 as usize // NOTE: this should be the constant not PROBE_MAX_TTL because
                         // the ground truth is the packet capture, not the current const value
         );
-        for probes in connection.outgoing_probe_timestamps.values() {
+        for probes in probe_round.outgoing_probe_timestamps.values() {
             assert_eq!(probes.len(), 1);
         }
     }
@@ -1485,13 +1526,14 @@ pub mod test {
         let _remote_syn = connection.remote_syn.as_ref().unwrap();
 
         // verify we captured each of the outgoing probes
+        let probe_round = connection.probe_round.as_ref().unwrap();
         assert_eq!(
-            connection.outgoing_probe_timestamps.len(),
+            probe_round.outgoing_probe_timestamps.len(),
             16 as usize // this is hard coded by the pcap
         );
         // verify we captured each of the incoming replies - note that we only got six replies!
-        assert_eq!(connection.incoming_reply_timestamps.len(), 6);
-        for probes in connection.outgoing_probe_timestamps.values() {
+        assert_eq!(probe_round.incoming_reply_timestamps.len(), 6);
+        for probes in probe_round.outgoing_probe_timestamps.values() {
             assert_eq!(probes.len(), 1);
         }
 
@@ -1530,10 +1572,11 @@ pub mod test {
 
         assert_eq!(connection_tracker.connections.len(), 1);
         let connection = connection_tracker.connections.values().next().unwrap();
-        assert_eq!(connection.outgoing_probe_timestamps.len(), 1);
-        assert_eq!(connection.incoming_reply_timestamps.len(), 1);
-        let probe_id = connection.outgoing_probe_timestamps.keys().next().unwrap();
-        let reply_id = connection.incoming_reply_timestamps.keys().next().unwrap();
+        let probe_round = connection.probe_round.as_ref().unwrap();
+        assert_eq!(probe_round.outgoing_probe_timestamps.len(), 1);
+        assert_eq!(probe_round.incoming_reply_timestamps.len(), 1);
+        let probe_id = probe_round.outgoing_probe_timestamps.keys().next().unwrap();
+        let reply_id = probe_round.incoming_reply_timestamps.keys().next().unwrap();
         // probe and reply match!
         assert_eq!(*probe_id, 7);
         assert_eq!(*reply_id, 7);
