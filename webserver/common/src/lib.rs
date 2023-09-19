@@ -456,3 +456,4 @@ impl Display for ProbeReportSummary {
 }
 
 pub mod analysis_messages;
+pub mod evicting_hash_map;
