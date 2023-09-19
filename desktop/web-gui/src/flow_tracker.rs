@@ -131,7 +131,7 @@ impl FlowTracker {
         let thead = html!(
             "thead",
             {},
-            html!("tr", {}, th_flow_key, th_applications, th_lifetime, th_idle).unwrap()
+            html!("tr", {}, th_applications, th_lifetime, th_idle, th_flow_key).unwrap()
         )
         .unwrap();
         let table = html!(
@@ -294,7 +294,7 @@ pub fn handle_dumpflows_reply(
         active_elm.set_inner_html(format!("{} s", activetime.num_seconds()).as_str());
         let row = html!("tr", 
                     {"name" => flow_row_key.to_string().as_str()
-                }, flow_elm, app_elm, life_elm, active_elm)
+                }, app_elm, life_elm, active_elm, flow_elm)
         .unwrap()
         .dyn_into::<HtmlElement>()
         .unwrap();
