@@ -1,6 +1,6 @@
 use std::{collections::HashMap, vec};
 
-use common::{ProbeReport, ProbeReportEntry, ProbeReportSummary};
+use common::{ProbeReportEntry, ProbeReportSummary, ProbeRoundReport};
 use itertools::Itertools;
 use sorted_vec::SortedVec;
 use wasm_bindgen::JsValue;
@@ -87,7 +87,7 @@ impl Graph {
      * data may not occur at the same time
      */
 
-    pub fn add_data_probe_report(&mut self, probe_report: ProbeReport, probe_round: u32) {
+    pub fn add_data_probe_report(&mut self, probe_report: ProbeRoundReport, probe_round: u32) {
         for (_ttl, probe) in &probe_report.probes {
             // extract a name for the hop (e.g. "TTL=x" or "NAT") plus rtt, etc. info
             if let Some((key, rtt, ts)) = match probe {
