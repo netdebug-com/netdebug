@@ -242,7 +242,7 @@ fn handle_insights(
 }
 
 fn handle_probe_report(
-    report: common::ProbeReport,
+    report: common::ProbeRoundReport,
     probe_round: u32,
     graph: &mut Graph,
 ) -> Result<(), JsValue> {

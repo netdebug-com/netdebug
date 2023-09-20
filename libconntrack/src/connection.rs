@@ -3,10 +3,10 @@ use std::{
     net::{IpAddr, SocketAddr},
 };
 
-use chrono::{DateTime, Utc, Duration};
+use chrono::{DateTime, Duration, Utc};
 use common::{
-    analysis_messages::AnalysisInsights, evicting_hash_map::EvictingHashMap, ProbeId, ProbeReport,
-    ProbeReportEntry, ProbeReportSummary, PROBE_MAX_TTL,
+    analysis_messages::AnalysisInsights, evicting_hash_map::EvictingHashMap, ProbeId,
+    ProbeReportEntry, ProbeReportSummary, ProbeRoundReport, PROBE_MAX_TTL,
 };
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{DnsTrackerEntry, IpProtocol};
@@ -139,7 +139,7 @@ pub enum ConnectionTrackerMsg {
         clear_state: bool,
         probe_round: u32,
         application_rtt: Option<f64>,
-        tx: tokio::sync::mpsc::Sender<ProbeReport>,
+        tx: tokio::sync::mpsc::Sender<ProbeRoundReport>,
     },
     ProbeOnIdle {
         // launch a set of inband probes when the connection next goes idle
@@ -328,7 +328,7 @@ where
         probe_round: u32,
         application_rtt: Option<f64>,
         clear_state: bool,
-        tx: tokio::sync::mpsc::Sender<ProbeReport>,
+        tx: tokio::sync::mpsc::Sender<ProbeRoundReport>,
     ) {
         if let Some(connection) = self.connections.get_mut(&key) {
             let report =
@@ -410,7 +410,7 @@ enum ConnectionAction {
 
 /**
  * TODO: move Probe stuff to a separate file.
- * 
+ *
  * There are 'ProbeRounds' which is the state for an active set ("round") of probes
  * while it's in process.  A "ProbeReport" which is a finished set of probes where
  * we match the incoming replies to the outgoing original packets ("probes").  There
@@ -946,7 +946,7 @@ impl Connection {
         probe_round: u32,
         application_rtt: Option<f64>,
         clear: bool,
-    ) -> ProbeReport {
+    ) -> ProbeRoundReport {
         let mut report = HashMap::new();
         if let Some(probe_round) = self.probe_round.as_mut() {
             if probe_round.outgoing_probe_timestamps.len() > PROBE_MAX_TTL as usize {
@@ -1101,7 +1101,7 @@ impl Connection {
                 self.clear_probe_data(true);
             }
         }
-        let probe_report = ProbeReport::new(report, probe_round, application_rtt);
+        let probe_report = ProbeRoundReport::new(report, probe_round, application_rtt);
         // one copy for us and one for the caller
         // the one for us will get logged to disk; the caller's will get sent to the remote client
         self.probe_report_summary.update(probe_report.clone());
@@ -1263,9 +1263,8 @@ impl Connection {
         dns_cache: &HashMap<IpAddr, DnsTrackerEntry>,
         tcp_cache: &HashMap<ConnectionKey, ProcessTrackerEntry>,
         udp_cache: &HashMap<(IpAddr, u16), ProcessTrackerEntry>,
-        probe_timeout : Option<Duration>,
+        probe_timeout: Option<Duration>,
     ) -> libconntrack_wasm::ConnectionMeasurements {
-
         // if there's an active probe round going, finish it/generate the report if it's been longer
         // then probe_timeout
         if let Some(probe_round) = self.probe_round.as_ref() {

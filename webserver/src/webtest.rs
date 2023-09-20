@@ -18,7 +18,7 @@
  * More tests to be added with time
  */
 use chrono::Utc;
-use common::{analysis_messages::AnalysisInsights, Message, ProbeReport};
+use common::{analysis_messages::AnalysisInsights, Message, ProbeRoundReport};
 use std::{net::SocketAddr, time::Duration};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use warp::ws::{self, WebSocket};
@@ -259,7 +259,7 @@ async fn get_probe_report(
     probe_round: u32,
     application_rtt: f64,
     clear_state: bool,
-) -> Option<ProbeReport> {
+) -> Option<ProbeRoundReport> {
     if let Some(key) = &connection_key {
         let key = key.clone();
         // create an async channel for the connection tracker to send us back the report on

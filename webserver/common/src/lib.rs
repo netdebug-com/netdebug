@@ -44,7 +44,7 @@ pub enum Message {
         max_rounds: u32,
     },
     ProbeReport {
-        report: ProbeReport,
+        report: ProbeRoundReport,
         probe_round: u32,
     },
     SetUserAnnotation {
@@ -75,15 +75,15 @@ pub fn get_git_hash_version() -> String {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ProbeReport {
+pub struct ProbeRoundReport {
     pub probes: HashMap<ProbeId, ProbeReportEntry>,
     pub probe_round: u32,
     pub application_rtt: Option<f64>,
 }
 
-impl Eq for ProbeReport {}
+impl Eq for ProbeRoundReport {}
 
-impl Display for ProbeReport {
+impl Display for ProbeRoundReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(app_rtt) = self.application_rtt {
             writeln!(f, "Probe report: application delay {}", app_rtt,)?;
@@ -253,27 +253,27 @@ impl ProbeReportEntry {
     fn get_rtt(&self) -> Option<f64> {
         use ProbeReportEntry::*;
         match self {
-            RouterReplyFound { rtt_ms, ..} |
-            NatReplyFound { rtt_ms, ..} |
-            EndHostReplyFound { rtt_ms, ..} => Some(*rtt_ms),
-            NoReply { ..} |
-            NoOutgoing { ..} |
-            RouterReplyNoProbe { ..} |
-            NatReplyNoProbe { ..} |
-            EndHostNoProbe { ..} => None,
+            RouterReplyFound { rtt_ms, .. }
+            | NatReplyFound { rtt_ms, .. }
+            | EndHostReplyFound { rtt_ms, .. } => Some(*rtt_ms),
+            NoReply { .. }
+            | NoOutgoing { .. }
+            | RouterReplyNoProbe { .. }
+            | NatReplyNoProbe { .. }
+            | EndHostNoProbe { .. } => None,
         }
     }
 }
 
 impl Eq for ProbeReportEntry {}
 
-impl ProbeReport {
+impl ProbeRoundReport {
     pub fn new(
         report: HashMap<ProbeId, ProbeReportEntry>,
         probe_round: u32,
         application_rtt: Option<f64>,
-    ) -> ProbeReport {
-        ProbeReport {
+    ) -> ProbeRoundReport {
+        ProbeRoundReport {
             probes: report,
             probe_round,
             application_rtt,
@@ -342,7 +342,7 @@ impl Display for ProbeReportSummaryNode {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProbeReportSummary {
-    pub raw_reports: Vec<ProbeReport>,
+    pub raw_reports: Vec<ProbeRoundReport>,
     pub summary: HashMap<u8, Vec<ProbeReportSummaryNode>>,
 }
 
@@ -356,11 +356,11 @@ impl ProbeReportSummary {
 
     /**
      * For each ttl, we can have multiple events (e.g., sometimes a packet is dropped, sometime not)
-     * 
+     *
      * Take this new probe report, and aggregate the information into the ProbeReportSummary
      *
      */
-    pub fn update(&mut self, report: ProbeReport) {
+    pub fn update(&mut self, report: ProbeRoundReport) {
         for (ttl, probe) in &report.probes {
             let nodes = self.summary.entry(*ttl).or_insert(Vec::new());
             let mut inserted = false;
@@ -465,7 +465,7 @@ impl ProbeReportSummary {
                         vec![probe.get_comment()]
                     } else {
                         Vec::new()
-                    }
+                    },
                 };
                 // get nodes again from the summary is it went into the above for loop's into_iter()
                 let nodes = self.summary.entry(*ttl).or_insert(Vec::new());
