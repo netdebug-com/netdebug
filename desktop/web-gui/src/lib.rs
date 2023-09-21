@@ -48,7 +48,7 @@ fn init_tabs(ws: WebSocket) -> Result<Tabs, JsValue> {
         .map(|t| Tab {
             name: t.to_string(),
             text: t.to_string(),
-            on_activate: Some(move |tab, _ws| {
+            on_activate: Some(move |tab, _tabs, _ws| {
                 let d = web_sys::window()
                     .expect("window")
                     .document()

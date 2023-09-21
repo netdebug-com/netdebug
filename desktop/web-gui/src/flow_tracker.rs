@@ -93,10 +93,10 @@ impl FlowTracker {
         Tab {
             name: FLOW_TRACKER_TAB.to_string(),
             text: "Flow Tracker".to_string(),
-            on_activate: Some(|tab, ws| {
-                FlowTracker::on_activate(tab, ws);
+            on_activate: Some(|tab, tabs, ws| {
+                FlowTracker::on_activate(tab, tabs, ws);
             }),
-            on_deactivate: Some(|tab, ws| {
+            on_deactivate: Some(|tab, _tabs, ws| {
                 FlowTracker::on_deactivate(tab, ws);
             }),
             data: Some(Box::new(FlowTracker {
@@ -109,9 +109,10 @@ impl FlowTracker {
     /**
      * Setup a periodic timer to send out DumpFlow messages and split the
      * tabcontent div in half for the flows view (left) and the detailed view (right)
+     * and add some buttons on the top (Pause/Refresh, Group By...)
      */
 
-    pub fn on_activate(tab: &mut Tab, ws: WebSocket) {
+    pub fn on_activate(tab: &mut Tab, tabs: Tabs, ws: WebSocket) {
         let d = web_sys::window()
             .expect("window")
             .document()
@@ -119,8 +120,9 @@ impl FlowTracker {
         let content = d
             .get_element_by_id(crate::tabs::TAB_CONTENT)
             .expect("tab content div");
-        content.set_inner_html("");
+        content.set_inner_html(""); // clear previous tab
 
+        /* setup table for left side */
         let th_flow_key = html!("th").unwrap();
         th_flow_key.set_inner_html("Flow Key");
         let th_applications = html!("th").unwrap();
@@ -144,37 +146,25 @@ impl FlowTracker {
         .expect("table");
         let table_div = html!("div", {"class" => "flow_table"}, table).unwrap();
         content.append_child(&table_div).expect("content.append");
+
         // create the div for the detailed flow/right view
         let detailed_div =
             html!("div", { "id"=> FLOW_TRACKER_DETAILS, "class" => "flow_details"}).unwrap();
         content
             .append_child(&detailed_div)
             .expect("content2.append");
+
         // send one message immediately to get us started
         let msg = GuiToServerMessages::DumpFlows();
         if let Err(e) = ws.send_with_str(&serde_json::to_string(&msg).unwrap()) {
             console_log!("Error talking to server: {:?}", e);
         }
-        // and start a timer closure to do every 500ms for periodic updates
-        let periodic = Closure::<dyn FnMut(_)>::new(move |_e: MessageEvent| {
-            let msg = GuiToServerMessages::DumpFlows();
-            if let Err(e) = ws.send_with_str(&serde_json::to_string(&msg).unwrap()) {
-                console_log!("Error talking to server: {:?}", e);
-            }
-        });
         let flow_tracker = tab
             .get_tab_data::<FlowTracker>()
             .expect("no flowtracker data!?");
-        let window = web_sys::window().expect("window");
-        match window.set_interval_with_callback_and_timeout_and_arguments_0(
-            periodic.as_ref().unchecked_ref(),
-            500,
-        ) {
-            // save the timeout id so we can cancel it later
-            Ok(timeout) => flow_tracker.timeout_id = Some(timeout),
-            Err(e) => console_log!("Failed to set_timeout() for Flow Tracker!?: {:?}", e),
-        }
-        periodic.forget();
+        // and start a timer closure to do every 500ms for periodic updates
+        setup_periodic_callback(flow_tracker, ws.clone());
+        setup_buttons(flow_tracker, tabs, &content, ws.clone());
     }
 
     /**
@@ -191,6 +181,81 @@ impl FlowTracker {
             flow_tracker.timeout_id = None;
         }
     }
+}
+
+/**
+ * As the name says, setup the callback
+ *
+ * TODO: store the timeout period in the `struct FlowTracker` for variable timeouts
+ */
+
+fn setup_periodic_callback(flow_tracker: &mut FlowTracker, ws: WebSocket) {
+    let periodic = Closure::<dyn FnMut(_)>::new(move |_e: MessageEvent| {
+        let msg = GuiToServerMessages::DumpFlows();
+        if let Err(e) = ws.send_with_str(&serde_json::to_string(&msg).unwrap()) {
+            console_log!("Error talking to server: {:?}", e);
+        }
+    });
+
+    let window = web_sys::window().expect("window");
+    match window.set_interval_with_callback_and_timeout_and_arguments_0(
+        periodic.as_ref().unchecked_ref(),
+        500,
+    ) {
+        // save the timeout id so we can cancel it later
+        Ok(timeout) => flow_tracker.timeout_id = Some(timeout),
+        Err(e) => console_log!("Failed to set_timeout() for Flow Tracker!?: {:?}", e),
+    }
+    periodic.forget();
+}
+
+/**
+ * Pre-Append a DIV to the content DIV (so it shows up first) with a list of buttons for the page
+ * This function assumes it's being called after the intial setup_periodic()
+ */
+const PAUSE_BUTTON_PAUSE_MSG: &str = "Pause Refresh";
+const PAUSE_BUTTON_RESTART_MSG: &str = "Restart Refresh";
+fn setup_buttons(flow_tracker: &mut FlowTracker, tabs: Tabs, content: &Element, ws: WebSocket) {
+    // Pause/Restart button - pause or restart the periodic refresh of the page
+    let pause_button = html!("button").unwrap().dyn_into::<HtmlElement>().unwrap();
+    if flow_tracker.timeout_id.is_some() {
+        pause_button.set_inner_html(PAUSE_BUTTON_PAUSE_MSG);
+    } else {
+        pause_button.set_inner_html(PAUSE_BUTTON_RESTART_MSG);
+    }
+
+    let on_click = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
+        // all of these clone()'s are so that we can call this function many times
+        // instead of just once, e.g., so it's a FnMut rather than a FnOnce
+        let window = web_sys::window().expect("window");
+        let mut tabs_lock = tabs.lock().unwrap();
+        let flow_tracker = tabs_lock
+            .get_active_tab_data::<FlowTracker>()
+            .expect("Not a flowtracker!?");
+        match flow_tracker.timeout_id {
+            Some(timeout_id) => {
+                // there is an active timer; cancel it, and rename the pause button
+                flow_tracker.timeout_id = None;
+                window.clear_interval_with_handle(timeout_id);
+                let button = e.target().unwrap().dyn_into::<Element>().unwrap();
+                button.set_inner_html(PAUSE_BUTTON_RESTART_MSG);
+            }
+            None => {
+                // resetup the periodic callback
+                setup_periodic_callback(flow_tracker, ws.clone());
+                let button = e.target().unwrap().dyn_into::<Element>().unwrap();
+                button.set_inner_html(PAUSE_BUTTON_PAUSE_MSG);
+            }
+        }
+    });
+    pause_button.set_onclick(Some(on_click.as_ref().unchecked_ref()));
+    on_click.forget();
+    let buttons_div = html!("div", {"style" => "width:100%"}).unwrap();
+    buttons_div.append_child(&pause_button).unwrap();
+    // put it 'afterbegin' so it shows up first
+    content
+        .insert_adjacent_element("afterbegin", &buttons_div)
+        .unwrap();
 }
 
 pub fn handle_dumpflows_reply(
