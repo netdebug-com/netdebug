@@ -14,7 +14,7 @@ use libconntrack_wasm::{DnsTrackerEntry, IpProtocol};
 use log::{debug, info, warn};
 use netstat2::ProtocolSocketInfo;
 use pb_storage_service::storage_service_client::StorageServiceClient;
-use tokio::sync::mpsc::UnboundedSender; // Use log crate when building application
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender}; // Use log crate when building application
 
 #[cfg(test)]
 use std::{println as debug, println as info, println as warn}; // Workaround to use prinltn! for logs.
@@ -164,6 +164,10 @@ pub enum ConnectionTrackerMsg {
     GetConnections {
         tx: tokio::sync::mpsc::UnboundedSender<Vec<Connection>>,
     },
+    SetConnectionRemoteHostnameDns {
+        key: ConnectionKey,
+        remote_hostname: Option<String>, // will be None if lookup fails
+    },
 }
 
 /***
@@ -185,6 +189,8 @@ where
     #[allow(dead_code)] // TODO:
     storage_service_client: Option<StorageServiceClient<tonic::transport::Channel>>,
     dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
+    tx: UnboundedSender<ConnectionTrackerMsg>, // so we can tell others how to send msgs to us
+    rx: UnboundedReceiver<ConnectionTrackerMsg>, // to read messages sent to us
 }
 impl<'a, R> ConnectionTracker<'a, R>
 where
@@ -197,6 +203,7 @@ where
         local_addrs: HashSet<IpAddr>,
         raw_sock: R,
     ) -> ConnectionTracker<'a, R> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         ConnectionTracker {
             connections: EvictingHashMap::new(max_connections_per_tracker, |_, _| {}),
             local_addrs,
@@ -204,6 +211,8 @@ where
             log_dir,
             storage_service_client,
             dns_tx: None,
+            tx,
+            rx,
         }
     }
 
@@ -211,11 +220,8 @@ where
         self.dns_tx = Some(dns_tx);
     }
 
-    pub async fn rx_loop(
-        &mut self,
-        mut rx: tokio::sync::mpsc::UnboundedReceiver<ConnectionTrackerMsg>,
-    ) {
-        while let Some(msg) = rx.recv().await {
+    pub async fn rx_loop(&mut self) {
+        while let Some(msg) = self.rx.recv().await {
             use ConnectionTrackerMsg::*;
             match msg {
                 Pkt(pkt) => self.add(pkt),
@@ -252,18 +258,26 @@ where
                 GetConnections { tx } => {
                     self.handle_get_connections(tx);
                 }
+                SetConnectionRemoteHostnameDns {
+                    key,
+                    remote_hostname,
+                } => {
+                    self.set_connection_remote_hostname_dns(key, remote_hostname);
+                }
             }
         }
         info!("ConnectionTracker exiting rx_loop()");
     }
 
     pub fn add(&mut self, packet: OwnedParsedPacket) {
+        let mut needs_dns_lookup = false;
         if let Some((key, src_is_local)) = packet.to_connection_key(&self.local_addrs) {
             let connection = match self.connections.get_mut(&key) {
                 Some(connection) => connection,
                 None => {
                     // else create the state and look it up again
                     self.new_connection(key.clone());
+                    needs_dns_lookup = true;
                     self.connections.get_mut(&key).unwrap()
                 }
             };
@@ -271,7 +285,21 @@ where
                 connection.update(packet, &mut self.raw_sock, &key, src_is_local, &self.dns_tx);
             use ConnectionAction::*;
             match action {
-                Noop => (),
+                Noop => {
+                    if needs_dns_lookup {
+                        // only new connections that we don't immediately tear down need DNS lookups
+                        if let Some(dns_tx) = self.dns_tx.as_mut() {
+                            // ask the DNS tracker to tell us the remote DNS name
+                            if let Err(e) = dns_tx.send(DnsTrackerMessage::Lookup {
+                                ip: key.remote_ip,
+                                key: key.clone(),
+                                tx: self.tx.clone(),
+                            }) {
+                                warn!("Failed to send a Lookup message to the DNS Tracker: {}", e);
+                            }
+                        }
+                    }
+                }
                 Close => {
                     info!("Deleting from connection tracker: {}", key);
                     self.connections.remove(&key);
@@ -310,10 +338,11 @@ where
             associated_apps: None,
             start_tracking_time: now,
             last_packet_time: now,
+            remote_hostname: None,
         };
         info!("Tracking new connection: {}", &key);
 
-        self.connections.insert(key, connection);
+        self.connections.insert(key.clone(), connection);
     }
 
     /**
@@ -400,6 +429,34 @@ where
             );
         }
     }
+
+    fn set_connection_remote_hostname_dns(
+        &mut self,
+        key: ConnectionKey,
+        remote_hostname: Option<String>,
+    ) {
+        if let Some(connection) = self.connections.get_mut(&key) {
+            connection.remote_hostname = remote_hostname;
+        } else {
+            warn!(
+                "Tried to lookup unknown key {} in the conneciton map trying to set DNS name {:?}",
+                key, remote_hostname
+            );
+        }
+    }
+
+    pub fn set_tx_rx(
+        &mut self,
+        tx: UnboundedSender<ConnectionTrackerMsg>,
+        rx: UnboundedReceiver<ConnectionTrackerMsg>,
+    ) {
+        self.tx = tx;
+        self.rx = rx;
+    }
+
+    pub fn get_tx(&self) -> UnboundedSender<ConnectionTrackerMsg> {
+        self.tx.clone()
+    }
 }
 
 // after a Connection::update(), does the connection tracker need to change its state?
@@ -468,6 +525,7 @@ pub struct Connection {
     pub log_dir: String, // need to cache it here as we need it during Destructor; fugly
     pub user_agent: Option<String>, // when created via a web request, store the user-agent header
     pub associated_apps: Option<HashMap<u32, Option<String>>>, // PID --> ProcessName, if we know it
+    pub remote_hostname: Option<String>, // the FQDN of the remote host, if we know it
 }
 impl Connection {
     fn update<R>(
@@ -1283,11 +1341,28 @@ impl Connection {
         } else {
             None
         };
-        let remote_hostname = if let Some(entry) = dns_cache.get(&self.connection_key.remote_ip) {
-            Some(entry.hostname.clone())
-        } else {
-            None
-        };
+        let mut remote_hostname = self.remote_hostname.clone();
+        let remote_hostname_dns_cache =
+            if let Some(entry) = dns_cache.get(&self.connection_key.remote_ip) {
+                Some(entry.hostname.clone())
+            } else {
+                None
+            };
+        // sanity check the two sources of remote_hostname
+        match (&remote_hostname, &remote_hostname_dns_cache) {
+            (None, None) | (Some(_), Some(_)) => (), // they're in sync
+            (None, Some(_)) | (Some(_), None) => {
+                info!(
+                    "DNS cache and stored hostname out of sync: stored {:?} cached {:?}",
+                    &remote_hostname, &remote_hostname_dns_cache
+                );
+                // use which ever one we actually have
+                if remote_hostname.is_none() {
+                    remote_hostname = remote_hostname_dns_cache;
+                }
+            }
+        }
+
         use IpProtocol::*;
         let ip_proto = IpProtocol::from_wire(self.connection_key.ip_proto);
         let inaddr_any = IpAddr::from([0, 0, 0, 0]);
@@ -1362,6 +1437,7 @@ pub mod test {
 
     use super::*;
 
+    use crate::dns_tracker::DnsTracker;
     use crate::in_band_probe::test::test_tcp_packet_ports;
     use crate::owned_packet::OwnedParsedPacket;
     use crate::pcap::MockRawSocketWriter;
@@ -2036,5 +2112,69 @@ pub mod test {
         );
         connection_tracker.add(remote_rst);
         assert_eq!(connection_tracker.connections.len(), 0);
+    }
+
+    /**
+     * Make sure on new connection, we properly query the DNS tracker to store the hostname.
+     * This is a 'higher' level test as it doesn't use (m)any of the internals of ConnectionTracker or
+     * DnsTracker - just their public messaging interfaces
+     */
+
+    #[tokio::test]
+    async fn test_dns_tracker_new_connection_lookup() {
+        let mut dns_tracker = DnsTracker::new(20);
+        let local_syn = OwnedParsedPacket::try_from_fake_time(TEST_1_LOCAL_SYN.to_vec()).unwrap();
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.37").unwrap()]);
+        let log_dir = ".".to_string();
+        let storage_service_client = None;
+        let max_connections_per_tracker = 32;
+        let raw_sock = MockRawSocketWriter::new();
+        let mut connection_tracker = ConnectionTracker::new(
+            log_dir,
+            storage_service_client,
+            max_connections_per_tracker,
+            local_addrs,
+            raw_sock,
+        );
+        let remote_ip = IpAddr::from_str("52.53.155.175").unwrap();
+        let test_hostname = "test-hostname.example.com".to_string();
+        // populate the dns_tracker with the DNS info
+        dns_tracker.reverse_map.insert(
+            remote_ip.clone(),
+            DnsTrackerEntry {
+                hostname: test_hostname.clone(),
+                created: Utc::now(),
+                rtt: None,
+                ttl: None,
+            },
+        );
+        // launch the dns_tracker in a task
+        let (dns_tx, dns_rx) = tokio::sync::mpsc::unbounded_channel();
+        connection_tracker.set_dns_tracker(dns_tx);
+        tokio::spawn(async move {
+            dns_tracker.do_async_loop(dns_rx).await;
+        });
+        let conn_track_tx = connection_tracker.get_tx();
+        // launch the connection tracker in a task
+        tokio::spawn(async move {
+            connection_tracker.rx_loop().await;
+        });
+        // this call should trigger a call to the dns_tracker and a reply back to the connection tracker
+        conn_track_tx
+            .send(ConnectionTrackerMsg::Pkt(local_syn))
+            .unwrap();
+        // this will get us a list of the active connections
+        // there is some possibility for a race condition here as the message to the DnsTracker and back takes
+        // some time; sleep for now but... sigh... 100 ms is more than enough
+        tokio::time::sleep(Duration::milliseconds(100).to_std().unwrap()).await;
+        let (connections_tx, mut connections_rx) = tokio::sync::mpsc::unbounded_channel();
+        conn_track_tx
+            .send(ConnectionTrackerMsg::GetConnections { tx: connections_tx })
+            .unwrap();
+        // make sure there's one and make sure remote_host is populated as expected
+        let mut connections = connections_rx.recv().await.unwrap();
+        assert_eq!(connections.len(), 1);
+        let first_connection = connections.pop().unwrap();
+        assert_eq!(first_connection.remote_hostname, Some(test_hostname));
     }
 }

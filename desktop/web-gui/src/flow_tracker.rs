@@ -436,6 +436,15 @@ fn draw_details(measurements: &ConnectionMeasurements) {
     let document = window().expect("window").document().expect("document");
     let details_view = document.get_element_by_id(FLOW_TRACKER_DETAILS).unwrap();
     details_view.set_inner_html(""); // clear the DIV
+    // draw the hostname if we see it
+    let h2 = html!("h2").unwrap();
+    if let Some(hostname) = &measurements.remote_hostname {
+        h2.set_inner_html(&hostname);
+    } else {
+        h2.set_inner_html(format!("IP {}", measurements.remote_ip).as_str());
+
+    }
+    details_view.append_child(&h2).unwrap();
     if measurements.probe_report_summary.summary.is_empty() {
         // default to printing the json if we don't know anything prettier
         let json = serde_json::to_string_pretty(measurements).unwrap();

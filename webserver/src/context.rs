@@ -63,7 +63,7 @@ impl WebServerContext {
             pcap_device,
             local_tcp_listen_port: args.listen_port,
             local_ips: local_ips,
-            connection_tracker: tx,
+            connection_tracker: tx.clone(),
             send_idle_probes: args.send_idle_probes,
             max_connections_per_tracker: args.max_connections_per_tracker,
         };
@@ -99,7 +99,8 @@ impl WebServerContext {
                     local_addrs,
                     raw_sock,
                 );
-                let _ret: () = connection_tracker.rx_loop(rx).await;
+                connection_tracker.set_tx_rx(tx, rx);
+                let _ret: () = connection_tracker.rx_loop().await;
             });
         }
 
