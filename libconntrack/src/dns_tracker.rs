@@ -13,7 +13,7 @@ use tokio::{
 use chrono::{Duration, Utc};
 use libconntrack_wasm::DnsTrackerEntry;
 
-use crate::connection::ConnectionKey;
+use crate::connection::{ConnectionKey, ConnectionTrackerMsg};
 use dns_parser::{self, QueryType};
 
 pub const UDP_DNS_PORT: u16 = 53;
@@ -49,6 +49,11 @@ pub enum DnsTrackerMessage {
         // used to make all of the local IPs show up as 'localhost'
         ip: IpAddr,
         hostname: String,
+    },
+    Lookup {
+        ip: IpAddr,
+        key: ConnectionKey,
+        tx: UnboundedSender<ConnectionTrackerMsg>,
     },
     LookupBatch {
         // Lookup this list of IP addresses
@@ -108,22 +113,22 @@ impl<'a> DnsTracker<'a> {
 
     pub async fn do_async_loop(&mut self, mut rx: UnboundedReceiver<DnsTrackerMessage>) {
         while let Some(msg) = rx.recv().await {
+            use DnsTrackerMessage::*;
             match msg {
-                DnsTrackerMessage::NewEntry {
+                NewEntry {
                     data,
                     timestamp,
                     key,
                     src_is_local,
                 } => self.parse_dns(key, timestamp, data, src_is_local).await,
-                DnsTrackerMessage::DumpReverseMap { tx } => self.dump_reverse_map(tx),
-                DnsTrackerMessage::CacheForever { ip, hostname } => {
-                    self.cache_forever(ip, hostname)
-                }
-                DnsTrackerMessage::LookupBatch {
+                DumpReverseMap { tx } => self.dump_reverse_map(tx),
+                CacheForever { ip, hostname } => self.cache_forever(ip, hostname),
+                LookupBatch {
                     addrs,
                     tx,
                     use_expired,
                 } => self.lookup_batch(addrs, tx, use_expired),
+                Lookup { ip, key, tx } => self.lookup_for_connection_tracker(ip, key, tx),
             }
         }
     }
@@ -395,6 +400,35 @@ impl<'a> DnsTracker<'a> {
         if let Err(e) = tx.send(answer) {
             warn!(
                 "Failed to send DnsTracker::lookup_batch answer back to caller: {}",
+                e
+            );
+        }
+    }
+
+    /**
+     * This is used specifically for the ConnectionTracker so we can record DNS names and not forget them
+     * for the lifetime of the connection
+     */
+
+    fn lookup_for_connection_tracker(
+        &self,
+        ip: IpAddr,
+        key: ConnectionKey,
+        tx: UnboundedSender<ConnectionTrackerMsg>,
+    ) {
+        let remote_hostname = if let Some(entry) = self.reverse_map.get(&ip) {
+            Some(entry.hostname.clone())
+        } else {
+            None
+        };
+        debug!("Looking up IP: {} - found {:?}", ip, remote_hostname);
+        use ConnectionTrackerMsg::*;
+        if let Err(e) = tx.send(SetConnectionRemoteHostnameDns {
+            key,
+            remote_hostname,
+        }) {
+            warn!(
+                "Failed to send DnsLookup reply to connection manager: {}",
                 e
             );
         }

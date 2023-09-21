@@ -122,6 +122,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // launch the connection tracker as a tokio::task in the background
     let args_clone = args.clone();
+    let connection_manager_tx = tx.clone();
     let _connection_tracker_task = tokio::spawn(async move {
         let raw_sock =
             libconntrack::pcap::bind_writable_pcap_by_name(devices[0].name.clone()).unwrap();
@@ -133,9 +134,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             local_addrs,
             raw_sock,
         );
+        connection_tracker.set_tx_rx(connection_manager_tx, rx);
         connection_tracker.set_dns_tracker(dns_tx_clone);
         // loop forever tracking messages sent on the channel
-        connection_tracker.rx_loop(rx).await;
+        connection_tracker.rx_loop().await;
     });
 
     info!(
