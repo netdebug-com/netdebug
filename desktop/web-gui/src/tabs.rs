@@ -47,7 +47,7 @@ impl TabsContext {
      * This is a bit funky as we have two copies of the tabs structure,
      * one without the Arc() in self and one with the Arc() in tabs_clone.
      * This is because we need to pass a reference to ourselves into the closure
-     * which we can't do from self.
+     * which we can't do from self/without Arc<Mutex<TabsContext>>.
      */
 
     pub(crate) fn construct(&mut self, tabs_clone: Tabs, ws: WebSocket) -> Result<(), JsValue> {
@@ -57,13 +57,16 @@ impl TabsContext {
         })?;
         for tab_id in &self.tab_order {
             let tabs = tabs_clone.clone();
+            let tabs_clone2 = tabs_clone.clone();
             let tab_id_clone = tab_id.clone();
             let ws_clone = ws.clone();
             let on_click = Closure::<dyn FnMut(_)>::new(move |_e: MessageEvent| {
                 // all of these clone()'s are so that we can call this function many times
                 // instead of just once, e.g., so it's a FnMut rather than a FnOnce
                 let mut tabs_lock = tabs.lock().unwrap();
-                if let Err(e) = tabs_lock.activate(tab_id_clone.clone(), ws_clone.clone()) {
+                if let Err(e) =
+                    tabs_lock.activate(tab_id_clone.clone(), tabs_clone2.clone(), ws_clone.clone())
+                {
                     console_log!("Error: {:?}", e.as_string());
                 }
             });
@@ -97,7 +100,7 @@ impl TabsContext {
         // as there is no old tab to deactivate
         if let Some(activate_fn) = &active_tab.on_activate {
             console_log!("Activating tab {}", active_tab.name);
-            activate_fn(active_tab, ws);
+            activate_fn(active_tab, tabs_clone.clone(), ws);
         }
 
         let document = web_sys::window()
@@ -115,7 +118,7 @@ impl TabsContext {
     /**
      * Deactivate the old tab and activate the new one
      */
-    fn activate(&mut self, tab: TabId, ws: WebSocket) -> Result<(), JsValue> {
+    fn activate(&mut self, tab: TabId, tabs: Tabs, ws: WebSocket) -> Result<(), JsValue> {
         console_log!("Setting tab to {}", &tab);
         let document = web_sys::window()
             .expect("window")
@@ -123,7 +126,7 @@ impl TabsContext {
             .expect("document");
         if let Some(old_tab) = self.tabs.get_mut(&self.active_tab) {
             if let Some(deactivate_fn) = old_tab.on_deactivate {
-                deactivate_fn(old_tab, ws.clone());
+                deactivate_fn(old_tab, tabs.clone(), ws.clone());
             }
             let button = document
                 .get_element_by_id(&TabsContext::tab_id_to_dom_id(&old_tab.name))
@@ -134,13 +137,12 @@ impl TabsContext {
         }
         if let Some(new_tab) = self.tabs.get_mut(&tab) {
             if let Some(activate_fn) = new_tab.on_activate {
-                activate_fn(new_tab, ws);
+                activate_fn(new_tab, tabs, ws);
             }
             let button = document
                 .get_element_by_id(&TabsContext::tab_id_to_dom_id(&new_tab.name))
                 .unwrap();
             button.set_attribute("checked", "true")?;
-
         } else {
             return Err(JsValue::from_str(
                 format!("tab {} not in tabs list", tab).as_str(),
@@ -168,9 +170,9 @@ pub struct Tab {
     // the html text of the tab
     pub text: String,
     // closure to call on clicking the tab
-    pub on_activate: Option<fn(&mut Tab, WebSocket)>,
+    pub on_activate: Option<fn(&mut Tab, Tabs, WebSocket)>,
     // closure to call on clicking another tab
-    pub on_deactivate: Option<fn(&mut Tab, WebSocket)>,
+    pub on_deactivate: Option<fn(&mut Tab, Tabs, WebSocket)>,
     // place for private data for the tab
     pub data: Option<Box<dyn Any>>,
 }

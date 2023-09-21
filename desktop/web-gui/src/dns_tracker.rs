@@ -89,10 +89,10 @@ impl DnsTracker {
         Tab {
             name: DNS_TRACKER_TAB.to_string(),
             text: "DNS Tracker".to_string(),
-            on_activate: Some(|tab, ws| {
+            on_activate: Some(|tab, _tabs, ws| {
                 DnsTracker::on_activate(tab, ws);
             }),
-            on_deactivate: Some(|tab, ws| {
+            on_deactivate: Some(|tab, _tabs, ws| {
                 DnsTracker::on_deactivate(tab, ws);
             }),
             data: Some(Box::new(DnsTracker { timeout_id: None })),
