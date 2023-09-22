@@ -231,6 +231,9 @@ impl<'a> DnsTracker<'a> {
                 self.parse_resource_record(answer, &rtt, &created);
             }
         }
+        for additional in &dns_packet.additional {
+                self.parse_resource_record(additional, &rtt, &created);
+        }
     }
 
     fn parse_resource_record(
