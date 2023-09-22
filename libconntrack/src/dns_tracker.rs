@@ -31,6 +31,11 @@ pub struct DnsTracker<'a> {
     pub reverse_map: HashMap<IpAddr, DnsTrackerEntry>,
     pub reverse_map_recently_expired: EvictingHashMap<'a, IpAddr, DnsTrackerEntry>,
     pub pending: HashMap<DnsPendingKey, DnsPendingEntry>,
+    pub unparsed_pkt_count: usize,
+}
+
+pub struct DnsTrackerStats {
+    pub unparsed_pkt_count: usize,
 }
 
 pub enum DnsTrackerMessage {
@@ -64,6 +69,9 @@ pub enum DnsTrackerMessage {
         tx: UnboundedSender<HashMap<IpAddr, DnsTrackerEntry>>,
         use_expired: bool,
     },
+    GetStats {
+        tx: UnboundedSender<DnsTrackerStats>,
+    },
 }
 
 impl<'a> DnsTracker<'a> {
@@ -73,6 +81,7 @@ impl<'a> DnsTracker<'a> {
             reverse_map: HashMap::new(),
             pending: HashMap::new(),
             reverse_map_recently_expired: EvictingHashMap::new(expired_entries_capacity, |_, _| {}),
+            unparsed_pkt_count: 0,
         }
     }
 
@@ -129,6 +138,7 @@ impl<'a> DnsTracker<'a> {
                     use_expired,
                 } => self.lookup_batch(addrs, tx, use_expired),
                 Lookup { ip, key, tx } => self.lookup_for_connection_tracker(ip, key, tx),
+                GetStats { tx } => self.fetch_stats(tx),
             }
         }
     }
@@ -147,6 +157,7 @@ impl<'a> DnsTracker<'a> {
                     "Ignoring unparsed DNS message: {} :: {:?} : {} ",
                     e, data, key
                 );
+                self.unparsed_pkt_count += 1;
                 return; // nothing left to do
             }
         };
@@ -245,7 +256,8 @@ impl<'a> DnsTracker<'a> {
                     SOA(_) |
                     SRV(_) |
                     TXT(_) |
-                    Unknown(_) => None,
+                    HTTPS(_) |
+                    Unknown(_, _) => None,
                 };
                 if let Some(ip) = addr {
                     self.reverse_map.insert(
@@ -433,13 +445,26 @@ impl<'a> DnsTracker<'a> {
             );
         }
     }
+
+    fn fetch_stats(&self, tx: UnboundedSender<DnsTrackerStats>) {
+        if let Err(e) = tx.send(DnsTrackerStats {
+            unparsed_pkt_count: self.unparsed_pkt_count,
+        }) {
+            warn!("Sending error processing fetch_stats(): {}", e);
+        }
+    }
 }
 
 #[cfg(test)]
 mod test {
     use etherparse::TransportHeader;
 
-    use crate::{connection::test::test_dir, owned_packet::OwnedParsedPacket, utils};
+    use crate::{
+        connection::{test::test_dir, ConnectionTracker},
+        owned_packet::OwnedParsedPacket,
+        pcap::MockRawSocketWriter,
+        utils,
+    };
 
     use super::*;
     use std::{collections::HashSet, str::FromStr};
@@ -579,5 +604,83 @@ mod test {
             let google_addr = addr.unwrap();
             assert!(dns_tracker.reverse_map.contains_key(&google_addr.ip()));
         }
+    }
+
+    /**
+     * This is a list of IPs that we've manually found to be in the following
+     * pcap of DNS requests/replies - let's make sure we can resolve all of them
+     */
+
+    #[tokio::test]
+    async fn verify_lost_dns() {
+        use std::{
+            fs::File,
+            io::{BufRead, BufReader},
+        };
+        use tokio::sync::mpsc;
+        let (dns_tx, _) = DnsTracker::spawn(100).await;
+        let local_addrs =
+            HashSet::from([IpAddr::from_str("2600:1700:5b20:4e10:adc4:bd8f:d640:2d48").unwrap()]);
+        let log_dir = ".".to_string();
+        let storage_service_client = None;
+        let max_connections_per_tracker = 32;
+        let raw_sock = MockRawSocketWriter::new();
+        let mut connection_tracker = ConnectionTracker::new(
+            log_dir,
+            storage_service_client,
+            max_connections_per_tracker,
+            local_addrs,
+            raw_sock,
+        );
+        connection_tracker.set_dns_tracker(dns_tx.clone());
+        dns_tx
+            .send(DnsTrackerMessage::CacheForever {
+                ip: IpAddr::from_str("192.168.1.103").unwrap(),
+                hostname: "localhost".to_string(),
+            })
+            .unwrap();
+
+        // dump all the packets from the trace into the connection tracker; they will send all to DNS
+        let mut capture = pcap::Capture::from_file(test_dir("tests/lost_dns.pcap")).unwrap();
+        while let Ok(pkt) = capture.next_packet() {
+            let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            connection_tracker.add(owned_pkt);
+        }
+        // NOTE that 'tests/lost_dns.ips_all' includes IPs that we don't see in DNS!
+        let addrs = BufReader::new(File::open(test_dir("tests/lost_dns.ips_all")).unwrap())
+            .lines()
+            .map(|s| IpAddr::from_str(s.unwrap().as_str()).unwrap())
+            .collect::<Vec<IpAddr>>();
+        let working_addrs = BufReader::new(File::open(test_dir("tests/lost_dns.ips")).unwrap())
+            .lines()
+            .map(|s| IpAddr::from_str(s.unwrap().as_str()).unwrap())
+            .collect::<HashSet<IpAddr>>();
+        // make sure everything parsed properly
+        let (stats_tx, mut stats_rx) = mpsc::unbounded_channel();
+        dns_tx
+            .send(DnsTrackerMessage::GetStats { tx: stats_tx })
+            .unwrap();
+        let stats = stats_rx.recv().await.unwrap();
+        assert_eq!(stats.unparsed_pkt_count, 0);
+
+        // make sure we can look up everything
+        let (cache_tx, mut cache_rx) = mpsc::unbounded_channel();
+        dns_tx
+            .send(DnsTrackerMessage::LookupBatch {
+                addrs: addrs.clone(),
+                tx: cache_tx,
+                use_expired: true,
+            })
+            .unwrap();
+        let dns_cache = cache_rx.recv().await.unwrap();
+        let mut missing_count = 0;
+        for ip in addrs {
+            if !dns_cache.contains_key(&ip) {
+                debug!("We're missing IP {}", ip);
+                missing_count += 1;
+                assert!(!working_addrs.contains(&ip));
+            }
+        }
+        assert_eq!(missing_count, 34);
     }
 }

@@ -1362,6 +1362,9 @@ impl Connection {
                 }
             }
         }
+        if remote_hostname.is_none() {  // if we're STILL none, log it 
+            warn!("UNABLE to find DNS lookup for {}", self.connection_key.remote_ip)
+        }
 
         use IpProtocol::*;
         let ip_proto = IpProtocol::from_wire(self.connection_key.ip_proto);
