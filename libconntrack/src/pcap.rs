@@ -5,7 +5,7 @@ use std::str::FromStr;
 use crate::connection::ConnectionTrackerMsg;
 #[cfg(not(windows))]
 use futures_util::StreamExt;
-use log::{info, warn};
+use log::{debug, info, warn};
 use pcap::Capture;
 
 use crate::owned_packet::OwnedParsedPacket;
@@ -85,10 +85,14 @@ pub async fn start_pcap_stream(
     Ok(())
 }
 
+// cannot create a const chrono::Duration at compile time, so use seconds instead
+const DEFAULT_STATS_POLLING_FREQUENCY_SECONDS: u64 = 5;
+
 pub fn blocking_pcap_loop(
     device_name: String,
     filter_rule: Option<String>,
     tx: tokio::sync::mpsc::UnboundedSender<ConnectionTrackerMsg>,
+    stats_polling_frequency: Option<chrono::Duration>,
 ) -> Result<(), Box<dyn Error>> {
     let device = lookup_pcap_device_by_name(&device_name)?;
     info!("Starting pcap capture on {}", &device.name);
@@ -101,15 +105,33 @@ pub fn blocking_pcap_loop(
         info!("Applying pcap filter '{}'", filter_rule);
         capture.filter(filter_rule.as_str(), true)?;
     }
+    let mut last_stats: Option<pcap::Stat> = None;
+    let mut next_stats_time = 0u64;
+    let stats_polling_frequency = match stats_polling_frequency {
+        Some(t) => t.num_seconds() as u64,
+        None => DEFAULT_STATS_POLLING_FREQUENCY_SECONDS,
+    };
     loop {
         match capture.next_packet() {
             Ok(pkt) => {
+                let pkt_timestamp = pkt.header.ts; // save this for stats checking
                 let parsed = etherparse::PacketHeaders::from_ethernet_slice(pkt.data);
                 if let Ok(parsed_pkt) = parsed {
                     let parsed_packet = OwnedParsedPacket::new(parsed_pkt, pkt.header.clone());
                     let _hash = parsed_packet.sloppy_hash();
                     // TODO: use this hash to map to 256 parallel ConnectionTrackers for parallelism
                     tx.send(ConnectionTrackerMsg::Pkt(parsed_packet)).unwrap();
+                }
+                // periodically check the pcap stats to see if we're losing packets
+                // this is potentially a huge perf impact if we naively do gettimeofday() with each packet rx
+                // so instead use the pcap header timestamps instead.  Don't bother with the usecs math,
+                // because we only care about seconds-level precison, just check the seconds field
+                if pkt_timestamp.tv_sec as u64 > next_stats_time {
+                    last_stats = check_pcap_stats(&mut capture, last_stats);
+                    // update our estimate based on how many packets we did see in the interval
+                    // and cut in half just to be conservative, e.g., get the stats twice as
+                    // often as our estimator suggests just so we don't go too long during an idle period
+                    next_stats_time = pkt_timestamp.tv_sec as u64 + stats_polling_frequency;
                 }
             }
             Err(e) => {
@@ -125,6 +147,49 @@ pub fn blocking_pcap_loop(
         }
     }
     // never returns unless there's an error
+}
+
+/**
+ * Check whether pcap is dropping packets and log if it is.  This function should be called
+ * periodically from a packet capture loop, e.g., ``blocking_pcap_loop()``
+ */
+fn check_pcap_stats(
+    capture: &mut Capture<pcap::Active>,
+    last_stats: Option<pcap::Stat>,
+) -> Option<pcap::Stat> {
+    match capture.stats() {
+        Ok(stats) => {
+            match last_stats {
+                Some(last_stats) => {
+                    // we got valid new and old stats - compare them and warn if losing packets
+                    let new_dropped = stats.dropped - last_stats.dropped;
+                    let new_if_dropped = stats.if_dropped - last_stats.if_dropped;
+                    if new_dropped > 0 || new_if_dropped > 0 {
+                        warn!("Pcap sytem is dropping packets: {} dropped by pcap, {} by network inteface", new_dropped, new_if_dropped);
+                    } else {
+                        debug!("Pcap stats check - no dropped packets");
+                    }
+                    Some(stats)
+                }
+                None => {
+                    // no old stats, assume first time call and warn about any drops
+                    if stats.dropped > 0 || stats.if_dropped > 0 {
+                        warn!("Pcap sytem is dropping packets: {} dropped by pcap, {} by network inteface", stats.dropped, stats.if_dropped);
+                    }
+                    Some(stats)
+                }
+            }
+        }
+        Err(e) => {
+            // failed to get new stats, can't really do anything
+            // just log and return old_stats for next time in case the problem goes away!?
+            warn!("Pcap:: Failed to collect stats : {}", e);
+            match last_stats {
+                Some(stats) => Some(stats),
+                None => None,
+            }
+        }
+    }
 }
 
 /**

@@ -114,7 +114,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let tx_clone = tx.clone();
         let device_name = dev.name.clone();
         let _pcap_thread = std::thread::spawn(move || {
-            if let Err(e) = libconntrack::pcap::blocking_pcap_loop(device_name, None, tx_clone) {
+            if let Err(e) =
+                libconntrack::pcap::blocking_pcap_loop(device_name, None, tx_clone, None)
+            {
                 panic!("pcap thread returned: {}", e);
             }
         });
