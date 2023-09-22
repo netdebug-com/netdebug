@@ -10,11 +10,11 @@ use tokio::{
     task::JoinHandle,
 };
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use libconntrack_wasm::DnsTrackerEntry;
 
 use crate::connection::{ConnectionKey, ConnectionTrackerMsg};
-use dns_parser::{self, QueryType};
+use dns_parser::{self};
 
 pub const UDP_DNS_PORT: u16 = 53;
 pub struct DnsPendingEntry {
@@ -227,25 +227,28 @@ impl<'a> DnsTracker<'a> {
                 continue;
             }
 
-            if question.qtype != QueryType::A && question.qtype != QueryType::AAAA {
-                debug!(
-                    "Ignoring non-A/AAAA DNS resource record query: {:?}",
-                    question
-                );
-                continue;
-            }
-            let hostname = question.qname.to_string();
-
             for answer in &dns_packet.answers {
-                if answer.cls != dns_parser::Class::IN {
-                    warn!(
-                        "Ignoring non-Internet/Class::IN DNS resource record: {:?}",
-                        answer
-                    );
-                    continue;
-                }
-                use dns_parser::RData::*;
-                let addr = match answer.data {
+                self.parse_resource_record(answer, &rtt, &created);
+            }
+        }
+    }
+
+    fn parse_resource_record(
+        &mut self,
+        answer: &dns_parser::ResourceRecord<'_>,
+        rtt: &Option<Duration>,
+        created: &DateTime<Utc>,
+    ) {
+        let hostname = answer.name.to_string();
+        if answer.cls != dns_parser::Class::IN {
+            warn!(
+                "Ignoring non-Internet/Class::IN DNS resource record: {:?}",
+                answer
+            );
+            return;
+        }
+        use dns_parser::RData::*;
+        let addr = match answer.data {
                     // only match A/AAAA records, for now
                     A(a) => Some(IpAddr::from(a.0)),
                     AAAA(aaaa) => Some(IpAddr::from(aaaa.0)),
@@ -259,18 +262,16 @@ impl<'a> DnsTracker<'a> {
                     HTTPS(_) |
                     Unknown(_, _) => None,
                 };
-                if let Some(ip) = addr {
-                    self.reverse_map.insert(
-                        ip,
-                        DnsTrackerEntry {
-                            hostname: hostname.clone(),
-                            created,
-                            rtt,
-                            ttl: Some(chrono::Duration::seconds(answer.ttl as i64)),
-                        },
-                    );
-                }
-            }
+        if let Some(ip) = addr {
+            self.reverse_map.insert(
+                ip,
+                DnsTrackerEntry {
+                    hostname: hostname.clone(),
+                    created: created.clone(),
+                    rtt: rtt.clone(),
+                    ttl: Some(chrono::Duration::seconds(answer.ttl as i64)),
+                },
+            );
         }
     }
 
