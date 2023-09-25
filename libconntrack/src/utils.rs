@@ -24,7 +24,10 @@ pub fn etherparse_ipheaders2ipaddr(ip: &Option<IpHeader>) -> Result<(IpAddr, IpA
  */
 
 pub fn remote_ip_to_local(remote_ip: IpAddr) -> std::io::Result<IpAddr> {
-    let udp_sock = std::net::UdpSocket::bind(("0.0.0.0", 0))?;
+    let udp_sock = match remote_ip {
+        IpAddr::V4(_) => std::net::UdpSocket::bind(("0.0.0.0", 0))?,
+        IpAddr::V6(_) => std::net::UdpSocket::bind(("::", 0))?,
+    };
     udp_sock.connect((remote_ip, 53))?;
     Ok(udp_sock.local_addr()?.ip())
 }

@@ -19,7 +19,10 @@
  */
 use chrono::Utc;
 use common::{analysis_messages::AnalysisInsights, Message, ProbeRoundReport};
-use std::{net::SocketAddr, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use warp::ws::{self, WebSocket};
 
@@ -27,6 +30,20 @@ use crate::context::Context;
 use futures_util::{stream::SplitStream, SinkExt, StreamExt};
 use libconntrack::connection::{ConnectionKey, ConnectionTrackerMsg};
 use log::{debug, info, warn};
+
+fn unmap_mapped_v4(addr: &SocketAddr) -> SocketAddr {
+    match addr {
+        SocketAddr::V4(_) => addr.clone(),
+        SocketAddr::V6(sa6) => {
+            let unmapped = sa6.ip().to_ipv4_mapped();
+            if let Some(unmapped) = unmapped {
+                SocketAddr::new(IpAddr::V4(unmapped), sa6.port())
+            } else {
+                addr.clone()
+            }
+        }
+    }
+}
 
 pub async fn handle_websocket(
     context: Context,
@@ -44,10 +61,13 @@ pub async fn handle_websocket(
                 return;
             }
         }
-        Some(a) => (
-            a.to_string(),
-            Some(ConnectionKey::new(local_l4_port, a, etherparse::ip_number::TCP).await),
-        ),
+        Some(a) => {
+            let a = unmap_mapped_v4(a);
+            (
+                a.to_string(),
+                Some(ConnectionKey::new(local_l4_port, &a, etherparse::ip_number::TCP).await),
+            )
+        }
     };
     let _addr = addr.expect("We weren't passed a valid SocketAddr!?");
     info!(
@@ -413,6 +433,60 @@ fn handle_version_check(git_hash: String, _tx: &mpsc::UnboundedSender<Message>) 
         {} != {}",
             &git_hash,
             common::get_git_hash_version(),
+        );
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{
+        net::{Ipv4Addr, Ipv6Addr},
+        str::FromStr,
+    };
+
+    use super::*;
+    #[test]
+    fn test_unmapped_mapped_v4() {
+        let ip4 = IpAddr::V4(Ipv4Addr::from_str("127.0.0.1").unwrap());
+        let sa = SocketAddr::new(ip4, 42);
+        assert!(unmap_mapped_v4(&sa).is_ipv4());
+
+        let ip4 = IpAddr::V4(Ipv4Addr::from_str("192.1.2.3").unwrap());
+        let sa = SocketAddr::new(ip4, 42);
+        assert!(unmap_mapped_v4(&sa).is_ipv4());
+
+        let ip6 = IpAddr::V6(Ipv6Addr::from_str("::1").unwrap());
+        let sa = SocketAddr::new(ip6, 42);
+        assert!(unmap_mapped_v4(&sa).is_ipv6());
+        assert_eq!(unmap_mapped_v4(&sa).ip(), ip6);
+
+        let ip6 = IpAddr::V6(Ipv6Addr::from_str("2001:0db8::1").unwrap());
+        let sa = SocketAddr::new(ip6, 42);
+        assert!(unmap_mapped_v4(&sa).is_ipv6());
+        assert_eq!(unmap_mapped_v4(&sa).ip(), ip6);
+
+        let ip6 = IpAddr::V6(Ipv6Addr::from_str("::ffff:127.0.0.1").unwrap());
+        assert_eq!(
+            ip6,
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0x7f00, 0x1)),
+        );
+        let sa = SocketAddr::new(ip6, 42);
+        assert!(unmap_mapped_v4(&sa).is_ipv4());
+        assert_eq!(
+            unmap_mapped_v4(&sa).ip(),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
+        );
+
+        let ip6 = IpAddr::V6(Ipv6Addr::from_str("::ffff:1.2.3.4").unwrap());
+        assert_eq!(
+            ip6,
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0x102, 0x304)),
+        );
+        let sa = SocketAddr::new(ip6, 42);
+        assert!(unmap_mapped_v4(&sa).is_ipv4());
+        assert_eq!(
+            unmap_mapped_v4(&sa).ip(),
+            IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4))
         );
     }
 }
