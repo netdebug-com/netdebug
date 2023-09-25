@@ -1,6 +1,8 @@
+use bytes::{BufMut, BytesMut};
 use common::evicting_hash_map::EvictingHashMap;
 #[cfg(not(test))]
 use log::{debug, warn};
+use rand::Rng;
 #[cfg(test)]
 use std::{println as debug, println as warn}; // Workaround to use prinltn! for logs.
 
@@ -14,7 +16,7 @@ use chrono::{DateTime, Duration, Utc};
 use libconntrack_wasm::DnsTrackerEntry;
 
 use crate::connection::{ConnectionKey, ConnectionTrackerMsg};
-use dns_parser::{self};
+use dns_parser::{self, QueryType};
 
 pub const UDP_DNS_PORT: u16 = 53;
 pub struct DnsPendingEntry {
@@ -459,8 +461,63 @@ impl<'a> DnsTracker<'a> {
     }
 }
 
+/**
+ * The dns-parser library doesn't support writing - sigh.  We don't need proper writing,
+ * just a simple request, so hack it together with wireshark and test it.
+ *
+ * The query name is funkily encoded almost like a run-length encoding, so
+ * "www.foobar.com" is encoded a 3www6foobar3com0
+ *
+ * For reference/pretty DNS header pictures:
+ * https://mislove.org/teaching/cs4700/spring11/handouts/project1-primer.pdf
+ *  (Thank you Alan - miss you man :-)
+ *
+ */
+const DNS_HEADER_LEN: usize = 12;
+const DNS_MIN_MSG_LEN: usize = DNS_HEADER_LEN + 6; // includes initial digit for lead label and 0 for string termination
+pub fn make_dns_lookup_request(
+    name: String,
+    qtype: QueryType,
+    transaction_id: Option<u16>,
+) -> Result<Vec<u8>, String> {
+    let mut request = BytesMut::with_capacity(DNS_MIN_MSG_LEN + name.len());
+    let transaction_id = match transaction_id {
+        Some(id) => id,
+        None => {
+            let mut rng = rand::thread_rng();
+            rng.gen()
+        }
+    };
+    request.put_u16(transaction_id);
+    request.put_u8(1); // FLAGS=recursion desired
+    request.put_u8(0); // other half of flags
+    request.put_u16(1); // #questions = 1
+    request.put_u16(0); // #answers = 0
+    request.put_u16(0); // #authories = 0
+    request.put_u16(0); // #additional = 0
+    for label in name.split('.') {
+        if label.len() > 63 {
+            return Err(format!(
+                "DNS label too long for protocol: {} from {}",
+                label, name
+            ));
+        }
+        if label.is_empty() {
+            break;   // skip trailing '.' as an empty label is not allowed in DNS
+        }
+        request.put_u8(label.len() as u8);
+        request.put_slice(label.as_bytes());
+    }
+    request.put_u8(0); // null terminate string
+    request.put_u16(dns_parser::Class::IN as u16);
+    request.put_u16(qtype as u16);
+
+    Ok(request.to_vec())
+}
+
 #[cfg(test)]
 mod test {
+    use dns_parser::QueryType;
     use etherparse::TransportHeader;
 
     use crate::{
@@ -686,5 +743,33 @@ mod test {
             }
         }
         assert_eq!(missing_count, 34);
+    }
+
+    #[test]
+    fn test_make_dns_request() {
+        let buf =
+            make_dns_lookup_request("example.com".to_string(), QueryType::A, Some(0x0102)).unwrap();
+
+        let request = dns_parser::Packet::parse(&buf).unwrap();
+        assert_eq!(request.questions.len(), 1);
+        let question = request.questions.iter().next().unwrap();
+        assert_eq!(question.qtype, QueryType::A);
+        assert_eq!(question.qclass, dns_parser::QueryClass::IN);
+        assert_eq!(question.qname.to_string(), "example.com".to_string());
+        assert_eq!(request.answers.len(), 0);
+        assert_eq!(request.additional.len(), 0);
+        assert_eq!(request.header.id, 0x0102);
+        assert_eq!(request.header.recursion_desired, true);
+
+        let buf =
+            make_dns_lookup_request("example.com.".to_string(), QueryType::A, Some(0x0102)).unwrap();
+        let request_trailing_period = dns_parser::Packet::parse(&buf).unwrap();
+        let new_question = request_trailing_period.questions.iter().next().unwrap();
+        assert_eq!(question.qname.to_string(), new_question.qname.to_string());
+
+        // last, make sure we get an error if we have too long of a label
+        let evil_hostname = format!("www.{}.com", "x".to_string().repeat(64));
+        let err = make_dns_lookup_request(evil_hostname, QueryType::A, None);
+        assert!(err.is_err());
     }
 }

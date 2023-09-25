@@ -1084,6 +1084,7 @@ checksum = "9cdc71e17332e86d2e1d38c1f99edcb6288ee11b815fb1a4b049eaa2114d369b"
 name = "libconntrack"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "chrono",
  "common",
  "dns-parser",
@@ -1099,6 +1100,7 @@ dependencies = [
  "pb-storage-service",
  "pcap",
  "pretty_env_logger",
+ "rand",
  "serde",
  "serde_json",
  "serde_with",
