@@ -232,9 +232,9 @@ impl<'a> DnsTracker<'a> {
             for answer in &dns_packet.answers {
                 self.parse_resource_record(answer, &rtt, &created);
             }
-        }
-        for additional in &dns_packet.additional {
+            for additional in &dns_packet.additional {
                 self.parse_resource_record(additional, &rtt, &created);
+            }
         }
     }
 
@@ -253,30 +253,30 @@ impl<'a> DnsTracker<'a> {
             return;
         }
         use dns_parser::RData::*;
-        let addr = match answer.data {
-                    // only match A/AAAA records, for now
-                    A(a) => Some(IpAddr::from(a.0)),
-                    AAAA(aaaa) => Some(IpAddr::from(aaaa.0)),
-                    CNAME(_) |
-                    MX(_) |
-                    NS(_) |
-                    PTR(_) |    // maybe one day cache these as well?
-                    SOA(_) |
-                    SRV(_) |
-                    TXT(_) |
-                    HTTPS(_) |
-                    Unknown(_, _) => None,
-                };
-        if let Some(ip) = addr {
-            self.reverse_map.insert(
-                ip,
-                DnsTrackerEntry {
-                    hostname: hostname.clone(),
-                    created: created.clone(),
-                    rtt: rtt.clone(),
-                    ttl: Some(chrono::Duration::seconds(answer.ttl as i64)),
-                },
-            );
+        let reply = match answer.data {
+            // only match A/AAAA records, for now
+            A(a) => Some((IpAddr::from(a.0), hostname, false)),
+            AAAA(aaaa) => Some((IpAddr::from(aaaa.0), hostname, false)),
+            PTR(ptr) => Some((dns_ptr_decode(&hostname).unwrap(), ptr.0.to_string(), true)),
+            CNAME(_) | MX(_) | NS(_) | SOA(_) | SRV(_) | TXT(_) | HTTPS(_) | Unknown(_, _) => None,
+        };
+        if let Some((ip, hostname, from_ptr_record)) = reply {
+            if !from_ptr_record || !self.reverse_map.contains_key(&ip) {
+                // only write the record if it's not a PTR or if it doesn't
+                // overwrite non-PTR data
+                // A/AAAA is preferred because that's more likely to be meaningful to humans
+                // e.g. "google.com" instead of "server463.1ee100.net"
+                self.reverse_map.insert(
+                    ip,
+                    DnsTrackerEntry {
+                        hostname: hostname.clone(),
+                        created: created.clone(),
+                        from_ptr_record,
+                        rtt: rtt.clone(),
+                        ttl: Some(chrono::Duration::seconds(answer.ttl as i64)),
+                    },
+                );
+            }
         }
     }
 
@@ -308,6 +308,7 @@ impl<'a> DnsTracker<'a> {
             DnsTrackerEntry {
                 hostname,
                 created,
+                from_ptr_record: false,
                 rtt,
                 ttl: None,
             },
@@ -374,6 +375,7 @@ impl<'a> DnsTracker<'a> {
                 let entry = DnsTrackerEntry {
                     hostname: tokens[1].to_string(),
                     created: Utc::now(), // kinda a fudge, oh well
+                    from_ptr_record: false,
                     rtt: None,
                     ttl: Some(Duration::seconds(i64::from_str(tokens[5]).expect("digits"))),
                 };
@@ -462,6 +464,66 @@ impl<'a> DnsTracker<'a> {
 }
 
 /**
+ * IP PTR records are encoded --> take the name and decode the IP from it
+ *
+ * 8.128.8.128.in-addr.arpa. --> 128.8.128.8
+ * e.0.0.2.0.0.0.0.0.0.0.0.0.0.0.0.3.1.8.0.5.0.0.4.0.b.8.f.7.0.6.2.ip6.arpa. --> 2607:f8b0:4005:813::200e
+ *
+ * Note to self: there's got to be a cleaner/safer way to do this
+ */
+
+fn dns_ptr_decode(name: &String) -> Result<IpAddr, Box<dyn std::error::Error>> {
+    let name = name.trim_end_matches('.'); // remove trailing period if there
+    if name.ends_with(DNS_PTR_V4_DOMAIN) {
+        let tokens = name.split(".").collect::<Vec<&str>>();
+        Ok(IpAddr::try_from([
+            u8::from_str_radix(tokens[3], 10)?,
+            u8::from_str_radix(tokens[2], 10)?,
+            u8::from_str_radix(tokens[1], 10)?,
+            u8::from_str_radix(tokens[0], 10)?,
+        ])?)
+    } else if name.ends_with(DNS_PTR_V6_DOMAIN) {
+        let tokens = name.split(".").collect::<Vec<&str>>();
+        if tokens.len() < 32 {
+            return Err(format!("dns_ptr_decode: Less than 32 digits in Ipv6 addr!?").into());
+        }
+        let mut addr: [u8; 16] = [0; 16];
+        for i in 0..=15 {
+            let oct = (u8::from_str_radix(&tokens[2 * i + 1], 16)? << 4)
+                + u8::from_str_radix(&tokens[2 * i], 16)?;
+            addr[15 - i] = oct; // put in reverse order
+        }
+        Ok(IpAddr::try_from(addr)?)
+    } else {
+        Err(format!("dns_ptr_decode() Didn't end with known domain").into())
+    }
+}
+
+/**
+ * The opposite of dns_ptr_decode
+ */
+
+fn dns_ptr_encode(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            // reverse order in base10, per DNS RFC
+            format!(
+                "{}.{}.{}.{}.{}",
+                octets[3], octets[2], octets[1], octets[0], DNS_PTR_V4_DOMAIN
+            )
+        }
+        IpAddr::V6(v6) => {
+            let mut base = v6
+                .octets()
+                .map(|oct| format!("{:x}.{:x}", 0x0f & oct, (0xf0 & oct) >> 4));
+            base.reverse();
+            format!("{}.{}", base.join("."), DNS_PTR_V6_DOMAIN)
+        }
+    }
+}
+
+/**
  * The dns-parser library doesn't support writing - sigh.  We don't need proper writing,
  * just a simple request, so hack it together with wireshark and test it.
  *
@@ -503,16 +565,26 @@ pub fn make_dns_lookup_request(
             ));
         }
         if label.is_empty() {
-            break;   // skip trailing '.' as an empty label is not allowed in DNS
+            break; // skip trailing '.' as an empty label is not allowed in DNS
         }
         request.put_u8(label.len() as u8);
         request.put_slice(label.as_bytes());
     }
     request.put_u8(0); // null terminate string
-    request.put_u16(dns_parser::Class::IN as u16);
     request.put_u16(qtype as u16);
+    request.put_u16(dns_parser::Class::IN as u16);
 
     Ok(request.to_vec())
+}
+
+const DNS_PTR_V4_DOMAIN: &str = "in-addr.arpa";
+const DNS_PTR_V6_DOMAIN: &str = "ip6.arpa";
+pub fn make_dns_ptr_lookup_request(
+    ip: IpAddr,
+    transaction_id: Option<u16>,
+) -> Result<Vec<u8>, String> {
+    let name = dns_ptr_encode(ip);
+    make_dns_lookup_request(name, QueryType::PTR, transaction_id)
 }
 
 #[cfg(test)]
@@ -575,6 +647,7 @@ mod test {
                 IpAddr::from_str("13.227.21.83").unwrap(),
             ]);
             assert!(valid_ips.contains(ip));
+            assert!(!entry.from_ptr_record);
             assert_eq!(entry.rtt.unwrap(), timestamp); // RTT is the second timestamp b/c first is zero
         } else {
             panic!("No DNS entry cached!?");
@@ -590,6 +663,7 @@ mod test {
             DnsTrackerEntry {
                 hostname: "foo".to_string(),
                 created: Utc::now() - Duration::seconds(2),
+                from_ptr_record: false,
                 rtt: None,
                 ttl: Some(Duration::seconds(1)),
             },
@@ -761,8 +835,8 @@ mod test {
         assert_eq!(request.header.id, 0x0102);
         assert_eq!(request.header.recursion_desired, true);
 
-        let buf =
-            make_dns_lookup_request("example.com.".to_string(), QueryType::A, Some(0x0102)).unwrap();
+        let buf = make_dns_lookup_request("example.com.".to_string(), QueryType::A, Some(0x0102))
+            .unwrap();
         let request_trailing_period = dns_parser::Packet::parse(&buf).unwrap();
         let new_question = request_trailing_period.questions.iter().next().unwrap();
         assert_eq!(question.qname.to_string(), new_question.qname.to_string());
@@ -771,5 +845,76 @@ mod test {
         let evil_hostname = format!("www.{}.com", "x".to_string().repeat(64));
         let err = make_dns_lookup_request(evil_hostname, QueryType::A, None);
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn dns_ptr_lookup() {
+        let v4_addr = IpAddr::from_str("1.2.3.4").unwrap();
+        let buf = make_dns_ptr_lookup_request(v4_addr, None).unwrap();
+        let request = dns_parser::Packet::parse(&buf).unwrap();
+        let question = request.questions.iter().next().unwrap();
+        assert_eq!(
+            question.qname.to_string(),
+            "4.3.2.1.in-addr.arpa".to_string()
+        );
+        let v6_addr = IpAddr::from_str("0011:2233:4455:6677:8899:aabb:ccdd:effe").unwrap();
+        let buf = make_dns_ptr_lookup_request(v6_addr, None).unwrap();
+        let request = dns_parser::Packet::parse(&buf).unwrap();
+        let question = request.questions.iter().next().unwrap();
+        assert_eq!(
+            question.qname.to_string(),
+            // from `dig -x 0011:2233:4455:6677:8899:aabb:ccdd:effe`
+            "e.f.f.e.d.d.c.c.b.b.a.a.9.9.8.8.7.7.6.6.5.5.4.4.3.3.2.2.1.1.0.0.ip6.arpa".to_string()
+        );
+    }
+
+    #[test]
+    fn dns_ptr_encode_decode() {
+        for ip in [
+            IpAddr::from_str("127.0.0.1").unwrap(),
+            IpAddr::from_str("2607:f8b0:4005:813::200e").unwrap(),
+            IpAddr::from_str("128.8.128.38").unwrap(),
+        ] {
+            let test_ip = dns_ptr_decode(&dns_ptr_encode(ip)).unwrap();
+            assert_eq!(ip, test_ip);
+        }
+    }
+
+    #[tokio::test]
+    async fn dns_ptr_cache() {
+        let dns_ptr_ip = IpAddr::from_str("128.8.128.8").unwrap();
+        let dns_ptr_hostname = "netman.cs.umd.edu".to_string();
+        /*
+         * 0000   00 02 81 80 00 01 00 01 00 00 00 00 01 38 03 31   .............8.1
+         * 0010   32 38 01 38 03 31 32 38 07 69 6e 2d 61 64 64 72   28.8.128.in-addr
+         * 0020   04 61 72 70 61 00 00 0c 00 01 c0 0c 00 0c 00 01   .arpa...........
+         * 0030   00 00 0e 02 00 13 06 6e 65 74 6d 61 6e 02 63 73   .......netman.cs
+         * 0040   03 75 6d 64 03 65 64 75 00                        .umd.edu.
+         */
+        let dns_ptr_reply = [
+            0x00, 0x02, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x38,
+            0x03, 0x31, 0x32, 0x38, 0x01, 0x38, 0x03, 0x31, 0x32, 0x38, 0x07, 0x69, 0x6e, 0x2d,
+            0x61, 0x64, 0x64, 0x72, 0x04, 0x61, 0x72, 0x70, 0x61, 0x00, 0x00, 0x0c, 0x00, 0x01,
+            0xc0, 0x0c, 0x00, 0x0c, 0x00, 0x01, 0x00, 0x00, 0x0e, 0x02, 0x00, 0x13, 0x06, 0x6e,
+            0x65, 0x74, 0x6d, 0x61, 0x6e, 0x02, 0x63, 0x73, 0x03, 0x75, 0x6d, 0x64, 0x03, 0x65,
+            0x64, 0x75, 0x00,
+        ];
+        let mut dns_tracker = DnsTracker::new(10);
+        let key = ConnectionKey {
+            local_ip: IpAddr::from_str("127.0.0.1").unwrap(),
+            remote_ip: IpAddr::from_str("8.8.8.8").unwrap(),
+            local_l4_port: 1234,
+            remote_l4_port: 53,
+            ip_proto: 6,
+        };
+        let timestamp = Duration::microseconds(0);
+        dns_tracker
+            .parse_dns(key.clone(), timestamp, dns_ptr_reply.to_vec(), true)
+            .await;
+        assert_eq!(dns_tracker.reverse_map.len(), 1);
+        assert!(dns_tracker.reverse_map.contains_key(&dns_ptr_ip));
+        let entry = dns_tracker.reverse_map.get(&dns_ptr_ip).unwrap();
+        assert_eq!(entry.hostname, dns_ptr_hostname);
+        assert!(entry.from_ptr_record);
     }
 }
