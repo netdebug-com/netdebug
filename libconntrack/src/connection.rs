@@ -1318,14 +1318,10 @@ impl Connection {
         ConnectionStorageEntry {
             measurement_type: MeasurementType::UnspecifiedMeasurementType as i32,
             local_hostname: None, // TODO
-            local_ip: Some(pb_conntrack_types::IpAddr::from(
-                self.connection_key.local_ip,
-            )),
+            local_ip: self.connection_key.local_ip.to_string(),
             local_port: self.connection_key.local_l4_port as u32,
             remote_hostname: self.remote_hostname.clone(),
-            remote_ip: Some(pb_conntrack_types::IpAddr::from(
-                self.connection_key.remote_ip,
-            )),
+            remote_ip: self.connection_key.remote_ip.to_string(),
             remote_port: self.connection_key.remote_l4_port as u32,
             ip_proto: self.connection_key.ip_proto as u32,
             probe_rounds: self

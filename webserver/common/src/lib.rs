@@ -186,7 +186,7 @@ pub enum ProbeReportEntry {
 impl ProbeReportEntry {
     fn to_protobuf(&self) -> pb_conntrack_types::Probe {
         use pb_conntrack_types::ProbeType;
-        let sender_ip = self.get_ip().map(|ip| pb_conntrack_types::IpAddr::from(ip));
+        let sender_ip = self.get_ip().map(|ip| ip.to_string());
         let comment = if !self.get_comment().is_empty() {
             Some(self.get_comment())
         } else {
