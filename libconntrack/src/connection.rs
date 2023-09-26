@@ -2147,6 +2147,7 @@ pub mod test {
             DnsTrackerEntry {
                 hostname: test_hostname.clone(),
                 created: Utc::now(),
+                from_ptr_record: false,
                 rtt: None,
                 ttl: None,
             },
