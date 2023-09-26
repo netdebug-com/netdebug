@@ -4,6 +4,7 @@ use chrono::Duration;
 use clap::Parser;
 use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg},
+    connection_storage_handler::ConnectionStorageHandler,
     dns_tracker::{DnsTracker, DnsTrackerMessage},
     pcap::{lookup_egress_device, lookup_pcap_device_by_name},
     process_tracker::{ProcessTracker, ProcessTrackerMessage},
@@ -41,6 +42,10 @@ pub struct Args {
     /// How big to make the LRU Cache on each ConnectionTracker
     #[arg(long, default_value_t = 4096)]
     pub max_connections_per_tracker: usize,
+
+    /// The URL of the GRPC storage server. E.g., http://localhost:50051
+    #[arg(long, default_value=None)]
+    pub storage_server_url: Option<String>,
 }
 
 fn init_logging() {
@@ -129,9 +134,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let raw_sock =
             libconntrack::pcap::bind_writable_pcap_by_name(devices[0].name.clone()).unwrap();
         let args = args_clone;
+        // Spawn a ConnectionTracker task
+        let storage_service_msg_tx = if let Some(url) = args.storage_server_url {
+            Some(ConnectionStorageHandler::spawn_from_url(url, 1000).await)
+        } else {
+            None
+        };
         let mut connection_tracker = ConnectionTracker::new(
             args.log_dir,
-            None, // connection_storage_client
+            storage_service_msg_tx,
             args.max_connections_per_tracker,
             local_addrs,
             raw_sock,

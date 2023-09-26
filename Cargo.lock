@@ -386,6 +386,8 @@ dependencies = [
  "chrono",
  "itertools 0.10.5",
  "linked-hash-map",
+ "pb-conntrack-types",
+ "prost-types",
  "serde",
  "serde_json",
 ]

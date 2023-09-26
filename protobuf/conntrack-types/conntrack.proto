@@ -29,6 +29,7 @@ enum ProbeType {
     EndHostReplyFound = 5;
     EndHostReplyNoProbe = 6;
     NoReply = 7;
+    NoOutgoing = 8;
 }
 
 message Probe {

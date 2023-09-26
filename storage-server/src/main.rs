@@ -1,7 +1,7 @@
 use std::net::{IpAddr, SocketAddr};
 
 use clap::Parser;
-use log::info;
+use log::{debug, info};
 use pb_storage_service::storage_service_server::{StorageService, StorageServiceServer};
 use pb_storage_service::{StorageReply, StorageRequest};
 use prost::Message;
@@ -39,6 +39,7 @@ impl StorageService for StorageServiceImpl {
         info!("Received Request");
         for entry in request.into_inner().connection_entries {
             use tonic::Code;
+            debug!("{:?}", entry);
             let db_res = self
                 .db
                 .call(move |conn| {
