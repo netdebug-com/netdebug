@@ -74,6 +74,27 @@ pub fn get_git_hash_version() -> String {
     env!("GIT_HASH").to_string()
 }
 
+fn convert_f64_ms_to_pb_duration(duration_ms: Option<f64>) -> Option<prost_types::Duration> {
+    match duration_ms {
+        Some(dt) => {
+            let dt = dt / 1000.;
+            Some(prost_types::Duration {
+                seconds: if dt < 0.0 { dt.ceil() } else { dt.floor() } as i64,
+                nanos: (dt.fract() * 1e9) as i32,
+            })
+        }
+        None => None,
+    }
+}
+
+fn convert_f64_ms_to_pb_timestamp(timestamp_ms: Option<f64>) -> Option<prost_types::Timestamp> {
+    // protobuf Duration and Timestap happen to have the same fields and types, so a bit of hackery:
+    convert_f64_ms_to_pb_duration(timestamp_ms).map(|dur| prost_types::Timestamp {
+        seconds: dur.seconds,
+        nanos: dur.nanos,
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProbeRoundReport {
     pub probes: HashMap<ProbeId, ProbeReportEntry>,
@@ -93,6 +114,16 @@ impl Display for ProbeRoundReport {
             writeln!(f, "Probe {:3} - {:?}", probe_id, e)?;
         }
         Ok(())
+    }
+}
+
+impl ProbeRoundReport {
+    pub fn to_protobuf(&self) -> pb_conntrack_types::ProbeRoundReport {
+        pb_conntrack_types::ProbeRoundReport {
+            probe_round: self.probe_round,
+            application_rtt: convert_f64_ms_to_pb_duration(self.application_rtt),
+            probes: self.probes.iter().map(|p| p.1.to_protobuf()).collect(),
+        }
     }
 }
 
@@ -151,7 +182,40 @@ pub enum ProbeReportEntry {
     },
     // TODO: add GoodRR etc. for w/ Record Route
 }
+
 impl ProbeReportEntry {
+    fn to_protobuf(&self) -> pb_conntrack_types::Probe {
+        use pb_conntrack_types::ProbeType;
+        let sender_ip = self.get_ip().map(|ip| pb_conntrack_types::IpAddr::from(ip));
+        let comment = if !self.get_comment().is_empty() {
+            Some(self.get_comment())
+        } else {
+            None
+        };
+
+        let probe_type = match self {
+            ProbeReportEntry::RouterReplyFound { .. } => ProbeType::RouterReplyFound,
+            ProbeReportEntry::NatReplyFound { .. } => ProbeType::NatReplyFound,
+            ProbeReportEntry::NoReply { .. } => ProbeType::NoReply,
+            ProbeReportEntry::NoOutgoing { .. } => ProbeType::NoOutgoing,
+            ProbeReportEntry::RouterReplyNoProbe { .. } => ProbeType::RouterReplyNoProbe,
+            ProbeReportEntry::NatReplyNoProbe { .. } => ProbeType::NatReplyNoProbe,
+            ProbeReportEntry::EndHostReplyFound { .. } => ProbeType::EndHostReplyFound,
+            ProbeReportEntry::EndHostNoProbe { .. } => ProbeType::EndHostReplyNoProbe,
+        } as i32;
+
+        let outgoing_ttl = self.get_ttl() as u32;
+        pb_conntrack_types::Probe {
+            probe_type,
+            outgoing_ttl,
+            out_timestamp: convert_f64_ms_to_pb_timestamp(self.get_out_timestamp_ms()),
+            in_timestamp: convert_f64_ms_to_pb_timestamp(self.get_in_timestamp_ms()),
+            sender_ip,
+            received_ttl_remaining: None,
+            comment: comment,
+        }
+    }
+
     fn get_comment(&self) -> String {
         use ProbeReportEntry::*;
         match self {
@@ -261,6 +325,73 @@ impl ProbeReportEntry {
             | RouterReplyNoProbe { .. }
             | NatReplyNoProbe { .. }
             | EndHostNoProbe { .. } => None,
+        }
+    }
+
+    fn get_out_timestamp_ms(&self) -> Option<f64> {
+        use ProbeReportEntry::*;
+        match self {
+            RouterReplyFound {
+                out_timestamp_ms, ..
+            }
+            | NatReplyFound {
+                out_timestamp_ms, ..
+            }
+            | EndHostReplyFound {
+                out_timestamp_ms, ..
+            }
+            | NoReply {
+                out_timestamp_ms, ..
+            } => Some(*out_timestamp_ms),
+            NoOutgoing { .. }
+            | RouterReplyNoProbe { .. }
+            | NatReplyNoProbe { .. }
+            | EndHostNoProbe { .. } => None,
+        }
+    }
+
+    fn get_in_timestamp_ms(&self) -> Option<f64> {
+        use ProbeReportEntry::*;
+        match self {
+            RouterReplyFound {
+                out_timestamp_ms,
+                rtt_ms,
+                ..
+            }
+            | NatReplyFound {
+                out_timestamp_ms,
+                rtt_ms,
+                ..
+            }
+            | EndHostReplyFound {
+                out_timestamp_ms,
+                rtt_ms,
+                ..
+            } => Some(*out_timestamp_ms + *rtt_ms),
+            NoReply { .. } | NoOutgoing { .. } => None,
+            RouterReplyNoProbe {
+                in_timestamp_ms, ..
+            }
+            | NatReplyNoProbe {
+                in_timestamp_ms, ..
+            }
+            | EndHostNoProbe {
+                in_timestamp_ms, ..
+            } => Some(*in_timestamp_ms),
+        }
+    }
+
+    fn get_ttl(&self) -> u8 {
+        use ProbeReportEntry::*;
+        match self {
+            RouterReplyFound { ttl, .. }
+            | NatReplyFound { ttl, .. }
+            | NoReply { ttl, .. }
+            | NoOutgoing { ttl, .. }
+            | RouterReplyNoProbe { ttl, .. }
+            | NatReplyNoProbe { ttl, .. }
+            | EndHostReplyFound { ttl, .. }
+            | EndHostNoProbe { ttl, .. } => *ttl,
         }
     }
 }
@@ -504,3 +635,27 @@ impl Display for ProbeReportSummary {
 
 pub mod analysis_messages;
 pub mod evicting_hash_map;
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_convert_f64_ms_to_pb_duration() {
+        assert_eq!(convert_f64_ms_to_pb_duration(None), None);
+
+        let dur = convert_f64_ms_to_pb_duration(Some(69517123.456789));
+        assert!(dur.is_some());
+        let dur_unwrapped = dur.unwrap();
+        assert_eq!(dur_unwrapped.seconds, 69517);
+        // Since we are dealing with f64, the nano seconds can't be represented
+        // with full precision, so check that we are "close enough"
+        assert!((dur_unwrapped.nanos - 123456789).abs() < 100);
+
+        let dur = convert_f64_ms_to_pb_duration(Some(-4242123.456));
+        assert!(dur.is_some());
+        let dur_unwrapped = dur.unwrap();
+        assert_eq!(dur_unwrapped.seconds, -4242);
+        assert!((-dur_unwrapped.nanos - 123456000).abs() < 100);
+    }
+}

@@ -2,7 +2,6 @@ use std::{collections::HashSet, error::Error, net::IpAddr, sync::Arc};
 
 use clap::Parser;
 use log::info;
-use pb_storage_service::storage_service_client::StorageServiceClient;
 use pwhash::{sha512_crypt, HashSetup};
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
@@ -10,6 +9,7 @@ use tokio::sync::{mpsc::UnboundedSender, RwLock};
 
 use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg},
+    connection_storage_handler::ConnectionStorageHandler,
     pcap::{bind_writable_pcap, lookup_pcap_device_by_name},
 };
 
@@ -81,20 +81,22 @@ impl WebServerContext {
                 std::process::exit(1); // fatal error
             }
             // Spawn a ConnectionTracker task
+            let storage_service_future = if let Some(url) = storage_server_url {
+                Some(ConnectionStorageHandler::spawn_from_url(url, 1000))
+            } else {
+                None
+            };
             tokio::spawn(async move {
                 info!("Launching the connection tracker (single instance for now)");
-                let storage_service_client = if let Some(url) = storage_server_url {
-                    // TODO: better error handling than panic
-                    // Also, if we panic here we just kill the thread but not the
-                    // process.
-                    Some(StorageServiceClient::connect(url).await.unwrap())
+                let storage_service_msg_tx = if let Some(future) = storage_service_future {
+                    Some(future.await)
                 } else {
                     None
                 };
                 let raw_sock = bind_writable_pcap(device).unwrap();
                 let mut connection_tracker = ConnectionTracker::new(
                     log_dir,
-                    storage_service_client,
+                    storage_service_msg_tx,
                     max_connections_per_tracker,
                     local_addrs,
                     raw_sock,

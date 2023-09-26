@@ -13,8 +13,9 @@ use libconntrack_wasm::{DnsTrackerEntry, IpProtocol};
 #[cfg(not(test))]
 use log::{debug, info, warn};
 use netstat2::ProtocolSocketInfo;
-use pb_storage_service::storage_service_client::StorageServiceClient;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender}; // Use log crate when building application
+use pb_conntrack_types::ConnectionStorageEntry;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 #[cfg(test)]
 use std::{println as debug, println as info, println as warn}; // Workaround to use prinltn! for logs.
@@ -139,7 +140,7 @@ pub enum ConnectionTrackerMsg {
         clear_state: bool,
         probe_round: u32,
         application_rtt: Option<f64>,
-        tx: tokio::sync::mpsc::Sender<ProbeRoundReport>,
+        tx: mpsc::Sender<ProbeRoundReport>,
     },
     ProbeOnIdle {
         // launch a set of inband probes when the connection next goes idle
@@ -156,18 +157,34 @@ pub enum ConnectionTrackerMsg {
     },
     GetInsights {
         key: ConnectionKey,
-        tx: tokio::sync::mpsc::Sender<Vec<AnalysisInsights>>,
+        tx: mpsc::Sender<Vec<AnalysisInsights>>,
     },
     GetConnectionKeys {
-        tx: tokio::sync::mpsc::Sender<Vec<ConnectionKey>>,
+        tx: mpsc::Sender<Vec<ConnectionKey>>,
     },
     GetConnections {
-        tx: tokio::sync::mpsc::UnboundedSender<Vec<Connection>>,
+        tx: mpsc::UnboundedSender<Vec<Connection>>,
     },
     SetConnectionRemoteHostnameDns {
         key: ConnectionKey,
         remote_hostname: Option<String>, // will be None if lookup fails
     },
+}
+
+fn send_connection_storage_msg(
+    storage_service_msg_tx: &Option<mpsc::Sender<ConnectionStorageEntry>>,
+    mut c: Connection,
+) {
+    if let Some(tx) = storage_service_msg_tx.as_ref() {
+        if let Err(e) = tx.try_send(c.to_connection_storage_entry()) {
+            // TODO: Should probably rate-limit the potential log message at some
+            // point, but I think it's fine for now.
+            warn!(
+                "Could not send connection entry to storage handler: {:?}",
+                e
+            );
+        }
+    }
 }
 
 /***
@@ -185,9 +202,8 @@ where
     connections: EvictingHashMap<'a, ConnectionKey, Connection>,
     local_addrs: HashSet<IpAddr>,
     raw_sock: R,
+    storage_service_msg_tx: Option<mpsc::Sender<ConnectionStorageEntry>>,
     log_dir: String,
-    #[allow(dead_code)] // TODO:
-    storage_service_client: Option<StorageServiceClient<tonic::transport::Channel>>,
     dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
     tx: UnboundedSender<ConnectionTrackerMsg>, // so we can tell others how to send msgs to us
     rx: UnboundedReceiver<ConnectionTrackerMsg>, // to read messages sent to us
@@ -198,25 +214,31 @@ where
 {
     pub fn new(
         log_dir: String,
-        storage_service_client: Option<StorageServiceClient<tonic::transport::Channel>>,
+        storage_service_msg_tx: Option<mpsc::Sender<ConnectionStorageEntry>>,
         max_connections_per_tracker: usize,
         local_addrs: HashSet<IpAddr>,
         raw_sock: R,
     ) -> ConnectionTracker<'a, R> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let storage_service_msg_tx_clone = storage_service_msg_tx.clone();
         ConnectionTracker {
-            connections: EvictingHashMap::new(max_connections_per_tracker, |_, _| {}),
+            connections: EvictingHashMap::new(
+                max_connections_per_tracker,
+                move |_k, v: Connection| {
+                    send_connection_storage_msg(&storage_service_msg_tx_clone, v);
+                },
+            ),
             local_addrs,
             raw_sock,
+            storage_service_msg_tx,
             log_dir,
-            storage_service_client,
             dns_tx: None,
             tx,
             rx,
         }
     }
 
-    pub fn set_dns_tracker(&mut self, dns_tx: UnboundedSender<DnsTrackerMessage>) {
+    pub fn set_dns_tracker(&mut self, dns_tx: mpsc::UnboundedSender<DnsTrackerMessage>) {
         self.dns_tx = Some(dns_tx);
     }
 
@@ -302,7 +324,10 @@ where
                 }
                 Close => {
                     debug!("Deleting from connection tracker: {}", key);
-                    self.connections.remove(&key);
+                    let conn = self.connections.remove(&key);
+                    if let Some(conn) = conn {
+                        send_connection_storage_msg(&self.storage_service_msg_tx, conn);
+                    }
                 }
             }
         }
@@ -534,7 +559,7 @@ impl Connection {
         raw_sock: &mut R,
         key: &ConnectionKey,
         src_is_local: bool,
-        dns_tx: &Option<UnboundedSender<DnsTrackerMessage>>,
+        dns_tx: &Option<mpsc::UnboundedSender<DnsTrackerMessage>>,
     ) -> ConnectionAction
     where
         R: RawSocketWriter,
@@ -1284,12 +1309,48 @@ impl Connection {
         }
     }
 
+    fn to_connection_storage_entry(&mut self) -> ConnectionStorageEntry {
+        use pb_conntrack_types::MeasurementType;
+        if self.in_active_probe_session() {
+            let probe_round = self.probe_report_summary.raw_reports.len() as u32;
+            self.generate_probe_report(probe_round, None, true);
+        }
+        ConnectionStorageEntry {
+            measurement_type: MeasurementType::UnspecifiedMeasurementType as i32,
+            local_hostname: None, // TODO
+            local_ip: Some(pb_conntrack_types::IpAddr::from(
+                self.connection_key.local_ip,
+            )),
+            local_port: self.connection_key.local_l4_port as u32,
+            remote_hostname: self.remote_hostname.clone(),
+            remote_ip: Some(pb_conntrack_types::IpAddr::from(
+                self.connection_key.remote_ip,
+            )),
+            remote_port: self.connection_key.remote_l4_port as u32,
+            ip_proto: self.connection_key.ip_proto as u32,
+            probe_rounds: self
+                .probe_report_summary
+                .raw_reports
+                .iter()
+                .map(|report| report.to_protobuf())
+                .collect(),
+            user_annotation: self.user_annotation.clone(),
+            user_agent: self.user_agent.clone(),
+            // TODO: populate associated_apps. This is not a straight-forward as it might
+            // appear. Connection::associated_apps is never populated. And in order to
+            // retrieve it from the ProcessTracker, we need to send it a message and wait
+            // for the response. Also the associated apps are not criticial at this stage since
+            // we mostly need router IPs for now.
+            associated_apps: Vec::new(),
+        }
+    }
+
     fn update_udp(
         &self,
         key: &ConnectionKey,
         packet: &OwnedParsedPacket,
         udp: &UdpHeader,
-        dns_tx: &Option<UnboundedSender<DnsTrackerMessage>>,
+        dns_tx: &Option<mpsc::UnboundedSender<DnsTrackerMessage>>,
         src_is_local: bool,
     ) -> ConnectionAction {
         if (src_is_local && udp.destination_port == UDP_DNS_PORT)
@@ -1362,8 +1423,12 @@ impl Connection {
                 }
             }
         }
-        if remote_hostname.is_none() {  // if we're STILL none, log it 
-            warn!("UNABLE to find DNS lookup for {}", self.connection_key.remote_ip)
+        if remote_hostname.is_none() {
+            // if we're STILL none, log it
+            warn!(
+                "UNABLE to find DNS lookup for {}",
+                self.connection_key.remote_ip
+            )
         }
 
         use IpProtocol::*;
