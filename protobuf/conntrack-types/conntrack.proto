@@ -5,13 +5,6 @@ package conntrack;
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
-message IpAddr {
-    oneof ip {
-        fixed32 v4 = 1;
-        bytes v6 = 2;
-    }
-}
-
 enum MeasurementType {
     UnspecifiedMeasurementType = 0;
     FromDesktop = 1;
@@ -37,7 +30,7 @@ message Probe {
     uint32 outgoing_ttl = 2;
     optional google.protobuf.Timestamp out_timestamp = 3;
     optional google.protobuf.Timestamp in_timestamp = 4;
-    optional IpAddr sender_ip = 5;
+    optional string sender_ip = 5;
     // The TTL in the probe response we received. Allows us to guess
     // the distance the respone packet has travelled
     // Not sure if this is useful to infer assymteric routing
@@ -59,11 +52,11 @@ message ProcessInfo {
 message ConnectionStorageEntry {
     MeasurementType measurement_type = 1;
     optional string local_hostname = 2;
-    IpAddr local_ip = 3;
+    string local_ip = 3;
     uint32 local_port = 4;
 
     optional string remote_hostname = 5;
-    IpAddr remote_ip = 6;
+    string remote_ip = 6;
     uint32 remote_port = 7;
 
     uint32 ip_proto = 8;
