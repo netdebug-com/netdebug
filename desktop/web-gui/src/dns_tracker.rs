@@ -115,7 +115,7 @@ impl DnsTracker {
             .expect("tab content div");
         content.set_inner_html("");
 
-        let headers = ["Hostname", "IP Address", "Created", "TTL", "RTT"]
+        let headers = ["Hostname", "IP Address", "Created", "TTL", "Lookup Delay"]
             .into_iter()
             .map(|h| {
                 let e = html!("th").unwrap();
