@@ -266,7 +266,7 @@ where
                 }
             }
         }
-        info!("ConnectionTracker exiting rx_loop()");
+        warn!("ConnectionTracker exiting rx_loop()");
     }
 
     pub fn add(&mut self, packet: OwnedParsedPacket) {
@@ -301,7 +301,7 @@ where
                     }
                 }
                 Close => {
-                    info!("Deleting from connection tracker: {}", key);
+                    debug!("Deleting from connection tracker: {}", key);
                     self.connections.remove(&key);
                 }
             }
@@ -340,7 +340,7 @@ where
             last_packet_time: now,
             remote_hostname: None,
         };
-        info!("Tracking new connection: {}", &key);
+        debug!("Tracking new connection: {}", &key);
 
         self.connections.insert(key.clone(), connection);
     }
