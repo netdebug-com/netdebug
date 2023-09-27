@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::net::IpAddr;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use desktop_common::GuiToServerMessages;
 use libconntrack_wasm::{ConnectionMeasurements, IpProtocol};
 use serde::{Deserialize, Serialize};
@@ -82,6 +82,7 @@ impl TryFrom<String> for FlowRowKey {
 pub struct FlowTracker {
     timeout_id: Option<i32>,
     selected_flow: Option<FlowRowKey>,
+    outstanding_request: Option<DateTime<Utc>>,
 }
 
 pub const FLOW_TRACKER_TAB: &str = "flow_tracker";
@@ -102,6 +103,7 @@ impl FlowTracker {
             data: Some(Box::new(FlowTracker {
                 timeout_id: None,
                 selected_flow: None,
+                outstanding_request: None,
             })),
         }
     }
@@ -162,8 +164,9 @@ impl FlowTracker {
         let flow_tracker = tab
             .get_tab_data::<FlowTracker>()
             .expect("no flowtracker data!?");
+        flow_tracker.outstanding_request = Some(Utc::now());
         // and start a timer closure to do every 500ms for periodic updates
-        setup_periodic_callback(flow_tracker, ws.clone());
+        setup_periodic_callback(flow_tracker, tabs.clone(), ws.clone());
         setup_buttons(flow_tracker, tabs, &content, ws.clone());
     }
 
@@ -189,8 +192,19 @@ impl FlowTracker {
  * TODO: store the timeout period in the `struct FlowTracker` for variable timeouts
  */
 
-fn setup_periodic_callback(flow_tracker: &mut FlowTracker, ws: WebSocket) {
+fn setup_periodic_callback(flow_tracker: &mut FlowTracker, tabs: Tabs, ws: WebSocket) {
     let periodic = Closure::<dyn FnMut(_)>::new(move |_e: MessageEvent| {
+        {
+            let mut locked = tabs.lock().unwrap();
+            if locked.get_active_tab_name() != FLOW_TRACKER_TAB {
+                return;
+            }
+            let flow_tracker = locked.get_active_tab_data::<FlowTracker>().unwrap();
+            if let Some(request_time) = flow_tracker.outstanding_request {
+                console_log!("Warning: not sending another DumpFlow's request - still one outstanding from {}", request_time);
+                return;
+            }
+        }
         let msg = GuiToServerMessages::DumpFlows();
         if let Err(e) = ws.send_with_str(&serde_json::to_string(&msg).unwrap()) {
             console_log!("Error talking to server: {:?}", e);
@@ -224,6 +238,7 @@ fn setup_buttons(flow_tracker: &mut FlowTracker, tabs: Tabs, content: &Element, 
         pause_button.set_inner_html(PAUSE_BUTTON_RESTART_MSG);
     }
 
+    let tabs_clone = tabs.clone();
     let on_click = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
         // all of these clone()'s are so that we can call this function many times
         // instead of just once, e.g., so it's a FnMut rather than a FnOnce
@@ -242,7 +257,7 @@ fn setup_buttons(flow_tracker: &mut FlowTracker, tabs: Tabs, content: &Element, 
             }
             None => {
                 // resetup the periodic callback
-                setup_periodic_callback(flow_tracker, ws.clone());
+                setup_periodic_callback(flow_tracker, tabs_clone.clone(), ws.clone());
                 let button = e.target().unwrap().dyn_into::<Element>().unwrap();
                 button.set_inner_html(PAUSE_BUTTON_PAUSE_MSG);
             }
@@ -279,12 +294,20 @@ pub fn handle_dumpflows_reply(
             if tabs.get_active_tab_name() != FLOW_TRACKER_TAB {
                 return Ok(()); // if the user switched contexts, just ignore this message
             } else {
-                match tabs
+                let flow_tracker = tabs
                     .get_active_tab_data::<FlowTracker>()
-                    .expect("Not a flowtracker!?")
-                    .selected_flow
-                    .clone()
-                {
+                    .expect("Not a flow tracker!?");
+                if let Some(request_time) = flow_tracker.outstanding_request {
+                    let now = Utc::now();
+                    if (now - request_time) > Duration::milliseconds(300) {
+                        console_log!(
+                            "Performance problem: DumpFlows took {} milliseconds",
+                            (now - request_time).num_milliseconds()
+                        );
+                    }
+                }
+                flow_tracker.outstanding_request = None; // mark we've received this request
+                match flow_tracker.selected_flow.clone() {
                     Some(selected_key) => Some(selected_key),
                     None => {
                         // if there is no key selected, e.g., if this is the first time
@@ -436,13 +459,12 @@ fn draw_details(measurements: &ConnectionMeasurements) {
     let document = window().expect("window").document().expect("document");
     let details_view = document.get_element_by_id(FLOW_TRACKER_DETAILS).unwrap();
     details_view.set_inner_html(""); // clear the DIV
-    // draw the hostname if we see it
+                                     // draw the hostname if we see it
     let h2 = html!("h2").unwrap();
     if let Some(hostname) = &measurements.remote_hostname {
         h2.set_inner_html(&hostname);
     } else {
         h2.set_inner_html(format!("IP {}", measurements.remote_ip).as_str());
-
     }
     details_view.append_child(&h2).unwrap();
     if measurements.probe_report_summary.summary.is_empty() {
