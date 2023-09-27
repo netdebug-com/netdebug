@@ -3,11 +3,11 @@
 
 [workspace]
 members = [
-  "libconntrack",
-  "webserver",
-  "webserver/web-client",
   "desktop",
   "desktop/web-gui",
+  "libconntrack",
   "storage-server",
+  "webserver",
+  "webserver/web-client",
 ]
 resolver = "2"
