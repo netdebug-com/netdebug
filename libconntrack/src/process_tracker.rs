@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use std::net::IpAddr;
+use std::{collections::HashMap, time::Instant};
 
 use chrono::Duration;
 #[cfg(not(test))]
@@ -14,7 +14,9 @@ use tokio::{
 };
 
 use crate::connection::ConnectionKey;
+use crate::perf_check;
 
+#[derive(Clone, Debug)]
 pub enum ProcessTrackerMessage {
     LookupOne {
         key: ConnectionKey,
@@ -95,7 +97,8 @@ impl ProcessTracker {
         });
         while let Some(msg) = self.rx.recv().await {
             use ProcessTrackerMessage::*;
-            match msg {
+            let start = Instant::now();
+            match &msg {
                 LookupOne { key, tx } => self.handle_lookup(key, tx),
                 UpdateCache => self.update_cache(),
                 DumpCache { tx } => {
@@ -104,13 +107,23 @@ impl ProcessTracker {
                     }
                 }
                 UpdatePidMapping { pid2process } => {
-                    self.pid2app_name_cache = pid2process;
+                    self.pid2app_name_cache = pid2process.clone();
                 }
             }
+            perf_check!(
+                format!(
+                    "ProcessTracker: message handle {:?} :: {} tcp {} udp",
+                    msg,
+                    self.tcp_cache.len(),
+                    self.udp_cache.len()
+                ),
+                start,
+                std::time::Duration::from_millis(100)
+            );
         }
     }
 
-    fn handle_lookup(&self, key: ConnectionKey, tx: UnboundedSender<Option<ProcessTrackerEntry>>) {
+    fn handle_lookup(&self, key: &ConnectionKey, tx: &UnboundedSender<Option<ProcessTrackerEntry>>) {
         let reply = if key.ip_proto == etherparse::IpNumber::Tcp as u8 {
             if let Some(entry) = self.tcp_cache.get(&key) {
                 Some(entry.clone())

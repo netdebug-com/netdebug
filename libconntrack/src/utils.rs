@@ -76,6 +76,52 @@ pub fn ip_proto_to_string(ip_proto: u8) -> String {
     }
 }
 
+/**
+ * Easy macro to validate that a section of code ran in the given time.
+ * TODO: use features to turn this on/off
+ * TODO: use features to log this data ... somewhere... for regression testing
+ *
+ * perf_check!(message, instant, duration)
+ *
+ * /// use std::time::Instant;
+ * ///
+ * /// let start = Instant::now();
+ * /// // do_something();
+ * /// let (next_time, passed) = perf_check!("do_something()", start, Duration::from_millis(10));
+ * /// assert!(passed);
+ */
+
+#[macro_export]
+macro_rules! perf_check {
+    ($m:expr, $t:expr, $d:expr) => {
+        (|| -> (std::time::Instant, bool) {
+            let now = std::time::Instant::now();
+            let passed = if (now - $t) > $d {
+                log::warn!(
+                    "PERF_CHECK {}:{} failed: {} - {:?} > SLA of {:?}",
+                    file!(),
+                    line!(),
+                    $m,
+                    now - $t,
+                    $d
+                );
+                false
+            } else {
+                log::trace!(
+                    "PERF_CHECK {}:{} passed: {} - {:?} <= SLA of {:?}",
+                    file!(),
+                    line!(),
+                    $m,
+                    now - $t,
+                    $d
+                );
+                true
+            };
+            (now, passed)
+        })()
+    };
+}
+
 #[cfg(test)]
 mod test {
     use super::calc_rtt_ms;
@@ -103,5 +149,19 @@ mod test {
         };
         let diff = calc_rtt_ms(pkt_after, pkt_before);
         assert_eq!(diff, 995.0);
+    }
+
+    #[test]
+    fn perf_check_test() {
+        let start = std::time::Instant::now();
+        let (next_step, passed) =
+            perf_check!("trivial", start, std::time::Duration::from_millis(100));
+        assert!(passed);
+        let (_end, passed) = perf_check!(
+            "bound to fail",
+            next_step,
+            std::time::Duration::from_millis(0)
+        );
+        assert!(!passed);
     }
 }

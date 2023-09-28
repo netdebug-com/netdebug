@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::{collections::{HashMap, HashSet}, time::{Duration, Instant}};
 
 use futures_util::{
     stream::{SplitSink, SplitStream},
@@ -7,7 +7,7 @@ use futures_util::{
 use itertools::Itertools;
 use libconntrack::{
     connection::ConnectionTrackerMsg, dns_tracker::DnsTrackerMessage,
-    process_tracker::ProcessTrackerMessage,
+    process_tracker::ProcessTrackerMessage, perf_check,
 };
 use libconntrack_wasm::ConnectionMeasurements;
 use log::{debug, info, warn};
@@ -92,7 +92,8 @@ async fn handle_gui_to_server_msg(
     dns_tracker: &UnboundedSender<DnsTrackerMessage>,
     process_tracker: &UnboundedSender<ProcessTrackerMessage>,
 ) {
-    match msg {
+    let start = std::time::Instant::now();
+    match &msg {
         GuiToServerMessages::DumpFlows() => {
             debug!("Got DumpFlows request");
             handle_gui_dumpflows(tx, connection_tracker, dns_tracker, process_tracker).await;
@@ -101,6 +102,7 @@ async fn handle_gui_to_server_msg(
             handle_gui_dump_dns_cache(tx, connection_tracker, dns_tracker).await
         }
     }
+    perf_check!("process gui message", start, Duration::from_millis(200));
 }
 
 /**
@@ -131,6 +133,7 @@ async fn handle_gui_dumpflows(
     dns_tracker: &UnboundedSender<DnsTrackerMessage>,
     process_tracker: &UnboundedSender<ProcessTrackerMessage>,
 ) {
+    let perf_conn_track = Instant::now();
     // get the cache of current connections
     let (reply_tx, mut reply_rx) = tokio::sync::mpsc::unbounded_channel();
     let request = ConnectionTrackerMsg::GetConnections { tx: reply_tx };
@@ -144,6 +147,7 @@ async fn handle_gui_dumpflows(
             Vec::new() // just pretend it returned nothing as a hack
         }
     };
+    let (perf_dns, _) = perf_check!("dumpflows: conntrack", perf_conn_track, Duration::from_millis(50));
     // get the DNS cache
     let (dns_tx, mut dns_rx) = tokio::sync::mpsc::unbounded_channel();
     // figure out which IPs we need to lookup?
@@ -161,6 +165,7 @@ async fn handle_gui_dumpflows(
         })
         .expect("dns tracker down?");
     let dns_cache = dns_rx.recv().await.unwrap();
+    let (perf_process, _) = perf_check!("dumpflows: DNS", perf_dns, Duration::from_millis(50));
     // get the process caches
     let (process_tx, mut process_rx) = tokio::sync::mpsc::unbounded_channel();
     process_tracker
@@ -168,11 +173,13 @@ async fn handle_gui_dumpflows(
         .expect("process tracker down?");
     let (tcp_cache, udp_cache) = process_rx.recv().await.unwrap();
 
+    let (perf_join, _) = perf_check!("dumpflows: process_tracker", perf_process, Duration::from_millis(50));
     // now join everything together
     let measurements = connections
         .into_iter()
         .map(|mut c| c.to_connection_measurements(&dns_cache, &tcp_cache, &udp_cache, None))
         .collect::<Vec<ConnectionMeasurements>>();
+    perf_check!("dumpflows: join", perf_join, Duration::from_millis(50));
     if let Err(e) = tx.send(ServerToGuiMessages::DumpFlowsReply(measurements)) {
         warn!("Sending to GUI trigged: {}", e);
     }
