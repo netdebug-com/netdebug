@@ -1880,13 +1880,13 @@ dependencies = [
  "log",
  "pb-conntrack-types",
  "pb-storage-service",
- "pretty_env_logger",
  "prost",
  "rusqlite",
  "tokio",
  "tokio-rusqlite",
  "tonic",
  "tonic-build",
+ "utils",
 ]
 
 [[package]]

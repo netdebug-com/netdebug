@@ -82,15 +82,7 @@ pub struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // if RUST_LOG isn't set explicitly, set RUST_LOG=info as a default
-    if let Err(_) = std::env::var("RUST_LOG") {
-        std::env::set_var("RUST_LOG", "info");
-    }
-    // if RUST_BACKTRACE isn't set explicitly, set RUST_BACKTRACE=1 as a default
-    if let Err(_) = std::env::var("RUST_BACKTRACE") {
-        std::env::set_var("RUST_BACKTRACE", "1");
-    }
-    pretty_env_logger::init();
+    utils::init::netdebug_init();
     let args = Args::parse();
 
     info!("Starting storage server");
