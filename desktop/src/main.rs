@@ -6,7 +6,6 @@ use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg},
     connection_storage_handler::ConnectionStorageHandler,
     dns_tracker::{DnsTracker, DnsTrackerMessage},
-    pcap::{lookup_egress_device, lookup_pcap_device_by_name},
     process_tracker::{ProcessTracker, ProcessTrackerMessage},
 };
 use log::info;
@@ -48,50 +47,16 @@ pub struct Args {
     pub storage_server_url: Option<String>,
 }
 
-fn init_logging() {
-    // if RUST_LOG isn't set explicitly, set RUST_LOG=info as a default
-    if let Err(_) = std::env::var("RUST_LOG") {
-        std::env::set_var("RUST_LOG", "info");
-    }
-    // if RUST_BACKTRACE isn't set explicitly, set RUST_BACKTRACE=1 as a default
-    if let Err(_) = std::env::var("RUST_BACKTRACE") {
-        std::env::set_var("RUST_BACKTRACE", "1");
-    }
-    pretty_env_logger::init();
-}
-
-/**
- * STUB!
- *
- * Iterate through the ethernet interfaces and return the ones that either (1)
- * were specified on the command line or (2) seem alive/active/worth listening
- * to.
- *
- * Right now, just return the one with the default route if not specified.
- * The API supports multiple interfaces to future proof for VPNs, etc.
- */
-
-fn find_interesting_interfaces(
-    device_name: &Option<String>,
-) -> Result<Vec<pcap::Device>, Box<dyn Error>> {
-    let device = match device_name {
-        Some(name) => lookup_pcap_device_by_name(name)?,
-        None => lookup_egress_device()?,
-    };
-
-    Ok(vec![device])
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    init_logging();
+    utils::init::netdebug_init();
 
     let args = Args::parse();
 
     // create a channel for the ConnectionTracker
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ConnectionTrackerMsg>();
 
-    let devices = find_interesting_interfaces(&args.pcap_device)?;
+    let devices = libconntrack::pcap::find_interesting_pcap_interfaces(&args.pcap_device)?;
     let local_addrs = devices
         .iter()
         .map(|d| d.addresses.iter().map(|a| a.addr).collect::<Vec<IpAddr>>())
@@ -118,13 +83,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // pcap on windows doesn't understand tokio/async
         let tx_clone = tx.clone();
         let device_name = dev.name.clone();
-        let _pcap_thread = std::thread::spawn(move || {
-            if let Err(e) =
-                libconntrack::pcap::blocking_pcap_loop(device_name, None, tx_clone, None)
-            {
-                panic!("pcap thread returned: {}", e);
-            }
-        });
+        let _pcap_thread =
+            libconntrack::pcap::run_blocking_pcap_loop_in_thread(device_name, None, tx_clone, None);
     }
 
     // launch the connection tracker as a tokio::task in the background

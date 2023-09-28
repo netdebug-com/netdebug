@@ -85,6 +85,28 @@ pub async fn start_pcap_stream(
     Ok(())
 }
 
+/**
+ * STUB!
+ *
+ * Iterate through the ethernet interfaces and return the ones that either (1)
+ * were specified on the command line or (2) seem alive/active/worth listening
+ * to.
+ *
+ * Right now, just return the one with the default route if not specified.
+ * The API supports multiple interfaces to future proof for VPNs, etc.
+ */
+
+pub fn find_interesting_pcap_interfaces(
+    device_name: &Option<String>,
+) -> Result<Vec<pcap::Device>, Box<dyn Error>> {
+    let device = match device_name {
+        Some(name) => lookup_pcap_device_by_name(name)?,
+        None => lookup_egress_device()?,
+    };
+
+    Ok(vec![device])
+}
+
 // cannot create a const chrono::Duration at compile time, so use seconds instead
 const DEFAULT_STATS_POLLING_FREQUENCY_SECONDS: u64 = 5;
 
@@ -147,6 +169,19 @@ pub fn blocking_pcap_loop(
         }
     }
     // never returns unless there's an error
+}
+
+pub fn run_blocking_pcap_loop_in_thread(
+    device_name: String,
+    filter_rule: Option<String>,
+    tx: tokio::sync::mpsc::UnboundedSender<ConnectionTrackerMsg>,
+    stats_polling_frequency: Option<chrono::Duration>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        if let Err(e) = blocking_pcap_loop(device_name, filter_rule, tx, stats_polling_frequency) {
+            panic!("pcap thread failed to start loop: {}", e);
+        }
+    })
 }
 
 /**
