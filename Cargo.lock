@@ -520,6 +520,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "utils",
  "warp",
  "webserver",
 ]
@@ -1465,6 +1466,17 @@ checksum = "ae005bd773ab59b4725093fd7df83fd7892f7d8eafb48dbd7de6e024e4215f9d"
 dependencies = [
  "proc-macro2",
  "syn 2.0.37",
+]
+
+[[package]]
+name = "probe-o-matic"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "libconntrack",
+ "log",
+ "tokio",
+ "utils",
 ]
 
 [[package]]
