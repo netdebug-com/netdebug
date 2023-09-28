@@ -1,3 +1,7 @@
+use std::time::Duration;
+
+use wasm_bindgen::{prelude::Closure, JsCast, JsValue};
+
 pub fn set_panic_hook() {
     // When the `console_error_panic_hook` feature is enabled, we can call the
     // `set_panic_hook` function at least once during initialization, and then
@@ -71,4 +75,24 @@ macro_rules! html {
     })()
     }
     };
+}
+
+/**
+ * Apparently this is how you do sleep in both rust/wasm AND javascript!?!
+ */
+pub async fn sleep(duration: Duration) -> Result<(), JsValue> {
+    let (send, recv) = futures::channel::oneshot::channel();
+
+    let closure = Closure::<dyn FnOnce()>::once(move || {
+        let _ = send.send(());
+    });
+    web_sys::window()
+        .expect("window")
+        .set_timeout_with_callback_and_timeout_and_arguments_0(
+            closure.as_ref().unchecked_ref(),
+            duration.as_millis() as i32,
+        )?;
+
+    recv.await.map_err(|_| "Canceled")?;
+    Ok(())
 }

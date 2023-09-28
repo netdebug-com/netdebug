@@ -2,7 +2,7 @@ mod dns_tracker;
 mod flow_tracker;
 mod tabs;
 mod utils;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use dns_tracker::DnsTracker;
 use flow_tracker::FlowTracker;
@@ -14,7 +14,9 @@ macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
 }
 
-pub(crate) use console_log; // this allows other modules to use console_log!()
+pub(crate) use console_log;
+
+use crate::utils::sleep; // this allows other modules to use console_log!()
 
 #[wasm_bindgen]
 extern "C" {
@@ -120,9 +122,14 @@ fn handle_version_check(ver: String) -> Result<(), JsValue> {
 }
 
 #[wasm_bindgen(start)]
-pub fn run() -> Result<(), JsValue> {
+pub async fn run() -> Result<(), JsValue> {
     utils::set_panic_hook();
     let ws = create_websocket()?;
+    // wait until the socket is fully connected before we finish out init
+    while ws.ready_state() == 0 {
+        console_log!("Waiting for websocket to finish connecting: current state is {}", ws.ready_state());
+        sleep(Duration::from_millis(10)).await?;
+    }
     let tabs = init_tabs(ws.clone())?;
 
     // Need both tabs and ws to launch the rx closure
