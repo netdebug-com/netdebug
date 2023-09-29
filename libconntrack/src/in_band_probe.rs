@@ -90,7 +90,7 @@ pub mod test {
     use crate::owned_packet::OwnedParsedPacket;
     use crate::pcap::MockRawSocketWriter;
 
-    pub fn test_tcp_packet(src_ip: IpAddr, dst_ip: IpAddr) -> OwnedParsedPacket {
+    pub fn test_tcp_packet(src_ip: IpAddr, dst_ip: IpAddr) -> Box<OwnedParsedPacket> {
         test_tcp_packet_ports(src_ip, dst_ip, 21, 1234)
     }
 
@@ -99,7 +99,7 @@ pub mod test {
         dst_ip: IpAddr,
         tcp_src: u16,
         tcp_dst: u16,
-    ) -> OwnedParsedPacket {
+    ) -> Box<OwnedParsedPacket> {
         let builder = PacketBuilder::ethernet2(
             [1, 2, 3, 4, 5, 6], //source mac
             [7, 8, 9, 10, 11, 12],
@@ -129,7 +129,7 @@ pub mod test {
             len: buf.len() as u32,
         };
         let headers = etherparse::PacketHeaders::from_ethernet_slice(&buf).unwrap();
-        OwnedParsedPacket::new(headers, pcap_header)
+        Box::new(OwnedParsedPacket::new(headers, pcap_header))
     }
 
     #[tokio::test]

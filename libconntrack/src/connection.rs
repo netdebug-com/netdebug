@@ -29,8 +29,9 @@ use crate::{
     in_band_probe::tcp_inband_probe,
     owned_packet::OwnedParsedPacket,
     pcap::RawSocketWriter,
+    perf_check,
     process_tracker::ProcessTrackerEntry,
-    utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, timeval_to_ms}, perf_check,
+    utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, timeval_to_ms},
 };
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ConnectionKey {
@@ -135,7 +136,7 @@ impl ConnectionKey {
  */
 #[derive(Debug)]
 pub enum ConnectionTrackerMsg {
-    Pkt(OwnedParsedPacket), // send to the connection tracker to track
+    Pkt(Box<OwnedParsedPacket>), // send to the connection tracker to track
     ProbeReport {
         key: ConnectionKey,
         clear_state: bool,
@@ -292,7 +293,7 @@ where
         warn!("ConnectionTracker exiting rx_loop()");
     }
 
-    pub fn add(&mut self, packet: OwnedParsedPacket) {
+    pub fn add(&mut self, packet: Box<OwnedParsedPacket>) {
         let mut needs_dns_lookup = false;
         if let Some((key, src_is_local)) = packet.to_connection_key(&self.local_addrs) {
             let connection = match self.connections.get_mut(&key) {
@@ -556,7 +557,7 @@ pub struct Connection {
 impl Connection {
     fn update<R>(
         &mut self,
-        packet: OwnedParsedPacket,
+        packet: Box<OwnedParsedPacket>,
         raw_sock: &mut R,
         key: &ConnectionKey,
         src_is_local: bool,
@@ -1491,7 +1492,11 @@ impl Drop for Connection {
         if self.needs_logging {
             self.log_to_disk();
         }
-        perf_check!("Connection logging to disk", start, std::time::Duration::from_millis(50));
+        perf_check!(
+            "Connection logging to disk",
+            start,
+            std::time::Duration::from_millis(50)
+        );
     }
 }
 
@@ -1749,9 +1754,10 @@ pub mod test {
     async fn icmp4_to_connection_key() {
         let mut local_addrs = HashSet::new();
         local_addrs.insert(IpAddr::from_str("172.31.2.61").unwrap());
-        let probe = OwnedParsedPacket::try_from_fake_time(TEST_PROBE.to_vec()).unwrap();
+        let probe = Box::new(OwnedParsedPacket::try_from_fake_time(TEST_PROBE.to_vec()).unwrap());
 
-        let icmp_reply = OwnedParsedPacket::try_from_fake_time(TEST_REPLY.to_vec()).unwrap();
+        let icmp_reply =
+            Box::new(OwnedParsedPacket::try_from_fake_time(TEST_REPLY.to_vec()).unwrap());
         let (probe_key, src_is_local) = probe.to_connection_key(&local_addrs).unwrap();
         assert!(src_is_local);
 
