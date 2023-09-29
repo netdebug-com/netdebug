@@ -50,10 +50,10 @@ itertools = "0.11.0"
 pb-conntrack-types = { path = "../protobuf/conntrack-types" }
 pb-storage-service = { path = "../protobuf/storage-service" }
 pcap = "1.1.0"
-pretty_env_logger = "0.5.0"
 pwhash = "1.0.0"
 rand = "0.8.5"
 serde = { version = "1.0.163", features = ["derive"] }
 serde_json = "1.0.96"
 tokio = { version = "1.28.2", features = ["full"] }
+utils = { path = "../utils" }
 warp = "0.3.5"

@@ -2524,12 +2524,12 @@ dependencies = [
  "pb-conntrack-types",
  "pb-storage-service",
  "pcap",
- "pretty_env_logger",
  "pwhash",
  "rand",
  "serde",
  "serde_json",
  "tokio",
+ "utils",
  "warp",
 ]
 
