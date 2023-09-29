@@ -6,7 +6,7 @@ use rand::Rng;
 #[cfg(test)]
 use std::{println as debug, println as warn}; // Workaround to use prinltn! for logs.
 
-use std::{collections::HashMap, io::Error, net::IpAddr};
+use std::{collections::HashMap, io::Error, net::IpAddr, str::FromStr};
 use tokio::{
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
@@ -34,6 +34,7 @@ pub struct DnsTracker<'a> {
     pub reverse_map_recently_expired: EvictingHashMap<'a, IpAddr, DnsTrackerEntry>,
     pub pending: HashMap<DnsPendingKey, DnsPendingEntry>,
     pub unparsed_pkt_count: usize,
+    pub local_dns_servers: HashMap<IpAddr, usize>,
 }
 
 pub struct DnsTrackerStats {
@@ -84,6 +85,7 @@ impl<'a> DnsTracker<'a> {
             pending: HashMap::new(),
             reverse_map_recently_expired: EvictingHashMap::new(expired_entries_capacity, |_, _| {}),
             unparsed_pkt_count: 0,
+            local_dns_servers: HashMap::new(),
         }
     }
 
@@ -138,7 +140,7 @@ impl<'a> DnsTracker<'a> {
                     addrs,
                     tx,
                     use_expired,
-                } => self.lookup_batch(addrs, tx, use_expired),
+                } => self.lookup_batch(addrs, tx, use_expired).await,
                 Lookup { ip, key, tx } => self.lookup_for_connection_tracker(ip, key, tx),
                 GetStats { tx } => self.fetch_stats(tx),
             }
@@ -202,6 +204,10 @@ impl<'a> DnsTracker<'a> {
         dns_packet: dns_parser::Packet<'_>,
         _src_is_local: bool,
     ) {
+        // track who sent us a DNS reply
+        let src_dns_server = key.remote_ip.clone();
+        *self.local_dns_servers.entry(src_dns_server).or_insert(0) += 1;
+
         let key = DnsPendingKey {
             connection_key: key,
             transaction_id: dns_packet.header.id,
@@ -344,6 +350,49 @@ impl<'a> DnsTracker<'a> {
         }
     }
 
+    /**
+     * Sometimes we need more clarity and need to lookup an IpAddr ourselves.
+     * This can happen if some program has used an IP without first doing a
+     * plaintext DNS lookup on UDP 53, e.g., if they did a DNS lookup in QUIC
+     * or worse, none at all
+     *
+     * We can just fire and forget this message because if we get a reply, our
+     * standard DNS tracking schemes should parse it and add it into our cache
+     * 
+     * TODO: add some ratelimiting/intelligence to not keep probing the same IP
+     * if we're not getting replies
+     */
+
+    async fn send_dns_ptr_lookup(&mut self, ip: IpAddr) {
+        let dns_server = if self.local_dns_servers.len() > 0 {
+            // pick the most common DNS server we've seen a reply from
+            self.local_dns_servers
+                .iter()
+                .max_by(|(_k1, v1), (_k2, v2)| v2.cmp(&v1))
+                .map(|(k, _v)| k)
+                .unwrap().clone()
+        } else {
+            // we know nothing, just use a global DNS server
+            IpAddr::from_str("8.8.8.8").unwrap()
+        };
+        let request = make_dns_ptr_lookup_request(ip, None).unwrap();
+        let bind_addr = if dns_server.is_ipv4() {
+            "0.0.0.0:53"
+        } else {
+            "[::]:53"
+        };
+        match tokio::net::UdpSocket::bind(bind_addr).await {
+            Ok(udp) => {
+                if let Err(e) = udp.send_to(&request, (dns_server, 53)).await {
+                    warn!("Failed to send UDP DNS lookup: {} : {}", dns_server, e);
+                }
+            }
+            Err(e) => {
+                warn!("Failed to bind a UDP socket on {}  :: {}", bind_addr, e);
+            }
+        } 
+    }
+
     /*
     * Load the OS-level DNS cache info into our cache to pre-populate things
     *
@@ -365,8 +414,6 @@ impl<'a> DnsTracker<'a> {
     where
         R: std::io::Read,
     {
-        use std::str::FromStr;
-
         let all_input = std::io::read_to_string(input).unwrap();
         for line in all_input.lines() {
             let tokens = line.split_whitespace().collect::<Vec<&str>>();
@@ -397,7 +444,7 @@ impl<'a> DnsTracker<'a> {
      * Lookup at batch of IP addresses and send it back to the caller.
      */
 
-    fn lookup_batch(
+    async fn lookup_batch(
         &mut self,
         addrs: Vec<IpAddr>,
         tx: UnboundedSender<HashMap<IpAddr, DnsTrackerEntry>>,
@@ -409,12 +456,16 @@ impl<'a> DnsTracker<'a> {
             // first try the active/valid entries
             if let Some(entry) = self.reverse_map.get(&ip) {
                 answer.insert(ip, entry.clone());
-            } else if use_expired {
+                continue;
+            } 
+            if use_expired {
                 if let Some(entry) = self.reverse_map_recently_expired.get_mut(&ip) {
                     answer.insert(ip, entry.clone());
+                    continue;
                 }
             }
-            /* else -- TODO: do a regular DNS PTR lookup to map the ip to something; for later */
+            /* else -- do a regular DNS PTR lookup to try to map the ip to something */
+            self.send_dns_ptr_lookup(ip).await;
         }
 
         if let Err(e) = tx.send(answer) {
