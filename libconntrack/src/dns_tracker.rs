@@ -358,7 +358,7 @@ impl<'a> DnsTracker<'a> {
      *
      * We can just fire and forget this message because if we get a reply, our
      * standard DNS tracking schemes should parse it and add it into our cache
-     * 
+     *
      * TODO: add some ratelimiting/intelligence to not keep probing the same IP
      * if we're not getting replies
      */
@@ -370,7 +370,8 @@ impl<'a> DnsTracker<'a> {
                 .iter()
                 .max_by(|(_k1, v1), (_k2, v2)| v2.cmp(&v1))
                 .map(|(k, _v)| k)
-                .unwrap().clone()
+                .unwrap()
+                .clone()
         } else {
             // we know nothing, just use a global DNS server
             IpAddr::from_str("8.8.8.8").unwrap()
@@ -390,7 +391,7 @@ impl<'a> DnsTracker<'a> {
             Err(e) => {
                 warn!("Failed to bind a UDP socket on {}  :: {}", bind_addr, e);
             }
-        } 
+        }
     }
 
     /*
@@ -457,7 +458,7 @@ impl<'a> DnsTracker<'a> {
             if let Some(entry) = self.reverse_map.get(&ip) {
                 answer.insert(ip, entry.clone());
                 continue;
-            } 
+            }
             if use_expired {
                 if let Some(entry) = self.reverse_map_recently_expired.get_mut(&ip) {
                     answer.insert(ip, entry.clone());

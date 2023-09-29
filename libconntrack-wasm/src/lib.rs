@@ -11,7 +11,7 @@ pub use connection_measurements::*; // reshare these identifiers in this namespa
 pub struct DnsTrackerEntry {
     pub hostname: String,
     pub created: DateTime<Utc>,
-    pub from_ptr_record:bool,
+    pub from_ptr_record: bool,
     #[serde_as(as = "Option<serde_with::DurationMicroSeconds<i64>>")]
     pub rtt: Option<chrono::Duration>,
     #[serde_as(as = "Option<serde_with::DurationSeconds<i64>>")]

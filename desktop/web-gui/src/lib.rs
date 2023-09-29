@@ -127,7 +127,10 @@ pub async fn run() -> Result<(), JsValue> {
     let ws = create_websocket()?;
     // wait until the socket is fully connected before we finish out init
     while ws.ready_state() == 0 {
-        console_log!("Waiting for websocket to finish connecting: current state is {}", ws.ready_state());
+        console_log!(
+            "Waiting for websocket to finish connecting: current state is {}",
+            ws.ready_state()
+        );
         sleep(Duration::from_millis(10)).await?;
     }
     let tabs = init_tabs(ws.clone())?;

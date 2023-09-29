@@ -1,4 +1,7 @@
-use std::{collections::{HashMap, HashSet}, time::{Duration, Instant}};
+use std::{
+    collections::{HashMap, HashSet},
+    time::{Duration, Instant},
+};
 
 use futures_util::{
     stream::{SplitSink, SplitStream},
@@ -6,8 +9,8 @@ use futures_util::{
 };
 use itertools::Itertools;
 use libconntrack::{
-    connection::ConnectionTrackerMsg, dns_tracker::DnsTrackerMessage,
-    process_tracker::ProcessTrackerMessage, perf_check,
+    connection::ConnectionTrackerMsg, dns_tracker::DnsTrackerMessage, perf_check,
+    process_tracker::ProcessTrackerMessage,
 };
 use libconntrack_wasm::ConnectionMeasurements;
 use log::{debug, info, warn};
@@ -147,7 +150,11 @@ async fn handle_gui_dumpflows(
             Vec::new() // just pretend it returned nothing as a hack
         }
     };
-    let (perf_dns, _) = perf_check!("dumpflows: conntrack", perf_conn_track, Duration::from_millis(50));
+    let (perf_dns, _) = perf_check!(
+        "dumpflows: conntrack",
+        perf_conn_track,
+        Duration::from_millis(50)
+    );
     // get the DNS cache
     let (dns_tx, mut dns_rx) = tokio::sync::mpsc::unbounded_channel();
     // figure out which IPs we need to lookup?
@@ -173,7 +180,11 @@ async fn handle_gui_dumpflows(
         .expect("process tracker down?");
     let (tcp_cache, udp_cache) = process_rx.recv().await.unwrap();
 
-    let (perf_join, _) = perf_check!("dumpflows: process_tracker", perf_process, Duration::from_millis(50));
+    let (perf_join, _) = perf_check!(
+        "dumpflows: process_tracker",
+        perf_process,
+        Duration::from_millis(50)
+    );
     // now join everything together
     let measurements = connections
         .into_iter()
