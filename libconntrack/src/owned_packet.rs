@@ -412,16 +412,18 @@ impl OwnedParsedPacket {
 
     #[cfg(test)]
     // TODO: this looks like the TryFrom trait but actually isn't it which might confuse people
-    pub(crate) fn try_from(pkt: pcap::Packet) -> Result<OwnedParsedPacket, Box<dyn Error>> {
+    pub(crate) fn try_from(pkt: pcap::Packet) -> Result<Box<OwnedParsedPacket>, Box<dyn Error>> {
         let parsed = etherparse::PacketHeaders::from_ethernet_slice(pkt.data)?;
-        Ok(OwnedParsedPacket::new(parsed, pkt.header.clone()))
+        Ok(Box::new(OwnedParsedPacket::new(parsed, pkt.header.clone())))
     }
 
     #[cfg(test)]
     /**
      * Utility to simplify testing - don't use in real code
      */
-    pub(crate) fn try_from_fake_time(pkt: Vec<u8>) -> Result<OwnedParsedPacket, Box<dyn Error>> {
+    pub(crate) fn try_from_fake_time(
+        pkt: Vec<u8>,
+    ) -> Result<Box<OwnedParsedPacket>, Box<dyn Error>> {
         let pcap_header = pcap::PacketHeader {
             ts: libc::timeval {
                 tv_sec: 0,
@@ -431,7 +433,7 @@ impl OwnedParsedPacket {
             len: pkt.len() as u32,
         };
         let parsed = etherparse::PacketHeaders::from_ethernet_slice(&pkt)?;
-        Ok(OwnedParsedPacket::new(parsed, pcap_header))
+        Ok(Box::new(OwnedParsedPacket::new(parsed, pcap_header)))
     }
 }
 

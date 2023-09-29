@@ -12,22 +12,22 @@ use crate::owned_packet::OwnedParsedPacket;
 struct PacketParserCodec {}
 
 impl pcap::PacketCodec for PacketParserCodec {
-    type Item = OwnedParsedPacket;
+    type Item = Box<OwnedParsedPacket>;
 
     fn decode(&mut self, packet: pcap::Packet) -> Self::Item {
         let parsed = etherparse::PacketHeaders::from_ethernet_slice(packet.data);
         if let Ok(pkt) = parsed {
-            OwnedParsedPacket::new(pkt, *packet.header)
+            Box::new(OwnedParsedPacket::new(pkt, *packet.header))
         } else {
             warn!("Failed to parse packet {:?} - punting", packet.data);
-            OwnedParsedPacket {
+            Box::new(OwnedParsedPacket {
                 pcap_header: *packet.header,
                 link: None,
                 vlan: None,
                 ip: None,
                 transport: None,
                 payload: packet.data.to_vec(),
-            }
+            })
         }
     }
 }
@@ -139,7 +139,8 @@ pub fn blocking_pcap_loop(
                 let pkt_timestamp = pkt.header.ts; // save this for stats checking
                 let parsed = etherparse::PacketHeaders::from_ethernet_slice(pkt.data);
                 if let Ok(parsed_pkt) = parsed {
-                    let parsed_packet = OwnedParsedPacket::new(parsed_pkt, pkt.header.clone());
+                    let parsed_packet =
+                        Box::new(OwnedParsedPacket::new(parsed_pkt, pkt.header.clone()));
                     let _hash = parsed_packet.sloppy_hash();
                     // TODO: use this hash to map to 256 parallel ConnectionTrackers for parallelism
                     tx.send(ConnectionTrackerMsg::Pkt(parsed_packet)).unwrap();
