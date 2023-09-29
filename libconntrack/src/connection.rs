@@ -29,8 +29,9 @@ use crate::{
     in_band_probe::tcp_inband_probe,
     owned_packet::OwnedParsedPacket,
     pcap::RawSocketWriter,
+    perf_check,
     process_tracker::ProcessTrackerEntry,
-    utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, timeval_to_ms}, perf_check,
+    utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, timeval_to_ms},
 };
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ConnectionKey {
@@ -1491,7 +1492,11 @@ impl Drop for Connection {
         if self.needs_logging {
             self.log_to_disk();
         }
-        perf_check!("Connection logging to disk", start, std::time::Duration::from_millis(50));
+        perf_check!(
+            "Connection logging to disk",
+            start,
+            std::time::Duration::from_millis(50)
+        );
     }
 }
 

@@ -123,7 +123,11 @@ impl ProcessTracker {
         }
     }
 
-    fn handle_lookup(&self, key: &ConnectionKey, tx: &UnboundedSender<Option<ProcessTrackerEntry>>) {
+    fn handle_lookup(
+        &self,
+        key: &ConnectionKey,
+        tx: &UnboundedSender<Option<ProcessTrackerEntry>>,
+    ) {
         let reply = if key.ip_proto == etherparse::IpNumber::Tcp as u8 {
             if let Some(entry) = self.tcp_cache.get(&key) {
                 Some(entry.clone())
