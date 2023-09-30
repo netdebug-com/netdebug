@@ -465,7 +465,9 @@ where
         if let Some(connection) = self.connections.get_mut(&key) {
             connection.remote_hostname = remote_hostname;
         } else {
-            warn!(
+            // This can happen if the connection is torn down faster than we can get the DNS
+            // name back from the DNS tracker; make it debug for now
+            debug!(
                 "Tried to lookup unknown key {} in the conneciton map trying to set DNS name {:?}",
                 key, remote_hostname
             );
@@ -1411,19 +1413,21 @@ impl Connection {
         match (&remote_hostname, &remote_hostname_dns_cache) {
             (None, None) | (Some(_), Some(_)) => (), // they're in sync
             (None, Some(_)) | (Some(_), None) => {
-                info!(
+                debug!(
                     "DNS cache and stored hostname out of sync: stored {:?} cached {:?}",
                     &remote_hostname, &remote_hostname_dns_cache
                 );
                 // use which ever one we actually have
                 if remote_hostname.is_none() {
+                    // store it this way
+                    self.remote_hostname = remote_hostname_dns_cache.clone();
                     remote_hostname = remote_hostname_dns_cache;
                 }
             }
         }
         if remote_hostname.is_none() {
             // if we're STILL none, log it
-            warn!(
+            debug!(
                 "UNABLE to find DNS lookup for {}",
                 self.connection_key.remote_ip
             )
