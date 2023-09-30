@@ -116,7 +116,7 @@ impl IpProtocol {
 pub struct RateEstimator {
     alpha: f64,
     estimate_rate_per_us: Option<f64>,
-    #[serde(skip)]  // Instant doesn't serde, so skip serializing the time
+    #[serde(skip)] // Instant doesn't serde, so skip serializing the time
     last_sample: Option<std::time::Instant>,
 }
 
@@ -213,7 +213,7 @@ impl RateEstimator {
     }
 }
 
-impl Eq for RateEstimator { }
+impl Eq for RateEstimator {}
 
 /**
  * Rust doesn't like to autoimplement Ord for anything with floats
@@ -227,10 +227,12 @@ impl Ord for RateEstimator {
                     (None, None) => std::cmp::Ordering::Equal,
                     (None, Some(_)) => std::cmp::Ordering::Less,
                     (Some(_), None) => std::cmp::Ordering::Greater,
-                    (Some(e1), Some(e2)) => if e1 > e2 {
-                        std::cmp::Ordering::Greater
-                    } else {
-                        std::cmp::Ordering::Less // don't care about equals in this case
+                    (Some(e1), Some(e2)) => {
+                        if e1 > e2 {
+                            std::cmp::Ordering::Greater
+                        } else {
+                            std::cmp::Ordering::Less // don't care about equals in this case
+                        }
                     }
                 }
             }
