@@ -507,7 +507,7 @@ dependencies = [
  "chrono",
  "clap",
  "desktop_common",
- "etherparse",
+ "etherparse 0.13.0 (git+https://github.com/robs-zeynet/etherparse?branch=tcp_header)",
  "futures",
  "futures-util",
  "itertools 0.11.0",
@@ -626,6 +626,15 @@ checksum = "aa68f1b12764fab894d2755d2518754e71b4fd80ecfb822714a1206c2aab39bf"
 dependencies = [
  "cc",
  "libc",
+]
+
+[[package]]
+name = "etherparse"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "827292ea592108849932ad8e30218f8b1f21c0dfd0696698a18b5d0aed62d990"
+dependencies = [
+ "arrayvec",
 ]
 
 [[package]]
@@ -1091,7 +1100,7 @@ dependencies = [
  "chrono",
  "common",
  "dns-parser",
- "etherparse",
+ "etherparse 0.13.0 (git+https://github.com/robs-zeynet/etherparse?branch=tcp_header)",
  "futures",
  "futures-util",
  "itertools 0.11.0",
@@ -1175,6 +1184,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
 
 [[package]]
+name = "mac_address"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4863ee94f19ed315bf3bc00299338d857d4b5bc856af375cc97d237382ad3856"
+dependencies = [
+ "nix",
+ "winapi",
+]
+
+[[package]]
 name = "matchit"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1196,6 +1215,15 @@ name = "memchr"
 version = "2.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f232d6ef707e1956a43342693d2a31e72989554d58299d7a88738cc95b0d35c"
+
+[[package]]
+name = "memoffset"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
+dependencies = [
+ "autocfg",
+]
 
 [[package]]
 name = "memory_units"
@@ -1275,6 +1303,19 @@ dependencies = [
  "num-derive",
  "num-traits",
  "thiserror",
+]
+
+[[package]]
+name = "nix"
+version = "0.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f3790c00a0150112de0f4cd161e3d7fc4b2d8a5542ffc35f099a2562aecb35c"
+dependencies = [
+ "bitflags 1.3.2",
+ "cc",
+ "cfg-if 1.0.0",
+ "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -1473,8 +1514,10 @@ name = "probe-o-matic"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "etherparse 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libconntrack",
  "log",
+ "mac_address",
  "tokio",
  "utils",
 ]
@@ -2515,7 +2558,7 @@ dependencies = [
  "chrono",
  "clap",
  "common",
- "etherparse",
+ "etherparse 0.13.0 (git+https://github.com/robs-zeynet/etherparse?branch=tcp_header)",
  "futures",
  "futures-util",
  "itertools 0.11.0",

@@ -21,6 +21,10 @@ pub fn etherparse_ipheaders2ipaddr(ip: &Option<IpHeader>) -> Result<(IpAddr, IpA
  *
  * NOTE: this doesn't actually put any packets on the network and should
  * be reasonably cheap to run - just a local route table lookup
+ *
+ * NOTE: At least on MacOs with SLAAC IPv6 config, the OS will prefer a
+ * temporary v6 address as src address, which has a limited lifetime
+ * (couple of days).
  */
 
 pub fn remote_ip_to_local(remote_ip: IpAddr) -> std::io::Result<IpAddr> {
