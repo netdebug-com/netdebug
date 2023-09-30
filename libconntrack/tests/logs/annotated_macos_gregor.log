@@ -43741,5 +43741,21 @@
   },
   "user_annotation": "Macos from home (wifi, comcast).\nRouter is a unifi dream machine. ",
   "log_dir": "logs",
+  "tx_byte_rate": {
+    "alpha": 0.1,
+    "estimate_rate_per_us": 17.480287129143573
+  },
+  "tx_packet_rate": {
+    "alpha": 0.1,
+    "estimate_rate_per_us": 0.09365859350394524
+  },
+  "rx_byte_rate": {
+    "alpha": 0.1,
+    "estimate_rate_per_us": 52.67815350366475
+  },
+  "rx_packet_rate": {
+    "alpha": 0.1,
+    "estimate_rate_per_us": 0.155251295683982
+  },
   "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use common::ProbeReportSummary;
 use serde::{Deserialize, Serialize};
 
-use crate::IpProtocol;
+use crate::{IpProtocol, RateEstimator};
 
 /***
  * The `struct ConnectionMeasurements` contains only the derived connection state
@@ -29,4 +29,8 @@ pub struct ConnectionMeasurements {
     // TODO: add local_syn, remote_syn IP and TCP options
     pub start_tracking_time: DateTime<Utc>, // time tracker: first saw a packet
     pub last_packet_time: DateTime<Utc>,    // time tracker: last saw a packet
+    pub tx_byte_rate: RateEstimator,
+    pub tx_packet_rate: RateEstimator,
+    pub rx_byte_rate: RateEstimator,
+    pub rx_packet_rate: RateEstimator,
 }

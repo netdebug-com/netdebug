@@ -40800,5 +40800,21 @@
     }
   },
   "user_annotation": "Rob turkey turktelekom wifi linux",
+  "tx_byte_rate": {
+    "alpha": 0.1,
+    "estimate_rate_per_us": 17.480287129143573
+  },
+  "tx_packet_rate": {
+    "alpha": 0.1,
+    "estimate_rate_per_us": 0.09365859350394524
+  },
+  "rx_byte_rate": {
+    "alpha": 0.1,
+    "estimate_rate_per_us": 52.67815350366475
+  },
+  "rx_packet_rate": {
+    "alpha": 0.1,
+    "estimate_rate_per_us": 0.155251295683982
+  },
   "log_dir": "logs"
 }
