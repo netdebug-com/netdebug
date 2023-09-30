@@ -1,5 +1,5 @@
 use libconntrack::connection::ConnectionTrackerMsg;
-use libconntrack::pcap::{run_blocking_pcap_loop_in_thread, find_interesting_pcap_interfaces};
+use libconntrack::pcap::{find_interesting_pcap_interfaces, run_blocking_pcap_loop_in_thread};
 use log::{info, warn};
 
 #[tokio::main]
@@ -21,6 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         warn!("Exiting receive loop");
-    }).await?;
+    })
+    .await?;
     Ok(())
 }

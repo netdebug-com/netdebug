@@ -11,6 +11,9 @@ jobs:
       - name: Check out repository code
         uses: actions/checkout@v3
       - run: echo "💡 The ${{ github.repository }} repository has been cloned to the runner."
+      - name: Formatting check
+        # Check the formatting early; this should be done by vscode and/or githooks, but ... sigh
+        run: cargo fmt --check
       - run: echo "🖥️ The workflow is now ready to test your code on the runner."
       - name: Get wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
