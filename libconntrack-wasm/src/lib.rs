@@ -112,8 +112,112 @@ impl IpProtocol {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RateEstimator {
+    alpha: f64,
+    estimate_rate_per_us: Option<f64>,
+    #[serde(skip)]  // Instant doesn't serde, so skip serializing the time
+    last_sample: Option<std::time::Instant>,
+}
+
+// probably sane for most applications
+const DEFAULT_ALPHA: f64 = 0.1;
+
+impl RateEstimator {
+    pub fn new() -> RateEstimator {
+        RateEstimator::with_alpha(DEFAULT_ALPHA)
+    }
+    pub fn with_alpha(alpha: f64) -> RateEstimator {
+        RateEstimator {
+            alpha,
+            estimate_rate_per_us: None,
+            last_sample: None,
+        }
+    }
+
+    /**
+     * Add a new sample to the estimate with the current time
+     */
+    pub fn new_sample(&mut self, count: usize) {
+        self.new_sample_with_time(count, std::time::Instant::now())
+    }
+
+    /**
+     * Add a new sample the estimate with a known time
+     */
+    pub fn new_sample_with_time(&mut self, count: usize, now: std::time::Instant) {
+        if let Some(last_sample) = self.last_sample {
+            // low pass filter; could keep this as a rational, but seems fine for now
+            if now == last_sample {
+                // warn!("Ignoring (effectively infinite) sample with zero duration (now == last_sample)");
+                // silently ignore this as we don't know where to log to in the WASM shared code case :-(
+                return;
+            }
+            let time_delta = now - last_sample;
+            self.new_sample_with_duration(count, time_delta);
+        } else {
+            // ignore first sample, just store the time
+            self.last_sample = Some(now);
+        }
+    }
+
+    /**
+     * Add a new sample to the estimate with a known duration
+     *
+     * Mostly used for testing, but use this when we've already calculated the duration
+     * from the last event
+     *
+     * Will panic!() if called without a previous estimate
+     */
+    fn new_sample_with_duration(&mut self, count: usize, time_delta: std::time::Duration) {
+        let instant_rate = count as f64 / (time_delta.as_micros() as f64);
+        if let Some(old_estimate) = self.estimate_rate_per_us {
+            self.estimate_rate_per_us =
+                Some(instant_rate * self.alpha + (1.0 - self.alpha) * old_estimate);
+        } else {
+            // the instant estimate becomes the full initial estimate
+            self.estimate_rate_per_us = Some(instant_rate);
+        }
+        if let Some(last_sample) = self.last_sample {
+            self.last_sample = Some(last_sample + time_delta);
+        } else {
+            panic!("Can't call RateEstimator::new_sample_with_duration() as the first sample");
+        }
+    }
+
+    pub fn has_estimate(&self) -> bool {
+        self.estimate_rate_per_us.is_some()
+    }
+
+    /**
+     * Get the current rate estimate with best precision
+     *
+     * will return None if we don't have at least two samples
+     */
+    pub fn get_rate(&self) -> Option<(f64, std::time::Duration)> {
+        if let Some(estimate) = self.estimate_rate_per_us {
+            Some((estimate, std::time::Duration::from_micros(1)))
+        } else {
+            None
+        }
+    }
+
+    /**
+     * Get current rate estimate in "per seconds"
+     */
+    pub fn get_rate_per_second(&self) -> Option<f64> {
+        match self.estimate_rate_per_us {
+            Some(estimate) => Some(estimate * 1_000_000.0),
+            None => None,
+        }
+    }
+}
+
+
 #[cfg(test)]
 mod test {
+    use std::time::Duration;
+
     use super::*;
     #[test]
     fn ip_protocol_wire() {
@@ -124,5 +228,31 @@ mod test {
         assert_eq!(UDP, IpProtocol::from_wire(UDP.to_wire()));
         assert_eq!(ICMP, IpProtocol::from_wire(ICMP.to_wire()));
         assert_eq!(ICMP6, IpProtocol::from_wire(ICMP6.to_wire()));
+    }
+
+    #[test]
+    fn rate_estimator() {
+        let mut rate = RateEstimator::new();
+        rate.new_sample(10); // this is ignored, only used to start the timer
+        assert_eq!(rate.get_rate_per_second(), None);
+        rate.new_sample_with_duration(10, Duration::from_secs(1));
+        let (estimate, duration) = rate.get_rate().unwrap();
+        assert_eq!(duration, Duration::from_micros(1));
+        let test_estimate = 10.0 / 1_000_000.0; // 1s == 1e7 us
+        let epsilon = 1e-9;
+        // floating point math can only ever be 'close enough'
+        assert!((test_estimate - estimate).abs() < epsilon);
+        // now update the estimate one last time and make sure it tracks properly
+        rate.new_sample_with_duration(50, Duration::from_secs(1));
+        let (estimate, duration) = rate.get_rate().unwrap();
+        assert_eq!(duration, Duration::from_micros(1));
+        assert!(estimate > test_estimate)
+    }
+
+    #[test]
+    #[should_panic]
+    fn rate_estimator_panic() {
+        let mut rate = RateEstimator::new();
+        rate.new_sample_with_duration(10, Duration::from_secs(1));
     }
 }
