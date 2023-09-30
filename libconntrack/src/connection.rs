@@ -578,10 +578,12 @@ impl Connection {
     {
         self.last_packet_time = Utc::now();
         if src_is_local {
-            self.tx_byte_rate.new_sample(packet.pcap_header.len as usize);
+            self.tx_byte_rate
+                .new_sample(packet.pcap_header.len as usize);
             self.tx_packet_rate.new_sample(1);
         } else {
-            self.rx_byte_rate.new_sample(packet.pcap_header.len as usize);
+            self.rx_byte_rate
+                .new_sample(packet.pcap_header.len as usize);
             self.rx_packet_rate.new_sample(1);
         }
         match &packet.transport {
