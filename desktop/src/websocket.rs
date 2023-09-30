@@ -190,7 +190,7 @@ async fn handle_gui_dumpflows(
         .into_iter()
         .map(|mut c| c.to_connection_measurements(&dns_cache, &tcp_cache, &udp_cache, None))
         .collect::<Vec<ConnectionMeasurements>>();
-    perf_check!("dumpflows: join", perf_join, Duration::from_millis(50));
+    perf_check!("dumpflows: join", perf_join, Duration::from_millis(100));
     if let Err(e) = tx.send(ServerToGuiMessages::DumpFlowsReply(measurements)) {
         warn!("Sending to GUI trigged: {}", e);
     }
