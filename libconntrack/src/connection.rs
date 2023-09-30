@@ -10,7 +10,7 @@ use common::{
     ProbeReportEntry, ProbeReportSummary, ProbeRoundReport, PROBE_MAX_TTL,
 };
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
-use libconntrack_wasm::{DnsTrackerEntry, IpProtocol};
+use libconntrack_wasm::{DnsTrackerEntry, IpProtocol, RateEstimator};
 #[cfg(not(test))]
 use log::{debug, info, warn};
 use netstat2::ProtocolSocketInfo;
@@ -366,6 +366,10 @@ where
             start_tracking_time: now,
             last_packet_time: now,
             remote_hostname: None,
+            tx_byte_rate: RateEstimator::new(),
+            rx_byte_rate: RateEstimator::new(),
+            tx_packet_rate: RateEstimator::new(),
+            rx_packet_rate: RateEstimator::new(),
         };
         debug!("Tracking new connection: {}", &key);
 
@@ -555,6 +559,10 @@ pub struct Connection {
     pub user_agent: Option<String>, // when created via a web request, store the user-agent header
     pub associated_apps: Option<HashMap<u32, Option<String>>>, // PID --> ProcessName, if we know it
     pub remote_hostname: Option<String>, // the FQDN of the remote host, if we know it
+    pub tx_byte_rate: RateEstimator,
+    pub tx_packet_rate: RateEstimator,
+    pub rx_byte_rate: RateEstimator,
+    pub rx_packet_rate: RateEstimator,
 }
 impl Connection {
     fn update<R>(
@@ -569,6 +577,13 @@ impl Connection {
         R: RawSocketWriter,
     {
         self.last_packet_time = Utc::now();
+        if src_is_local {
+            self.tx_byte_rate.new_sample(packet.pcap_header.len as usize);
+            self.tx_packet_rate.new_sample(1);
+        } else {
+            self.rx_byte_rate.new_sample(packet.pcap_header.len as usize);
+            self.rx_packet_rate.new_sample(1);
+        }
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
                 if src_is_local {
@@ -1482,6 +1497,10 @@ impl Connection {
             associated_apps,
             start_tracking_time: self.start_tracking_time.clone(),
             last_packet_time: self.last_packet_time,
+            tx_byte_rate: self.tx_byte_rate.clone(),
+            tx_packet_rate: self.tx_packet_rate.clone(),
+            rx_byte_rate: self.rx_byte_rate.clone(),
+            rx_packet_rate: self.rx_packet_rate.clone(),
         }
     }
 }

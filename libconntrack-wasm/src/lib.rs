@@ -112,7 +112,7 @@ impl IpProtocol {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct RateEstimator {
     alpha: f64,
     estimate_rate_per_us: Option<f64>,
@@ -213,6 +213,30 @@ impl RateEstimator {
     }
 }
 
+impl Eq for RateEstimator { }
+
+/**
+ * Rust doesn't like to autoimplement Ord for anything with floats
+ */
+impl Ord for RateEstimator {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.partial_cmp(other) {
+            Some(o) => o,
+            None => {
+                match (self.estimate_rate_per_us, other.estimate_rate_per_us) {
+                    (None, None) => std::cmp::Ordering::Equal,
+                    (None, Some(_)) => std::cmp::Ordering::Less,
+                    (Some(_), None) => std::cmp::Ordering::Greater,
+                    (Some(e1), Some(e2)) => if e1 > e2 {
+                        std::cmp::Ordering::Greater
+                    } else {
+                        std::cmp::Ordering::Less // don't care about equals in this case
+                    }
+                }
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {
