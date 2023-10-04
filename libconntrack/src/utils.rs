@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use chrono::Duration;
+use chrono::{DateTime, Utc};
 use etherparse::IpHeader;
 
 pub fn etherparse_ipheaders2ipaddr(ip: &Option<IpHeader>) -> Result<(IpAddr, IpAddr), pcap::Error> {
@@ -38,34 +38,20 @@ pub fn remote_ip_to_local(remote_ip: IpAddr) -> std::io::Result<IpAddr> {
 
 /**
  * Calculate the time between when packet_before was sent and pkt_after was received
- *
- * NOTE: we do not encode the _milliseconds_ part of the reply into the type
- * (e.g., ala std::time::Duration) because we need to communicate this value over
- * JSON which could get messy
  */
 
-pub fn calc_rtt_ms(pkt_after: pcap::PacketHeader, pkt_before: pcap::PacketHeader) -> f64 {
-    // my kingdom for timesub(3) - it's not in libc because it's just a macro
-    let mut secs = (pkt_after.ts.tv_sec - pkt_before.ts.tv_sec) as f64;
-    let mut usecs = (pkt_after.ts.tv_usec - pkt_before.ts.tv_usec) as f64;
-    if usecs < 0.0 {
-        secs -= 1.0;
-        usecs += 1_000_000.0;
-    }
-    secs * 1000.0 + usecs / 1000.0
+pub fn calc_rtt_ms(pkt_after: DateTime<Utc>, pkt_before: DateTime<Utc>) -> f64 {
+    let dt = pkt_after - pkt_before;
+    (dt.num_microseconds().unwrap_or(i64::MAX) as f64) / 1000.
 }
 
 /**
- * Convert a libc::timeval to an f64 in _milliseconds_ that can be compared to
+ * Convert a DateTime<Utc> to an f64 in _milliseconds_ that can be compared to
  * the output of Javascript's performance::now()
  */
 
-pub fn timeval_to_ms(tv: libc::timeval) -> f64 {
-    (tv.tv_sec as f64 * 1000.0) + (tv.tv_usec as f64 / 1000.0)
-}
-
-pub fn timeval_to_duration(tv: libc::timeval) -> chrono::Duration {
-    Duration::microseconds(tv.tv_sec as i64 * 1_000_000 + tv.tv_usec as i64)
+pub fn timestamp_to_ms(ts: DateTime<Utc>) -> f64 {
+    ts.timestamp_micros() as f64 / 1000.
 }
 
 // really should exist in some library somewhere
@@ -128,30 +114,15 @@ macro_rules! perf_check {
 
 #[cfg(test)]
 mod test {
-    use super::calc_rtt_ms;
+    use super::*;
 
     #[test]
     // so sad that I have to test this; maybe #[ignore] now that it works?
     fn verify_calc_rtt() {
-        let b = libc::timeval {
-            tv_sec: 1,
-            tv_usec: 0,
-        };
-        let a = libc::timeval {
-            tv_sec: 0,
-            tv_usec: 5_000,
-        };
-        let pkt_after = pcap::PacketHeader {
-            ts: b,
-            caplen: 0,
-            len: 0,
-        };
-        let pkt_before = pcap::PacketHeader {
-            ts: a,
-            caplen: 0,
-            len: 0,
-        };
-        let diff = calc_rtt_ms(pkt_after, pkt_before);
+        use chrono::TimeZone;
+        let a = Utc.timestamp_opt(1, 0).unwrap();
+        let b = Utc.timestamp_opt(0, 5_000_000).unwrap();
+        let diff = calc_rtt_ms(a, b);
         assert_eq!(diff, 995.0);
     }
 

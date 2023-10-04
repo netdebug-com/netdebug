@@ -20,7 +20,7 @@ use dns_parser::{self, QueryType};
 
 pub const UDP_DNS_PORT: u16 = 53;
 pub struct DnsPendingEntry {
-    sent_timestamp: Duration,
+    sent_timestamp: DateTime<Utc>,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -44,7 +44,7 @@ pub struct DnsTrackerStats {
 pub enum DnsTrackerMessage {
     NewEntry {
         key: ConnectionKey,
-        timestamp: Duration,
+        timestamp: DateTime<Utc>,
         data: Vec<u8>,
         src_is_local: bool,
     },
@@ -150,7 +150,7 @@ impl<'a> DnsTracker<'a> {
     async fn parse_dns(
         &mut self,
         key: ConnectionKey,
-        timestamp: Duration,
+        timestamp: DateTime<Utc>,
         data: Vec<u8>,
         src_is_local: bool,
     ) {
@@ -179,7 +179,7 @@ impl<'a> DnsTracker<'a> {
     fn parse_dns_request(
         &mut self,
         key: ConnectionKey,
-        timestamp: Duration,
+        timestamp: DateTime<Utc>,
         dns_packet: dns_parser::Packet<'_>,
         _src_is_local: bool,
     ) {
@@ -200,7 +200,7 @@ impl<'a> DnsTracker<'a> {
     fn parse_dns_reply(
         &mut self,
         key: ConnectionKey,
-        timestamp: Duration,
+        timestamp: DateTime<Utc>,
         dns_packet: dns_parser::Packet<'_>,
         _src_is_local: bool,
     ) {
@@ -648,10 +648,10 @@ mod test {
         connection::{test::test_dir, ConnectionTracker},
         owned_packet::OwnedParsedPacket,
         pcap::MockRawSocketWriter,
-        utils,
     };
 
     use super::*;
+    use chrono::TimeZone;
     use std::{collections::HashSet, str::FromStr};
 
     #[tokio::test]
@@ -678,16 +678,14 @@ mod test {
             remote_l4_port: 53,
             ip_proto: 6,
         };
-        let timestamp = Duration::microseconds(0);
+        let t0 = Utc.timestamp_opt(0, 0).unwrap();
         dns_tracker
-            .parse_dns(key.clone(), timestamp, request.to_vec(), true)
+            .parse_dns(key.clone(), t0, request.to_vec(), true)
             .await;
         assert_eq!(dns_tracker.pending.len(), 1);
         assert_eq!(dns_tracker.reverse_map.len(), 0);
-        let timestamp = Duration::microseconds(100);
-        dns_tracker
-            .parse_dns(key, timestamp, reply.to_vec(), true)
-            .await;
+        let t1 = Utc.timestamp_opt(0, 100_000).unwrap();
+        dns_tracker.parse_dns(key, t1, reply.to_vec(), true).await;
         assert_eq!(dns_tracker.pending.len(), 0);
         assert_eq!(dns_tracker.reverse_map.len(), 4);
         if let Some((ip, entry)) = dns_tracker.reverse_map.iter().next() {
@@ -700,7 +698,7 @@ mod test {
             ]);
             assert!(valid_ips.contains(ip));
             assert!(!entry.from_ptr_record);
-            assert_eq!(entry.rtt.unwrap(), timestamp); // RTT is the second timestamp b/c first is zero
+            assert_eq!(entry.rtt.unwrap(), t1 - t0); // RTT is the second timestamp b/c first is zero
         } else {
             panic!("No DNS entry cached!?");
         }
@@ -747,9 +745,8 @@ mod test {
             };
             assert!(udp.source_port == UDP_DNS_PORT || udp.destination_port == UDP_DNS_PORT);
             let (key, src_is_local) = pkt.to_connection_key(&local_addrs).unwrap();
-            let timestamp = utils::timeval_to_duration(pkt.pcap_header.ts.clone());
             dns_tracker
-                .parse_dns(key, timestamp, pkt.payload, src_is_local)
+                .parse_dns(key, pkt.timestamp, pkt.payload, src_is_local)
                 .await;
         }
         // TODO: sanity check this data; for now just parsing is enough
@@ -959,7 +956,7 @@ mod test {
             remote_l4_port: 53,
             ip_proto: 6,
         };
-        let timestamp = Duration::microseconds(0);
+        let timestamp = DateTime::<Utc>::UNIX_EPOCH;
         dns_tracker
             .parse_dns(key.clone(), timestamp, dns_ptr_reply.to_vec(), true)
             .await;

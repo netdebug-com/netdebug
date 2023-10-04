@@ -20,14 +20,14 @@ impl pcap::PacketCodec for PacketParserCodec {
             Box::new(OwnedParsedPacket::new(pkt, *packet.header))
         } else {
             warn!("Failed to parse packet {:?} - punting", packet.data);
-            Box::new(OwnedParsedPacket {
-                pcap_header: *packet.header,
+            let fake_pkt = etherparse::PacketHeaders {
                 link: None,
                 vlan: None,
                 ip: None,
                 transport: None,
-                payload: packet.data.to_vec(),
-            })
+                payload: packet.data,
+            };
+            Box::new(OwnedParsedPacket::new(fake_pkt, *packet.header))
         }
     }
 }
