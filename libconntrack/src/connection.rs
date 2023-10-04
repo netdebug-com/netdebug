@@ -31,7 +31,7 @@ use crate::{
     pcap::RawSocketWriter,
     perf_check,
     process_tracker::ProcessTrackerEntry,
-    utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, timeval_to_ms},
+    utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, timestamp_to_ms},
 };
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ConnectionKey {
@@ -578,12 +578,10 @@ impl Connection {
     {
         self.last_packet_time = Utc::now();
         if src_is_local {
-            self.tx_byte_rate
-                .new_sample(packet.pcap_header.len as usize);
+            self.tx_byte_rate.new_sample(packet.len as usize);
             self.tx_packet_rate.new_sample(1);
         } else {
-            self.rx_byte_rate
-                .new_sample(packet.pcap_header.len as usize);
+            self.rx_byte_rate.new_sample(packet.len as usize);
             self.rx_packet_rate.new_sample(1);
         }
         match &packet.transport {
@@ -960,7 +958,8 @@ impl Connection {
         // but right now we're creating this embedded packet twice!
         match OwnedParsedPacket::from_partial_embedded_ip_packet(
             &packet.payload,
-            Some(packet.pcap_header),
+            packet.timestamp,
+            packet.len, // TODO: should we adjust the length here? But not clear to what w/o first parsing the pkt
         ) {
             Ok((pkt, _partial)) => {
                 if let Some(probe_id) = self.is_reply_heuristic(&pkt) {
@@ -1080,7 +1079,7 @@ impl Connection {
                         );
                     }
                     let probe = probe_set.iter().next().unwrap();
-                    let out_timestamp_ms = timeval_to_ms(probe.pcap_header.ts);
+                    let out_timestamp_ms = timestamp_to_ms(probe.timestamp);
                     if let Some(reply_set) = probe_round.incoming_reply_timestamps.get(&ttl) {
                         if reply_set.len() != 1 {
                             comment.push_str(
@@ -1093,7 +1092,7 @@ impl Connection {
                         }
                         // found a probe and a reply!
                         let reply = reply_set.iter().next().unwrap();
-                        let rtt_ms = calc_rtt_ms(reply.pcap_header, probe.pcap_header);
+                        let rtt_ms = calc_rtt_ms(reply.timestamp, probe.timestamp);
                         if matches!(&reply.transport, Some(TransportHeader::Tcp(_tcph))) {
                             report.insert(
                                 ttl,
@@ -1159,7 +1158,7 @@ impl Connection {
                         // found a reply with out a probe (?) - can happen when pcap drops packets
                         let reply = reply_set.iter().next().unwrap();
                         // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
-                        let in_timestamp_ms = timeval_to_ms(reply.pcap_header.ts);
+                        let in_timestamp_ms = timestamp_to_ms(reply.timestamp);
                         if matches!(&reply.transport, Some(TransportHeader::Tcp(_tcp))) {
                             report.insert(
                                 ttl,
@@ -1375,11 +1374,10 @@ impl Connection {
         {
             // are we tracking DNS?
             if let Some(dns_tx) = dns_tx {
-                let timestamp = utils::timeval_to_duration(packet.pcap_header.ts);
                 if let Err(e) = dns_tx.send(DnsTrackerMessage::NewEntry {
                     key: key.clone(),
                     data: packet.payload.clone(),
-                    timestamp,
+                    timestamp: packet.timestamp,
                     src_is_local,
                 }) {
                     warn!("Error sending to DNS Tracker: {}", e);

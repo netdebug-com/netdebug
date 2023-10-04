@@ -1,10 +1,10 @@
 use std::{collections::HashSet, error::Error, net::IpAddr};
 
+use chrono::{DateTime, Utc};
 use etherparse::{
     Icmpv4Header, Icmpv6Header, IpHeader, IpNumber, TcpHeader, TransportHeader, UdpHeader,
 };
 use log::warn;
-use pcap::PacketHeader;
 use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
 
 use crate::connection::ConnectionKey;
@@ -24,7 +24,13 @@ use crate::connection::ConnectionKey;
 #[allow(dead_code)]
 pub struct OwnedParsedPacket {
     // timestamp and other capture info
-    pub pcap_header: pcap::PacketHeader,
+    //pub pcap_header: pcap::PacketHeader,
+    /// The pcap timestamp when the packet was captured
+    pub timestamp: DateTime<Utc>,
+    /// The length of the packet, in bytes (which might be more than the number of bytes available
+    /// from the capture, if the length of the packet is larger than the maximum number of bytes to
+    /// capture)
+    pub len: u32,
     /// Ethernet II header if present.
     pub link: Option<etherparse::Ethernet2Header>,
     /// Single or double vlan headers if present.
@@ -50,6 +56,16 @@ impl std::hash::Hash for OwnedParsedPacket {
     }
 }
 
+fn pcap_timestamp_to_utc(pcap_header: &pcap::PacketHeader) -> DateTime<Utc> {
+    use chrono::TimeZone;
+    Utc.timestamp_opt(
+        pcap_header.ts.tv_sec as i64,
+        (pcap_header.ts.tv_usec * 1000) as u32,
+    )
+    .unwrap()
+    // TODO: should we handle conversion errors more gracefully??
+}
+
 impl OwnedParsedPacket {
     /**
      * Create a new OwnedParsedPacket from a pcap capture
@@ -59,7 +75,8 @@ impl OwnedParsedPacket {
         pcap_header: pcap::PacketHeader,
     ) -> OwnedParsedPacket {
         OwnedParsedPacket {
-            pcap_header,
+            timestamp: pcap_timestamp_to_utc(&pcap_header),
+            len: pcap_header.len,
             link: headers.link,
             vlan: headers.vlan,
             ip: headers.ip,
@@ -260,7 +277,11 @@ impl OwnedParsedPacket {
         &self,
         local_addrs: &HashSet<IpAddr>,
     ) -> Option<(ConnectionKey, bool)> {
-        match OwnedParsedPacket::from_partial_embedded_ip_packet(&self.payload, None) {
+        match OwnedParsedPacket::from_partial_embedded_ip_packet(
+            &self.payload,
+            DateTime::<Utc>::UNIX_EPOCH,
+            0,
+        ) {
             Err(e) => {
                 warn!("Unparsed packet: {} : {:?}", e, self.payload);
                 None
@@ -326,19 +347,9 @@ impl OwnedParsedPacket {
 
     pub fn from_partial_embedded_ip_packet(
         buf: &[u8],
-        pcap_header: Option<pcap::PacketHeader>,
+        timestamp: DateTime<Utc>,
+        len: u32,
     ) -> Result<(OwnedParsedPacket, bool), Box<dyn Error>> {
-        let pcap_header = match pcap_header {
-            Some(hdr) => hdr,
-            None => pcap::PacketHeader {
-                ts: libc::timeval {
-                    tv_sec: 0,
-                    tv_usec: 0,
-                },
-                caplen: buf.len() as u32,
-                len: buf.len() as u32,
-            },
-        };
         match etherparse::PacketHeaders::from_ip_slice(buf) {
             // case #1 - we didn't find a full packet
             Err(e1) => {
@@ -373,7 +384,8 @@ impl OwnedParsedPacket {
                 let tcph = TcpHeader::new(sport, dport, seq, 0);
                 Ok((
                     OwnedParsedPacket {
-                        pcap_header,
+                        timestamp,
+                        len,
                         link: None,
                         vlan: None,
                         ip: Some(ip),
@@ -397,7 +409,8 @@ impl OwnedParsedPacket {
                 // NOTE that the returned src_is_local logic will be wrong
                 Ok((
                     OwnedParsedPacket {
-                        pcap_header,
+                        timestamp,
+                        len,
                         link: None,
                         vlan: None,
                         ip: embedded.ip,
@@ -453,13 +466,8 @@ impl Serialize for OwnedParsedPacket {
     {
         // the pcap header doesn't implement serialize - hack around that
         let mut state = serializer.serialize_struct("struct OwnedParsedPacket", 6)?;
-        let pcap_header = (
-            self.pcap_header.ts.tv_sec,
-            self.pcap_header.ts.tv_usec,
-            self.pcap_header.caplen,
-            self.pcap_header.len,
-        );
-        state.serialize_field("pcapheader", &pcap_header)?;
+        state.serialize_field("timestamp", &self.timestamp)?;
+        state.serialize_field("len", &self.len)?;
 
         if let Some(eth) = &self.link {
             let mut buf = Vec::with_capacity(eth.header_len());
@@ -505,7 +513,8 @@ impl<'de> Deserialize<'de> for OwnedParsedPacket {
         #[derive(Deserialize)]
         #[serde(field_identifier, rename_all = "lowercase")]
         enum Fields {
-            PcapHeader,
+            Timestamp,
+            Len,
             Eth,
             Vlan,
             Ip,
@@ -531,16 +540,9 @@ impl<'de> Deserialize<'de> for OwnedParsedPacket {
             where
                 A: serde::de::MapAccess<'de>,
             {
-                let pcap_header = PacketHeader {
-                    ts: libc::timeval {
-                        tv_sec: 0,
-                        tv_usec: 0,
-                    },
-                    caplen: 0,
-                    len: 0,
-                };
                 let mut pkt = OwnedParsedPacket {
-                    pcap_header,
+                    timestamp: DateTime::<Utc>::UNIX_EPOCH,
+                    len: 0,
                     link: None,
                     vlan: None,
                     ip: None,
@@ -550,29 +552,10 @@ impl<'de> Deserialize<'de> for OwnedParsedPacket {
 
                 while let Some(key) = map.next_key::<Fields>()? {
                     match key {
-                        Fields::PcapHeader => {
-                            // windows uses i32 instead of i64 for the timestamps
-                            // mac uses i32 for usec but not for sec
-                            // linux uses i64 for both!?
-                            #[cfg(windows)]
-                            let (sec, usec, caplen, len) =
-                                map.next_value::<(i32, i32, u32, u32)>()?;
-                            #[cfg(target_os = "linux")]
-                            let (sec, usec, caplen, len) =
-                                map.next_value::<(i64, i64, u32, u32)>()?;
-                            #[cfg(target_os = "macos")]
-                            let (sec, usec, caplen, len) =
-                                map.next_value::<(i64, i32, u32, u32)>()?;
-                            // if none of these OS's, fail compilation
-                            pkt.pcap_header = PacketHeader {
-                                ts: libc::timeval {
-                                    tv_sec: sec,
-                                    tv_usec: usec,
-                                },
-                                caplen,
-                                len,
-                            };
+                        Fields::Timestamp => {
+                            pkt.timestamp = map.next_value::<DateTime<Utc>>()?;
                         }
+                        Fields::Len => pkt.len = map.next_value::<u32>()?,
                         Fields::Eth => {
                             let buf = map.next_value::<Vec<u8>>()?;
                             let (hdr, _payload) =
@@ -634,6 +617,8 @@ impl<'de> Deserialize<'de> for OwnedParsedPacket {
 
 #[cfg(test)]
 mod test {
+    use chrono::TimeZone;
+
     use crate::connection;
 
     use super::*;
@@ -644,14 +629,8 @@ mod test {
             OwnedParsedPacket::try_from_fake_time(connection::test::TEST_1_LOCAL_SYN.to_vec())
                 .unwrap();
         // put real data in the pcap_header, so we test that as well
-        orig_pkt.pcap_header = PacketHeader {
-            ts: libc::timeval {
-                tv_sec: 1,
-                tv_usec: 2,
-            },
-            caplen: 3,
-            len: 4,
-        };
+        orig_pkt.timestamp = Utc.timestamp_opt(1234, 567000).unwrap();
+        orig_pkt.len = 8;
         let json = serde_json::to_string(&orig_pkt).unwrap();
 
         let new_pkt = serde_json::from_str(&json).unwrap();
