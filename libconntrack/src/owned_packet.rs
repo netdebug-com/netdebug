@@ -85,6 +85,22 @@ impl OwnedParsedPacket {
         }
     }
 
+    pub fn from_headers_and_ts(
+        headers: etherparse::PacketHeaders,
+        timestamp: DateTime<Utc>,
+        len: u32,
+    ) -> OwnedParsedPacket {
+        OwnedParsedPacket {
+            timestamp,
+            len,
+            link: headers.link,
+            vlan: headers.vlan,
+            ip: headers.ip,
+            transport: headers.transport,
+            payload: headers.payload.to_vec(),
+        }
+    }
+
     /***
      * Much like a five-tuple ECMP hash, but just use
      * the highest layer that's defined rather than the

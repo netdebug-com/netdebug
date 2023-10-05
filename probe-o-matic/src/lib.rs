@@ -1,5 +1,8 @@
-use etherparse::{IpHeader, Ipv4Extensions, Ipv6Extensions};
-use libconntrack::{connection::ConnectionTrackerMsg, pcap::RawSocketWriter};
+use chrono::{DateTime, Utc};
+use etherparse::{icmpv4, Icmpv4Type, IpHeader, Ipv4Extensions, Ipv6Extensions, TransportHeader};
+use libconntrack::{
+    connection::ConnectionTrackerMsg, owned_packet::OwnedParsedPacket, pcap::RawSocketWriter,
+};
 use log::{info, warn};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use tokio::sync::mpsc;
@@ -18,25 +21,243 @@ pub fn to_socket_addr_v6(sa: SocketAddr) -> Option<SocketAddrV6> {
     }
 }
 
+/**
+ Basic information of the probing machine's local addresses, src ports,
+ and the MAC address of the gateway to use for probes
+*/
 #[derive(Clone, Debug)]
-pub struct OutgoingAddressConfig {
+pub struct LocalAddressConfig {
+    /// The MAC address of the (default) gateway to send probes to
     pub gateway_mac: mac_address::MacAddress,
+    /// MAC of the outgoing interface
     pub src_mac: mac_address::MacAddress,
+    /// IP + UDP port for outgoing probes
     pub v4_src_addr: SocketAddrV4,
+    /// IP + UDP port for outgoing probes
     pub v6_src_addr: SocketAddrV6,
+    /// Interface name to probe from
     pub if_name: String,
+}
+
+impl LocalAddressConfig {
+    /// Return true if the src_ip, src_port of `hdr` is a local address
+    pub fn is_local_socket_addr(&self, hdr: &SimpleHeader) -> bool {
+        let addr = SocketAddr::new(hdr.src_ip, hdr.src_port);
+        match addr {
+            SocketAddr::V4(v4) => v4 == self.v4_src_addr,
+            SocketAddr::V6(v6) => v6 == self.v6_src_addr,
+        }
+    }
 }
 
 pub enum ProbeOMaticMsg {
     ProbeAddr(IpAddr),
 }
 
-#[allow(unused)] // TODO: raw_sock and addr_config are unused for now
+/// A simplified enum to represent the type of packet we are
+/// dealing with
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+enum SimpleProtocol {
+    /// A UDP packet, which we use for outgoing probes
+    Udp,
+    /// An ICMP port unreachable, which we expect for incoming probes
+    IcmpPortUnreachable,
+    /// Anything else
+    Other,
+}
+
+/// A simple way to represent a 5-tuple (plus some additional useful info)
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct SimpleHeader {
+    /// Timestamp the packet was captured (from pcap)
+    timestamp: DateTime<Utc>,
+    src_ip: IpAddr,
+    dst_ip: IpAddr,
+    protocol: SimpleProtocol,
+    /// If it's an IPv4 packet: the IP_ID
+    ip_id: Option<u16>,
+    ttl: u8,
+    /// If protocol == Udp: the UDP src port, 0 otherwise
+    src_port: u16,
+    /// If protocol == Udp: the UDP dst port, 0 otherwise
+    dst_port: u16,
+    /// payload len (as derived/inferred from udphdr.length field)
+    /// For IcmpPortUnreachable it will be the length inferred from the
+    /// embedded udphdr
+    payload_len: u16,
+}
+
+impl TryFrom<&OwnedParsedPacket> for SimpleHeader {
+    type Error = ProbeInfoError;
+
+    fn try_from(pkt: &OwnedParsedPacket) -> Result<Self, Self::Error> {
+        // Check that we have both L3 and L4 header and unpack them from their Option's
+        // if we do have them.
+        let (ip_header, transport_header) = match (pkt.ip.as_ref(), pkt.transport.as_ref()) {
+            (Some(ip), Some(transport)) => (ip, transport),
+            _ => return Err(ProbeInfoError::NotAProbe),
+        };
+
+        let (src_port, dst_port, proto, payload_len) = match transport_header {
+            TransportHeader::Udp(udphdr) => (
+                udphdr.source_port,
+                udphdr.destination_port,
+                SimpleProtocol::Udp,
+                udphdr.length.saturating_sub(8 /* len of udp hdr */),
+            ),
+            TransportHeader::Icmpv4(icmp4) => match &icmp4.icmp_type {
+                Icmpv4Type::DestinationUnreachable(unreach_hdr)
+                    if *unreach_hdr == icmpv4::DestUnreachableHeader::Port =>
+                {
+                    (
+                        0,
+                        0,
+                        SimpleProtocol::IcmpPortUnreachable,
+                        pkt.payload.len() as u16,
+                    )
+                }
+                _ => (0, 0, SimpleProtocol::Other, 0),
+            },
+            _ => (0, 0, SimpleProtocol::Other, 0),
+        };
+        match ip_header {
+            IpHeader::Version4(v4hdr, _) => Ok(SimpleHeader {
+                timestamp: pkt.timestamp,
+                src_ip: IpAddr::from(v4hdr.source),
+                dst_ip: IpAddr::from(v4hdr.destination),
+                protocol: proto,
+                ip_id: Some(v4hdr.identification),
+                ttl: v4hdr.time_to_live,
+                src_port,
+                dst_port,
+                payload_len,
+            }),
+
+            IpHeader::Version6(v6hdr, _) => Ok(SimpleHeader {
+                timestamp: pkt.timestamp,
+                src_ip: IpAddr::from(v6hdr.source),
+                dst_ip: IpAddr::from(v6hdr.destination),
+                protocol: proto,
+                ip_id: None,
+                ttl: v6hdr.hop_limit,
+                src_port,
+                dst_port,
+                payload_len,
+            }),
+        }
+    }
+}
+
+/// Direction of probe packets sniffed by pcap
+#[derive(Hash, PartialEq, Eq, Debug, Clone, Copy)]
+enum ProbeDirection {
+    /// Probe is sent by us
+    Outgoing,
+    /// Response from the remote side
+    Incoming,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ProbeInfoError {
+    #[error("failed to parse packet data")]
+    PacketParsingError(#[from] Box<dyn std::error::Error>),
+    #[error("Packet is not a probe")]
+    NotAProbe,
+}
+
+impl PartialEq for ProbeInfoError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::PacketParsingError(l0), Self::PacketParsingError(r0)) => {
+                l0.to_string() == r0.to_string()
+            }
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
+}
+
+/// Summary of incoming or outgoing probes
+#[derive(Hash, PartialEq, Eq, Debug, Clone)]
+pub struct ProbePacketInfo {
+    /// The IP address of our target that we sent the probe to
+    target_ip: IpAddr,
+    /// The port we sent the probe to. Usually one of the traceroute ports
+    port: u16,
+    /// Timestamp when the packet was captured by pcap
+    timestamp: DateTime<Utc>,
+    /// Direction of the probe
+    direction: ProbeDirection,
+    /// The IP_ID we chose when we sent the packet (if IPv4)
+    /// Is set for both outgoing and incomning probes (if IPv4)
+    our_ip_id: Option<u16>,
+    /// For incoming probes: the IP_ID that the remote side (i.e., the
+    /// target) put in its response packet. Used for IP_ID velocity
+    remote_ip_id: Option<u16>,
+    /// For incoming probes: the IP that the remote/target sent the
+    /// response from. This could be the `target_ip`, but could also
+    /// be another IP/interface on the same router
+    remote_src_ip: Option<IpAddr>,
+    /// Identifies the number/sequence of probes we sent. We use the
+    /// payload length to encode it.
+    probe_num: u16,
+}
+
+impl ProbePacketInfo {
+    pub fn try_from_parsed_packet(
+        addr_config: &LocalAddressConfig,
+        pkt: Box<OwnedParsedPacket>,
+    ) -> Result<Self, ProbeInfoError> {
+        if pkt.ip.is_none() || pkt.transport.is_none() {
+            return Err(ProbeInfoError::NotAProbe);
+        }
+
+        let hdr = SimpleHeader::try_from(&*pkt).unwrap();
+
+        match hdr.protocol {
+            SimpleProtocol::Udp if addr_config.is_local_socket_addr(&hdr) => Ok(ProbePacketInfo {
+                target_ip: hdr.dst_ip,
+                port: hdr.dst_port,
+                timestamp: hdr.timestamp,
+                direction: ProbeDirection::Outgoing,
+                our_ip_id: hdr.ip_id,
+                remote_ip_id: None,
+                remote_src_ip: None,
+                probe_num: hdr.payload_len,
+            }),
+            SimpleProtocol::IcmpPortUnreachable => {
+                let inner_pkt = OwnedParsedPacket::from_partial_embedded_ip_packet(
+                    &pkt.payload,
+                    pkt.timestamp,
+                    pkt.payload.len() as u32,
+                )?
+                .0;
+                let inner_hdr = SimpleHeader::try_from(&inner_pkt)?;
+                if addr_config.is_local_socket_addr(&inner_hdr) {
+                    Ok(ProbePacketInfo {
+                        target_ip: inner_hdr.dst_ip,
+                        port: inner_hdr.dst_port,
+                        timestamp: inner_hdr.timestamp,
+                        direction: ProbeDirection::Incoming,
+                        our_ip_id: inner_hdr.ip_id,
+                        remote_ip_id: hdr.ip_id, // this is the ip_id of the outer packet
+                        remote_src_ip: Some(hdr.src_ip), // The src_ip in the outer packet
+                        probe_num: inner_hdr.payload_len,
+                    })
+                } else {
+                    Err(ProbeInfoError::NotAProbe)
+                }
+            }
+            _ => Err(ProbeInfoError::NotAProbe),
+        }
+    }
+}
+
+#[allow(unused)] // TODO: raw_sock is unused for now
 pub struct ProbeOMatic {
     pkt_rx: mpsc::UnboundedReceiver<ConnectionTrackerMsg>,
     probe_rx: mpsc::UnboundedReceiver<ProbeOMaticMsg>,
     raw_sock: Box<dyn RawSocketWriter>,
-    addr_config: OutgoingAddressConfig,
+    addr_config: LocalAddressConfig,
 }
 
 impl ProbeOMatic {
@@ -44,7 +265,7 @@ impl ProbeOMatic {
         pkt_rx: mpsc::UnboundedReceiver<ConnectionTrackerMsg>,
         probe_rx: mpsc::UnboundedReceiver<ProbeOMaticMsg>,
         raw_sock: Box<dyn RawSocketWriter>,
-        addr_config: OutgoingAddressConfig,
+        addr_config: LocalAddressConfig,
     ) -> tokio::task::JoinHandle<()> {
         let mut pom = ProbeOMatic {
             pkt_rx,
@@ -72,7 +293,15 @@ impl ProbeOMatic {
     fn handle_conn_msg(&self, msg: ConnectionTrackerMsg) {
         use ConnectionTrackerMsg::*;
         match msg {
-            Pkt(_pkt) => info!("Got a packet"),
+            Pkt(pkt) => match ProbePacketInfo::try_from_parsed_packet(&self.addr_config, pkt) {
+                Ok(_probe_info) => info!("We got a probe packet"),
+                Err(e1) => match e1 {
+                    ProbeInfoError::PacketParsingError(e2) => {
+                        warn!("Failed to parse packet: {}", e2)
+                    }
+                    ProbeInfoError::NotAProbe => info!("We got a Not-A-Probe"),
+                },
+            },
             _ => warn!("We can only handle `Pkt` messages, but got: {:?}", msg),
         }
     }
@@ -86,7 +315,7 @@ impl ProbeOMatic {
 }
 
 pub fn create_probe_packet(
-    addr_config: &OutgoingAddressConfig,
+    addr_config: &LocalAddressConfig,
     dst: SocketAddr,
     ttl: u8,
     payload: &[u8],
@@ -137,12 +366,13 @@ pub fn create_probe_packet(
 #[cfg(test)]
 mod test {
     use super::*;
-    use etherparse::{PacketHeaders, TransportHeader};
+    use chrono::TimeZone;
+    use etherparse::{IcmpEchoHeader, PacketHeaders, TransportHeader};
     use mac_address::MacAddress;
     use std::{net::Ipv6Addr, str::FromStr};
 
-    fn mk_addr_config() -> OutgoingAddressConfig {
-        OutgoingAddressConfig {
+    fn mk_addr_config() -> LocalAddressConfig {
+        LocalAddressConfig {
             gateway_mac: MacAddress::new([1, 2, 3, 4, 5, 6]),
             src_mac: MacAddress::new([7, 8, 9, 10, 11, 12]),
             v4_src_addr: SocketAddrV4::from_str("1.2.3.4:42").unwrap(),
@@ -218,5 +448,202 @@ mod test {
         assert_eq!(udphdr.destination_port, 5353);
 
         assert_eq!(parsed.payload, &[0xca, 0xfe, 0xd0, 0x0d]);
+    }
+
+    #[test]
+    fn test_udp_probe_packet_handling() {
+        let dst = SocketAddr::from_str("8.8.8.8:53").unwrap();
+        let addr_config = mk_addr_config();
+
+        let serialized = create_probe_packet(&addr_config, dst, 12, &[0xde, 0xad, 0xbe, 0xef]);
+        let parsed = PacketHeaders::from_ethernet_slice(&serialized).unwrap();
+        let ts = Utc.timestamp_opt(1696473476, 12345).unwrap();
+        let owned_packet = Box::new(OwnedParsedPacket::from_headers_and_ts(
+            parsed,
+            ts,
+            serialized.len() as u32,
+        ));
+        let simple_hdr = SimpleHeader::try_from(&*owned_packet).unwrap();
+        assert_eq!(simple_hdr.timestamp, ts);
+        assert_eq!(simple_hdr.src_ip, IpAddr::from_str("1.2.3.4").unwrap());
+        assert_eq!(simple_hdr.dst_ip, IpAddr::from_str("8.8.8.8").unwrap());
+        assert_eq!(simple_hdr.ip_id, Some(0x4242));
+        assert_eq!(simple_hdr.ttl, 12);
+        assert_eq!(simple_hdr.protocol, SimpleProtocol::Udp);
+        assert_eq!(simple_hdr.src_port, 42);
+        assert_eq!(simple_hdr.dst_port, 53);
+        assert_eq!(simple_hdr.payload_len, 4);
+
+        let ppi = ProbePacketInfo::try_from_parsed_packet(&addr_config, owned_packet).unwrap();
+        assert_eq!(ppi.timestamp, ts);
+        assert_eq!(ppi.target_ip, IpAddr::from_str("8.8.8.8").unwrap());
+        assert_eq!(ppi.direction, ProbeDirection::Outgoing);
+        assert_eq!(ppi.port, 53);
+        assert_eq!(ppi.our_ip_id, Some(0x4242));
+        assert_eq!(ppi.remote_ip_id, None);
+        assert_eq!(ppi.remote_src_ip, None);
+        assert_eq!(ppi.probe_num, 4);
+    }
+
+    fn mk_not_a_probe_udp() -> Vec<u8> {
+        let mut buf = Vec::<u8>::new();
+        let payload = vec![0xa, 0xb, 0xc];
+        etherparse::PacketBuilder::ipv4([10, 0, 0, 1], [6, 7, 8, 9], 20 /* ttl */)
+            .udp(1024 /* sport */, 123 /* dport */)
+            .write(&mut buf, &payload)
+            .unwrap();
+        buf
+    }
+
+    #[test]
+    fn test_udp_not_a_probe_packet_handling() {
+        let raw_pkt = mk_not_a_probe_udp();
+        let parsed = etherparse::PacketHeaders::from_ip_slice(&raw_pkt).unwrap();
+        let ts = Utc.timestamp_opt(1696473476, 12345).unwrap();
+        let owned_packet = Box::new(OwnedParsedPacket::from_headers_and_ts(
+            parsed,
+            ts,
+            raw_pkt.len() as u32,
+        ));
+        let addr_config = mk_addr_config();
+        assert_eq!(
+            ProbePacketInfo::try_from_parsed_packet(&addr_config, owned_packet),
+            Err(ProbeInfoError::NotAProbe)
+        );
+    }
+
+    #[test]
+    fn test_tcp_packet_handling() {
+        let mut buf = Vec::<u8>::new();
+        let payload = vec![0xa, 0xb, 0xc];
+        etherparse::PacketBuilder::ipv4([1, 2, 3, 4], [6, 7, 8, 9], 20 /* ttl */)
+            .tcp(
+                1024, /* sport */
+                80,   /* dport */
+                0,    /* seq */
+                0,    /* win */
+            )
+            .write(&mut buf, &payload)
+            .unwrap();
+        let parsed = etherparse::PacketHeaders::from_ip_slice(&buf).unwrap();
+        let ts = Utc.timestamp_opt(1696473476, 12345).unwrap();
+        let owned_packet = Box::new(OwnedParsedPacket::from_headers_and_ts(
+            parsed,
+            ts,
+            buf.len() as u32,
+        ));
+        let simple_hdr = SimpleHeader::try_from(&*owned_packet).unwrap();
+        assert_eq!(simple_hdr.timestamp, ts);
+        assert_eq!(simple_hdr.src_ip, IpAddr::from_str("1.2.3.4").unwrap());
+        assert_eq!(simple_hdr.dst_ip, IpAddr::from_str("6.7.8.9").unwrap());
+        assert!(simple_hdr.ip_id.is_some());
+        assert_eq!(simple_hdr.ttl, 20);
+        // SimpleHeader doesn't handle TCP yet
+        assert_eq!(simple_hdr.protocol, SimpleProtocol::Other);
+        assert_eq!(simple_hdr.src_port, 0);
+        assert_eq!(simple_hdr.dst_port, 0);
+        assert_eq!(simple_hdr.payload_len, 0);
+
+        let addr_config = mk_addr_config();
+        assert_eq!(
+            ProbePacketInfo::try_from_parsed_packet(&addr_config, owned_packet),
+            Err(ProbeInfoError::NotAProbe)
+        );
+    }
+
+    fn mk_iph_with_icmp4() -> IpHeader {
+        let mut iph = etherparse::Ipv4Header::new(
+            0,
+            42, /* ttl */
+            etherparse::ip_number::ICMP,
+            [10, 0, 0, 1], // src IP doesn't have to be target IP
+            [1, 2, 3, 4],
+        );
+        iph.identification = 0x2323;
+        IpHeader::Version4(iph, Default::default())
+    }
+
+    #[test]
+    fn test_icmp_probe_packet_handling() {
+        let dst = SocketAddr::from_str("8.8.8.8:53").unwrap();
+        let addr_config = mk_addr_config();
+
+        let serialized_embedded = create_probe_packet(&addr_config, dst, 12, &[0xde, 0xad]);
+        // skip ethernet header (14 bytes) and truncate payload (2 bytes)
+        let serialized_partial_embedded = &serialized_embedded[14..(serialized_embedded.len() - 2)];
+
+        let mut buf = Vec::<u8>::new();
+        etherparse::PacketBuilder::ip(mk_iph_with_icmp4())
+            .icmpv4(Icmpv4Type::DestinationUnreachable(
+                icmpv4::DestUnreachableHeader::Port,
+            ))
+            .write(&mut buf, serialized_partial_embedded)
+            .unwrap();
+
+        let parsed = etherparse::PacketHeaders::from_ip_slice(&buf).unwrap();
+        let ts = Utc.timestamp_opt(1696473476, 12345).unwrap();
+        let owned_packet = Box::new(OwnedParsedPacket::from_headers_and_ts(
+            parsed,
+            ts,
+            buf.len() as u32,
+        ));
+        let addr_config = mk_addr_config();
+        let ppi = ProbePacketInfo::try_from_parsed_packet(&addr_config, owned_packet).unwrap();
+        assert_eq!(ppi.timestamp, ts);
+        assert_eq!(ppi.target_ip, IpAddr::from_str("8.8.8.8").unwrap());
+        assert_eq!(ppi.direction, ProbeDirection::Incoming);
+        assert_eq!(ppi.port, 53);
+        assert_eq!(ppi.our_ip_id, Some(0x4242));
+        assert_eq!(ppi.remote_ip_id, Some(0x2323));
+        assert_eq!(
+            ppi.remote_src_ip,
+            Some(IpAddr::from_str("10.0.0.1").unwrap())
+        );
+        assert_eq!(ppi.probe_num, 2);
+    }
+
+    #[test]
+    fn test_icmp_not_a_probe_packet_handling() {
+        let serialized_embedded = mk_not_a_probe_udp();
+        // 20 bytes IP + 8 byte UDP header
+        let serialized_partial_embedded = &serialized_embedded[0..28];
+
+        let mut buf = Vec::<u8>::new();
+        etherparse::PacketBuilder::ip(mk_iph_with_icmp4())
+            .icmpv4(Icmpv4Type::DestinationUnreachable(
+                icmpv4::DestUnreachableHeader::Port,
+            ))
+            .write(&mut buf, serialized_partial_embedded)
+            .unwrap();
+
+        let parsed = etherparse::PacketHeaders::from_ip_slice(&buf).unwrap();
+        let ts = Utc.timestamp_opt(1696473476, 12345).unwrap();
+        let owned_packet = Box::new(OwnedParsedPacket::from_headers_and_ts(
+            parsed,
+            ts,
+            buf.len() as u32,
+        ));
+        let addr_config = mk_addr_config();
+        assert_eq!(
+            ProbePacketInfo::try_from_parsed_packet(&addr_config, owned_packet),
+            Err(ProbeInfoError::NotAProbe),
+        );
+
+        buf.clear();
+        etherparse::PacketBuilder::ip(mk_iph_with_icmp4())
+            .icmpv4(Icmpv4Type::EchoReply(IcmpEchoHeader { id: 1, seq: 2 }))
+            // EchoReply payload can be arbritrary, so we just put the embedded packet there.
+            .write(&mut buf, serialized_partial_embedded)
+            .unwrap();
+        let parsed = etherparse::PacketHeaders::from_ip_slice(&buf).unwrap();
+        let owned_packet = Box::new(OwnedParsedPacket::from_headers_and_ts(
+            parsed,
+            ts,
+            buf.len() as u32,
+        ));
+        assert_eq!(
+            ProbePacketInfo::try_from_parsed_packet(&addr_config, owned_packet),
+            Err(ProbeInfoError::NotAProbe),
+        );
     }
 }
