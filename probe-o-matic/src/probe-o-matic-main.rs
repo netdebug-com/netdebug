@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let src_mac = mac_address::mac_address_by_name(&dev.name)?.unwrap();
     info!("Got pcap device: {}, mac address {} ", dev.name, src_mac);
     // TODO: can check that the src IPs are actually IPs on the pcap_device
-    let outgoing_addr_config = OutgoingAddressConfig {
+    let outgoing_addr_config = LocalAddressConfig {
         gateway_mac,
         src_mac,
         v4_src_addr: to_socket_addr_v4(v4_sock.local_addr()?).unwrap(),
