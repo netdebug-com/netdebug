@@ -1484,6 +1484,10 @@ impl Connection {
             _ => HashMap::new(), // no info
         };
         libconntrack_wasm::ConnectionMeasurements {
+            tx_byte_rate: self.tx_byte_rate.clone(),
+            tx_packet_rate: self.tx_packet_rate.clone(),
+            rx_byte_rate: self.rx_byte_rate.clone(),
+            rx_packet_rate: self.rx_packet_rate.clone(),
             local_hostname,
             local_ip: self.connection_key.local_ip.clone(),
             local_l4_port: self.connection_key.local_l4_port,
@@ -1497,10 +1501,6 @@ impl Connection {
             associated_apps,
             start_tracking_time: self.start_tracking_time.clone(),
             last_packet_time: self.last_packet_time,
-            tx_byte_rate: self.tx_byte_rate.clone(),
-            tx_packet_rate: self.tx_packet_rate.clone(),
-            rx_byte_rate: self.rx_byte_rate.clone(),
-            rx_packet_rate: self.rx_packet_rate.clone(),
         }
     }
 }
