@@ -5,6 +5,7 @@ use libconntrack::{
 };
 use log::{debug, error, info, trace, warn};
 use priority_queue::PriorityQueue;
+use serde::{Deserialize, Serialize};
 use std::{
     cmp::Reverse,
     collections::HashMap,
@@ -178,7 +179,7 @@ impl TryFrom<&OwnedParsedPacket> for SimpleHeader {
 }
 
 /// Direction of probe packets sniffed by pcap
-#[derive(Hash, PartialEq, Eq, Debug, Clone, Copy)]
+#[derive(Hash, PartialEq, Eq, Debug, Clone, Copy, Serialize, Deserialize)]
 enum ProbeDirection {
     /// Probe is sent by us
     Outgoing,
@@ -206,7 +207,7 @@ impl PartialEq for ProbeInfoError {
 }
 
 /// Summary of incoming or outgoing probes
-#[derive(Hash, PartialEq, Eq, Debug, Clone)]
+#[derive(Hash, PartialEq, Eq, Debug, Clone, Serialize, Deserialize)]
 pub struct ProbePacketInfo {
     /// The IP address of our target that we sent the probe to
     target_ip: IpAddr,
@@ -282,6 +283,7 @@ impl ProbePacketInfo {
     }
 }
 
+#[derive(Serialize, Debug)]
 struct InProgressProbeState {
     target: IpAddr,
     next_probe_num: u16,
@@ -289,6 +291,7 @@ struct InProgressProbeState {
     // While permit is never read, dropping it has the side effect of returning it
     // to its semaphore
     #[allow(dead_code)]
+    #[serde(skip)]
     permit: OwnedSemaphorePermit,
 }
 
@@ -442,7 +445,11 @@ impl ProbeOMatic {
         if let Some(probe_state) = self.probes.get_mut(&ip) {
             if probe_state.all_probes_sent() {
                 info!("We are done for IP {}", ip);
-                info!("{}", probe_state);
+                debug!("{}", probe_state);
+                println!(
+                    "{}",
+                    serde_json::to_string(probe_state).unwrap_or("".to_string())
+                );
                 // TODO: ship off finished probe_state
                 self.probes.remove(&ip);
                 return;
