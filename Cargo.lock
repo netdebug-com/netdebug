@@ -1521,6 +1521,8 @@ dependencies = [
  "log",
  "mac_address",
  "priority-queue",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "utils",
