@@ -2,9 +2,13 @@ use clap::Parser;
 use lib_probe_o_matic::*;
 use libconntrack::connection::ConnectionTrackerMsg;
 use libconntrack::pcap::{find_interesting_pcap_interfaces, run_blocking_pcap_loop_in_thread};
-use log::info;
+use log::{info, warn};
+use std::io;
 use std::net::IpAddr;
 use std::str::FromStr;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
+use tokio::time::Duration;
 
 /// Probe-o-matic: for probing router IPs
 #[derive(Parser, Debug, Clone)]
@@ -17,10 +21,25 @@ struct Args {
     #[arg(long)]
     pub gateway_mac: String,
 
+    /// Maximum number of IPs that will be probed in parallel
+    #[arg(long, default_value_t = 5)]
+    pub max_parallel_probes: usize,
+
     /// which pcap device to listen on (and send probes on); default is autodetect
     #[arg(long, default_value = None)]
     pub pcap_device: Option<String>,
+
+    /// Whether to read IPs to probe from stdin (one per line) or
+    /// from the commandline
+    #[arg(long, default_value_t = false)]
+    pub ips_from_stdin: bool,
+
+    /// List of IPs to probe, unless --ips-from-stdin is given
+    #[arg(name = "ip")]
+    pub ips: Vec<String>,
 }
+
+const GOOGLE_DNS_IPV6: &'static str = "2001:4860:4860::8888";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,8 +53,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let v4_sock = std::net::UdpSocket::bind("0.0.0.0:0").expect("Unable to bind v4 socket");
     let v6_sock = std::net::UdpSocket::bind("[::]:0").expect("Unable to bind v6 socket");
 
-    v4_sock.connect(("8.8.8.8", 53))?;
-    v6_sock.connect(("2001:4860:4860::8888", 53))?;
+    v4_sock
+        .connect(("8.8.8.8", 53))
+        .expect("Failed to bind v4 socket");
+    let v6_disabled = if let Err(_) = v6_sock.connect((GOOGLE_DNS_IPV6, 53)) {
+        warn!("No IPv6 route found. Ignoring IPv6");
+        true
+    } else {
+        false
+    };
+
     info!("Local addr {}", v4_sock.local_addr()?);
     info!("Local addr {}", v6_sock.local_addr()?);
 
@@ -54,7 +81,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let (pkt_tx, pkt_rx) = tokio::sync::mpsc::unbounded_channel::<ConnectionTrackerMsg>();
-    let (probe_tx, probe_rx) = tokio::sync::mpsc::unbounded_channel::<ProbeOMaticMsg>();
     let _handle = run_blocking_pcap_loop_in_thread(
         dev.name.clone(),
         Some(args.pcap_filter.clone()),
@@ -63,15 +89,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     // It appears we have a race between the pcap actually starting and us sending
     // the first probe. So lets simply wait a bit after starting the pcap polling
-    // loop.
-    tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
+    // loop to ensure we won't miss the very first probe
+    tokio::time::sleep(Duration::from_millis(400)).await;
     let raw_sock = Box::new(libconntrack::pcap::bind_writable_pcap_by_name(
         dev.name.clone(),
     )?);
 
-    probe_tx.send(ProbeOMaticMsg::ProbeAddr(IpAddr::from_str("192.168.1.1")?))?;
-    probe_tx.send(ProbeOMaticMsg::ProbeAddr(IpAddr::from_str("10.0.0.1")?))?;
-    probe_tx.send(ProbeOMaticMsg::TheEnd)?;
-    ProbeOMatic::spawn(pkt_rx, probe_rx, raw_sock, outgoing_addr_config).await?;
+    let ips_to_probe: Vec<String> = if args.ips_from_stdin {
+        io::stdin()
+            .lines()
+            .into_iter()
+            .filter_map(|line_opt| line_opt.ok())
+            .collect()
+    } else {
+        args.ips
+    };
+
+    let (probe_req_tx, probe_resp_rx) = tokio::sync::mpsc::unbounded_channel::<ProbeOMaticMsg>();
+    let _input_reader_handle = tokio::spawn(async move {
+        let parallel_probe_meter = Arc::new(Semaphore::new(args.max_parallel_probes));
+        for ip_str in ips_to_probe {
+            match IpAddr::from_str(&ip_str) {
+                Ok(ip) => {
+                    if v6_disabled && ip.is_ipv6() {
+                        info!("Skipping IPv6 address {}", ip);
+                        continue;
+                    }
+                    let permit = parallel_probe_meter.clone().acquire_owned().await.unwrap();
+                    let _ignore_result = probe_req_tx.send(ProbeOMaticMsg::ProbeAddr(ip, permit));
+                    // We don't want to generate periodic bursts of outgoing probe packets. So as
+                    // quick-and-dirty way to mitigate this, we simply wait a small amount of
+                    // time between enqueueing IPs. This won't reduce our throughput since it takes
+                    // many seconds for all probes belonging to an IP to be sent
+                    tokio::time::sleep(Duration::from_millis(3)).await;
+                }
+                Err(e) => warn!("Could not parse {} as IP: {}", ip_str, e),
+            }
+        }
+        let _ignore_result = probe_req_tx.send(ProbeOMaticMsg::TheEnd);
+    });
+    ProbeOMatic::spawn(pkt_rx, probe_resp_rx, raw_sock, outgoing_addr_config).await?;
     Ok(())
 }
