@@ -115,7 +115,7 @@ impl IpProtocol {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct RateEstimator {
     alpha: f64,
-    estimate_rate_per_us: Option<f64>,
+    estimate_rate_per_ns: Option<f64>,
     #[serde(skip)] // Instant doesn't serde, so skip serializing the time
     last_sample: Option<std::time::Instant>,
 }
@@ -130,7 +130,7 @@ impl RateEstimator {
     pub fn with_alpha(alpha: f64) -> RateEstimator {
         RateEstimator {
             alpha,
-            estimate_rate_per_us: None,
+            estimate_rate_per_ns: None,
             last_sample: None,
         }
     }
@@ -170,13 +170,13 @@ impl RateEstimator {
      * Will panic!() if called without a previous estimate
      */
     fn new_sample_with_duration(&mut self, count: usize, time_delta: std::time::Duration) {
-        let instant_rate = count as f64 / (time_delta.as_micros() as f64);
-        if let Some(old_estimate) = self.estimate_rate_per_us {
-            self.estimate_rate_per_us =
+        let instant_rate = count as f64 / (time_delta.as_nanos() as f64);
+        if let Some(old_estimate) = self.estimate_rate_per_ns {
+            self.estimate_rate_per_ns =
                 Some(instant_rate * self.alpha + (1.0 - self.alpha) * old_estimate);
         } else {
             // the instant estimate becomes the full initial estimate
-            self.estimate_rate_per_us = Some(instant_rate);
+            self.estimate_rate_per_ns = Some(instant_rate);
         }
         if let Some(last_sample) = self.last_sample {
             self.last_sample = Some(last_sample + time_delta);
@@ -186,7 +186,7 @@ impl RateEstimator {
     }
 
     pub fn has_estimate(&self) -> bool {
-        self.estimate_rate_per_us.is_some()
+        self.estimate_rate_per_ns.is_some()
     }
 
     /**
@@ -195,8 +195,8 @@ impl RateEstimator {
      * will return None if we don't have at least two samples
      */
     pub fn get_rate(&self) -> Option<(f64, std::time::Duration)> {
-        if let Some(estimate) = self.estimate_rate_per_us {
-            Some((estimate, std::time::Duration::from_micros(1)))
+        if let Some(estimate) = self.estimate_rate_per_ns {
+            Some((estimate, std::time::Duration::from_nanos(1)))
         } else {
             None
         }
@@ -206,9 +206,23 @@ impl RateEstimator {
      * Get current rate estimate in "per seconds"
      */
     pub fn get_rate_per_second(&self) -> Option<f64> {
-        match self.estimate_rate_per_us {
-            Some(estimate) => Some(estimate * 1_000_000.0),
+        match self.estimate_rate_per_ns {
+            Some(estimate) => Some(estimate * 1e9),
             None => None,
+        }
+    }
+
+    /**
+     * Use the SI definitions of Mega (Mega = 1e6), not the compute binary
+     * approximations (e.g., Mega = 2^20)
+     */
+    pub fn get_pretty_rate_per_second(&self, units: &str) -> String {
+        match self.get_rate_per_second() {
+            Some(rate) if rate > 1e9 => format!("{:.2} G{}", rate / 1e9, units),
+            Some(rate) if rate > 1e6 => format!("{:.2} M{}", rate / 1e6, units),
+            Some(rate) if rate > 1e3 => format!("{:.2} K{}", rate / 1e3, units),
+            Some(rate) => format!("{:.2} {}", rate, units),
+            None => "None".to_string(),
         }
     }
 }
@@ -223,7 +237,7 @@ impl Ord for RateEstimator {
         match self.partial_cmp(other) {
             Some(o) => o,
             None => {
-                match (self.estimate_rate_per_us, other.estimate_rate_per_us) {
+                match (self.estimate_rate_per_ns, other.estimate_rate_per_ns) {
                     (None, None) => std::cmp::Ordering::Equal,
                     (None, Some(_)) => std::cmp::Ordering::Less,
                     (Some(_), None) => std::cmp::Ordering::Greater,
@@ -263,15 +277,15 @@ mod test {
         assert_eq!(rate.get_rate_per_second(), None);
         rate.new_sample_with_duration(10, Duration::from_secs(1));
         let (estimate, duration) = rate.get_rate().unwrap();
-        assert_eq!(duration, Duration::from_micros(1));
-        let test_estimate = 10.0 / 1_000_000.0; // 1s == 1e7 us
+        assert_eq!(duration, Duration::from_nanos(1));
+        let test_estimate = 10.0 / 1e9; // 1s == 1e9 ns
         let epsilon = 1e-9;
         // floating point math can only ever be 'close enough'
         assert!((test_estimate - estimate).abs() < epsilon);
         // now update the estimate one last time and make sure it tracks properly
         rate.new_sample_with_duration(50, Duration::from_secs(1));
         let (estimate, duration) = rate.get_rate().unwrap();
-        assert_eq!(duration, Duration::from_micros(1));
+        assert_eq!(duration, Duration::from_nanos(1));
         assert!(estimate > test_estimate)
     }
 
@@ -280,5 +294,21 @@ mod test {
     fn rate_estimator_panic() {
         let mut rate = RateEstimator::new();
         rate.new_sample_with_duration(10, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn rate_estimator_pretty() {
+        for (time, test_str) in [
+            (Duration::from_nanos(1), "2.00 GHz"),
+            (Duration::from_micros(1), "2.00 MHz"),
+            (Duration::from_millis(1), "2.00 KHz"),
+            (Duration::from_secs(1), "2.00 Hz"),
+        ] {
+            let mut test_rate = RateEstimator::new();
+            test_rate.new_sample(10); // this count will be ignored, just the time
+                                      // a rate of 2 every nano second (1e-9) is 2GHz
+            test_rate.new_sample_with_duration(2, time);
+            assert_eq!(test_str, test_rate.get_pretty_rate_per_second("Hz"));
+        }
     }
 }

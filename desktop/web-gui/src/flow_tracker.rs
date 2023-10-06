@@ -128,15 +128,15 @@ impl FlowTracker {
         let th_flow_key = html!("th").unwrap();
         th_flow_key.set_inner_html("Flow Key");
         let th_applications = html!("th").unwrap();
-        th_applications.set_inner_html("Application(s)");
-        let th_lifetime = html!("th").unwrap();
-        th_lifetime.set_inner_html("Lifetime");
-        let th_idle = html!("th").unwrap();
-        th_idle.set_inner_html("Idle");
+        th_applications.set_inner_html("Applications(s)");
+        let th_send = html!("th").unwrap();
+        th_send.set_inner_html("Send Bandwidth");
+        let th_recv = html!("th").unwrap();
+        th_recv.set_inner_html("Recv Bandwidth");
         let thead = html!(
             "thead",
             {},
-            html!("tr", {}, th_applications, th_lifetime, th_idle, th_flow_key).unwrap()
+            html!("tr", {}, th_applications, th_send, th_recv, th_flow_key).unwrap()
         )
         .unwrap();
         let table = html!(
@@ -280,9 +280,10 @@ pub fn handle_dumpflows_reply(
 ) -> Result<(), JsValue> {
     // first, sort the flows
     flows.sort_by(|a, b| {
-        b.last_packet_time
-            .cmp(&a.last_packet_time)
-            .then(a.start_tracking_time.cmp(&b.start_tracking_time))
+        // sort by the max rate (tx or rx) so that most active flows show at the top
+        let max_a = std::cmp::max(&a.tx_byte_rate, &a.rx_byte_rate);
+        let max_b = std::cmp::max(&b.tx_byte_rate, &b.rx_byte_rate);
+        max_b.cmp(max_a)
     });
     // put all of the locked tabs code in the same block
     let selected_flow = match tabs.lock() {
@@ -339,26 +340,27 @@ pub fn handle_dumpflows_reply(
     let tbody = d
         .get_element_by_id(FLOW_TRACKER_TABLE)
         .expect(FLOW_TRACKER_TABLE);
-    tbody.set_inner_html(""); // clear the table (??)
-    let now = Utc::now();
-    // sort by most recently active (lowest to highest), then start time
-    for measurments in flows.into_iter() {
-        let flow_row_key = FlowRowKey::new(&measurments);
+    tbody.set_inner_html(""); // clear the table
+    for measurements in flows.into_iter() {
+        let flow_row_key = FlowRowKey::new(&measurements);
         let flow_elm = html!("td").unwrap();
-        let remote = if let Some(remote) = &measurments.remote_hostname {
+        let remote = if let Some(remote) = &measurements.remote_hostname {
             remote.clone()
         } else {
-            format!("[{}]", measurments.remote_ip)
+            format!("[{}]", measurements.remote_ip)
         };
         flow_elm.set_inner_html(
             format!(
                 "{} ::{} --> {}::{}",
-                measurments.ip_proto, measurments.local_l4_port, remote, measurments.remote_l4_port
+                measurements.ip_proto,
+                measurements.local_l4_port,
+                remote,
+                measurements.remote_l4_port
             )
             .as_str(),
         );
-        let apps = if !measurments.associated_apps.is_empty() {
-            measurments
+        let apps = if !measurements.associated_apps.is_empty() {
+            measurements
                 .associated_apps
                 .iter()
                 .map(|(p, a)| {
@@ -375,15 +377,29 @@ pub fn handle_dumpflows_reply(
         };
         let app_elm = html!("td").unwrap();
         app_elm.set_inner_html(&apps);
-        let life_elm = html!("td").unwrap();
-        let lifetime = now - measurments.start_tracking_time;
-        life_elm.set_inner_html(format!("{} s", lifetime.num_seconds()).as_str());
-        let active_elm = html!("td").unwrap();
-        let activetime = now - measurments.last_packet_time;
-        active_elm.set_inner_html(format!("{} s", activetime.num_seconds()).as_str());
+        let send_bw_elm = html!("td").unwrap();
+        send_bw_elm.set_inner_html(
+            format!(
+                "{}",
+                measurements
+                    .tx_byte_rate
+                    .get_pretty_rate_per_second("Bytes/s")
+            )
+            .as_str(),
+        );
+        let recv_bw_elm = html!("td").unwrap();
+        recv_bw_elm.set_inner_html(
+            format!(
+                "{}",
+                measurements
+                    .rx_byte_rate
+                    .get_pretty_rate_per_second("Byte/s")
+            )
+            .as_str(),
+        );
         let row = html!("tr", 
                     {"name" => flow_row_key.to_string().as_str()
-                }, app_elm, life_elm, active_elm, flow_elm)
+                }, app_elm, send_bw_elm, recv_bw_elm, flow_elm)
         .unwrap()
         .dyn_into::<HtmlElement>()
         .unwrap();
@@ -402,7 +418,7 @@ pub fn handle_dumpflows_reply(
         if let Some(selected_flow) = &selected_flow {
             if *selected_flow == flow_row_key {
                 row.set_class_name("active-row"); // this makes CSS highlight this row
-                draw_details(&measurments);
+                draw_details(&measurements);
                 // selected elements get 'Pin'd to the top
                 tbody.insert_adjacent_element("afterbegin", &row).unwrap();
             } else {
