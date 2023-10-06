@@ -3,7 +3,7 @@ use etherparse::{icmpv4, Icmpv4Type, IpHeader, Ipv4Extensions, Ipv6Extensions, T
 use libconntrack::{
     connection::ConnectionTrackerMsg, owned_packet::OwnedParsedPacket, pcap::RawSocketWriter,
 };
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use priority_queue::PriorityQueue;
 use std::{
     cmp::Reverse,
@@ -11,7 +11,10 @@ use std::{
     fmt::Display,
     net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6},
 };
-use tokio::{sync::mpsc, time::sleep_until};
+use tokio::{
+    sync::{mpsc, OwnedSemaphorePermit},
+    time::{sleep_until, Duration, Instant},
+};
 
 const TIME_BETWEEN_PROBE_MS: u64 = 1_000;
 /// Number of probes to send to the same destination port per IP
@@ -68,8 +71,15 @@ impl LocalAddressConfig {
     }
 }
 
+/// Messages send from the main program to ProbeOMatic to start probing a
+/// target IP (or shutdown processing).
 pub enum ProbeOMaticMsg {
-    ProbeAddr(IpAddr),
+    /// Instruct ProbeOMatic to probe the given IP address. The given
+    /// permit is retained will the IP is being probed. Once the all probes
+    /// are done for the IP, the permit is dropped.vim
+    ProbeAddr(IpAddr, OwnedSemaphorePermit),
+    /// Indicates that no more IPs will be submitted. ProbeOMatic will
+    /// finish processing all in-progress probes
     TheEnd,
 }
 
@@ -276,14 +286,19 @@ struct InProgressProbeState {
     target: IpAddr,
     next_probe_num: u16,
     probe_infos: Vec<ProbePacketInfo>,
+    // While permit is never read, dropping it has the side effect of returning it
+    // to its semaphore
+    #[allow(dead_code)]
+    permit: OwnedSemaphorePermit,
 }
 
 impl InProgressProbeState {
-    pub fn new(target: IpAddr) -> Self {
+    pub fn new(target: IpAddr, permit: OwnedSemaphorePermit) -> Self {
         InProgressProbeState {
             target,
             next_probe_num: 0,
             probe_infos: Vec::new(),
+            permit,
         }
     }
 
@@ -318,7 +333,7 @@ pub struct ProbeOMatic {
     /// Work we need to do. Either send the next probe for a given IP, or if
     /// all probes have been sent, we remove the IP from `probes` and report
     /// it.
-    work_queue: PriorityQueue<IpAddr, Reverse<tokio::time::Instant>>,
+    work_queue: PriorityQueue<IpAddr, Reverse<Instant>>,
     should_terminate_loop: bool,
 }
 
@@ -348,21 +363,21 @@ impl ProbeOMatic {
             let next_wakeup = match self.work_queue.peek() {
                 Some((_, deadline)) => deadline.0,
                 None => {
-                    tokio::time::Instant::now()
-                        + tokio::time::Duration::from_millis(TIME_BETWEEN_PROBE_MS)
+                    if self.should_terminate_loop {
+                        // Work queue is empty and we've been requested to terminate.
+                        break;
+                    }
+                    Instant::now() + Duration::from_millis(TIME_BETWEEN_PROBE_MS)
                 }
             };
             tokio::select! {
                 Some(conn_msg) = self.pkt_rx.recv() => self.handle_conn_msg(conn_msg),
                 Some(probe_msg) = self.probe_rx.recv() => self.handle_probe_msg(probe_msg),
                 _ = sleep_until(next_wakeup) => {
-                    debug!("Got woken up from my sleep");
+                    trace!("Got woken up from my sleep");
                     let work_item = self.work_queue.pop();
                     if let Some((ip, _)) = work_item {
                         self.do_work_item(ip);
-                    } else if self.should_terminate_loop {
-                        // Work queue is empty and we've been requested to termiante.
-                        break;
                     }
                 },
                 else => break
@@ -377,9 +392,9 @@ impl ProbeOMatic {
         match msg {
             Pkt(pkt) => match ProbePacketInfo::try_from_parsed_packet(&self.addr_config, pkt) {
                 Ok(probe_info) => {
-                    info!(
-                        "We got a probe packet (#{}) for {}",
-                        probe_info.probe_num, probe_info.target_ip
+                    debug!(
+                        "We got a probe packet (#{} {:#?}) for {}",
+                        probe_info.probe_num, probe_info.direction, probe_info.target_ip
                     );
                     match self.probes.get_mut(&probe_info.target_ip) {
                         Some(probe_state) => {
@@ -395,7 +410,7 @@ impl ProbeOMatic {
                     ProbeInfoError::PacketParsingError(e2) => {
                         warn!("Failed to parse packet: {}", e2)
                     }
-                    ProbeInfoError::NotAProbe => debug!("We got a Not-A-Probe"),
+                    ProbeInfoError::NotAProbe => trace!("We got a Not-A-Probe"),
                 },
             },
             _ => warn!("We can only handle `Pkt` messages, but got: {:?}", msg),
@@ -405,16 +420,21 @@ impl ProbeOMatic {
     fn handle_probe_msg(&mut self, msg: ProbeOMaticMsg) {
         use ProbeOMaticMsg::*;
         match msg {
-            ProbeAddr(ip) => {
+            ProbeAddr(ip, permit) => {
                 info!("Got a probe request msg for {}", ip);
-                let prev = self.probes.insert(ip, InProgressProbeState::new(ip));
+                let prev = self
+                    .probes
+                    .insert(ip, InProgressProbeState::new(ip, permit));
                 if prev.is_some() {
                     // TODO: do something more useful here
                     error!("We already had a probe record for {}", ip);
                 }
                 self.do_work_item(ip);
             }
-            TheEnd => self.should_terminate_loop = true,
+            TheEnd => {
+                info!("No more IPs to probe. Preparing to exit");
+                self.should_terminate_loop = true;
+            }
         }
     }
 
@@ -430,19 +450,22 @@ impl ProbeOMatic {
             probe_state.next_probe_num += 1;
             let port_diff = (probe_state.next_probe_num - 1) / PROBES_PER_PORT;
             let dst_port = START_DST_PORT + port_diff;
+            // We encode the probe number by adding that many bytes as payload.
+            // The reason is that ICMP unreachable messages guarantee that we will receive
+            // the original IP header + 8 bytes back (which is the size of the UDP header).
+            // So can't encode the probe number as payload-content
             let payload: Vec<u8> = (0..probe_state.next_probe_num as u8).collect();
             assert_eq!(payload.len(), probe_state.next_probe_num as usize);
             let dst = SocketAddr::new(probe_state.target, dst_port);
             let pkt = create_probe_packet(&self.addr_config, dst, DEFAULT_TTL, &payload);
             match self.raw_sock.sendpacket(&pkt) {
                 Err(e) => warn!("Failed to send probe to {}: {}", probe_state.target, e),
-                Ok(_) => info!(
+                Ok(_) => debug!(
                     "Sent probe #{} to {}",
                     probe_state.next_probe_num, probe_state.target
                 ),
             }
-            let deadline = tokio::time::Instant::now()
-                + tokio::time::Duration::from_millis(TIME_BETWEEN_PROBE_MS);
+            let deadline = Instant::now() + Duration::from_millis(TIME_BETWEEN_PROBE_MS);
             self.work_queue.push(probe_state.target, Reverse(deadline));
         } else {
             warn!(
