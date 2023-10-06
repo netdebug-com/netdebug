@@ -1501,6 +1501,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "priority-queue"
+version = "1.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fff39edfcaec0d64e8d0da38564fad195d2d51b680940295fcc307366e101e61"
+dependencies = [
+ "autocfg",
+ "indexmap 1.9.3",
+]
+
+[[package]]
 name = "probe-o-matic"
 version = "0.1.0"
 dependencies = [
@@ -1510,6 +1520,7 @@ dependencies = [
  "libconntrack",
  "log",
  "mac_address",
+ "priority-queue",
  "thiserror",
  "tokio",
  "utils",

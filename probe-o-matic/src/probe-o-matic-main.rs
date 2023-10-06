@@ -3,6 +3,7 @@ use lib_probe_o_matic::*;
 use libconntrack::connection::ConnectionTrackerMsg;
 use libconntrack::pcap::{find_interesting_pcap_interfaces, run_blocking_pcap_loop_in_thread};
 use log::info;
+use std::net::IpAddr;
 use std::str::FromStr;
 
 /// Probe-o-matic: for probing router IPs
@@ -53,17 +54,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let (pkt_tx, pkt_rx) = tokio::sync::mpsc::unbounded_channel::<ConnectionTrackerMsg>();
-    let (_probe_tx, probe_rx) = tokio::sync::mpsc::unbounded_channel::<ProbeOMaticMsg>();
+    let (probe_tx, probe_rx) = tokio::sync::mpsc::unbounded_channel::<ProbeOMaticMsg>();
     let _handle = run_blocking_pcap_loop_in_thread(
         dev.name.clone(),
         Some(args.pcap_filter.clone()),
         pkt_tx.clone(),
         None,
     );
+    // It appears we have a race between the pcap actually starting and us sending
+    // the first probe. So lets simply wait a bit after starting the pcap polling
+    // loop.
+    tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
     let raw_sock = Box::new(libconntrack::pcap::bind_writable_pcap_by_name(
         dev.name.clone(),
     )?);
 
+    probe_tx.send(ProbeOMaticMsg::ProbeAddr(IpAddr::from_str("192.168.1.1")?))?;
+    probe_tx.send(ProbeOMaticMsg::ProbeAddr(IpAddr::from_str("10.0.0.1")?))?;
+    probe_tx.send(ProbeOMaticMsg::TheEnd)?;
     ProbeOMatic::spawn(pkt_rx, probe_rx, raw_sock, outgoing_addr_config).await?;
     Ok(())
 }
