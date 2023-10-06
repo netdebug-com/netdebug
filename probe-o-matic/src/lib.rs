@@ -3,9 +3,27 @@ use etherparse::{icmpv4, Icmpv4Type, IpHeader, Ipv4Extensions, Ipv6Extensions, T
 use libconntrack::{
     connection::ConnectionTrackerMsg, owned_packet::OwnedParsedPacket, pcap::RawSocketWriter,
 };
-use log::{info, warn};
-use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
-use tokio::sync::mpsc;
+use log::{debug, error, info, warn};
+use priority_queue::PriorityQueue;
+use std::{
+    cmp::Reverse,
+    collections::HashMap,
+    fmt::Display,
+    net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6},
+};
+use tokio::{sync::mpsc, time::sleep_until};
+
+const TIME_BETWEEN_PROBE_MS: u64 = 1_000;
+/// Number of probes to send to the same destination port per IP
+/// (these probes should all take the same path
+/// total number of probes per IP is PROBES_PER_PORT * NUM_PORTS_TO_PROBE
+const PROBES_PER_PORT: u16 = 3;
+/// The number of different destination ports to probe. If there
+/// ECMP path, it's likely some will take divergent paths
+/// total number of probes per IP is PROBES_PER_PORT * NUM_PORTS_TO_PROBE
+const NUM_PORTS_TO_PROBE: u16 = 5;
+const DEFAULT_TTL: u8 = 64;
+const START_DST_PORT: u16 = 33434;
 
 pub fn to_socket_addr_v4(sa: SocketAddr) -> Option<SocketAddrV4> {
     match sa {
@@ -52,6 +70,7 @@ impl LocalAddressConfig {
 
 pub enum ProbeOMaticMsg {
     ProbeAddr(IpAddr),
+    TheEnd,
 }
 
 /// A simplified enum to represent the type of packet we are
@@ -200,6 +219,7 @@ pub struct ProbePacketInfo {
     /// Identifies the number/sequence of probes we sent. We use the
     /// payload length to encode it.
     probe_num: u16,
+    // TODO: add TTL
 }
 
 impl ProbePacketInfo {
@@ -252,12 +272,54 @@ impl ProbePacketInfo {
     }
 }
 
-#[allow(unused)] // TODO: raw_sock is unused for now
+struct InProgressProbeState {
+    target: IpAddr,
+    next_probe_num: u16,
+    probe_infos: Vec<ProbePacketInfo>,
+}
+
+impl InProgressProbeState {
+    pub fn new(target: IpAddr) -> Self {
+        InProgressProbeState {
+            target,
+            next_probe_num: 0,
+            probe_infos: Vec::new(),
+        }
+    }
+
+    pub fn all_probes_sent(&self) -> bool {
+        self.next_probe_num >= PROBES_PER_PORT * NUM_PORTS_TO_PROBE
+    }
+}
+
+impl Display for InProgressProbeState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "ProbeReport for {}", self.target)?;
+        for info in &self.probe_infos {
+            writeln!(
+                f,
+                "  #{:02} {} {:#?} port {}",
+                info.probe_num, info.timestamp, info.direction, info.port
+            )?;
+        }
+        Ok(())
+    }
+}
+
 pub struct ProbeOMatic {
     pkt_rx: mpsc::UnboundedReceiver<ConnectionTrackerMsg>,
     probe_rx: mpsc::UnboundedReceiver<ProbeOMaticMsg>,
     raw_sock: Box<dyn RawSocketWriter>,
     addr_config: LocalAddressConfig,
+    /// This map keeps track of the IPs we are currently probing. When we receive
+    /// a request to probe an IP, we add it to this map. Once we are done with an
+    /// IP, we remove it from this map.
+    probes: HashMap<IpAddr, InProgressProbeState>,
+    /// Work we need to do. Either send the next probe for a given IP, or if
+    /// all probes have been sent, we remove the IP from `probes` and report
+    /// it.
+    work_queue: PriorityQueue<IpAddr, Reverse<tokio::time::Instant>>,
+    should_terminate_loop: bool,
 }
 
 impl ProbeOMatic {
@@ -272,6 +334,9 @@ impl ProbeOMatic {
             probe_rx,
             raw_sock,
             addr_config,
+            probes: HashMap::new(),
+            work_queue: PriorityQueue::new(),
+            should_terminate_loop: false,
         };
         tokio::spawn(async move {
             pom.rx_loop().await;
@@ -280,9 +345,26 @@ impl ProbeOMatic {
 
     pub async fn rx_loop(&mut self) {
         loop {
+            let next_wakeup = match self.work_queue.peek() {
+                Some((_, deadline)) => deadline.0,
+                None => {
+                    tokio::time::Instant::now()
+                        + tokio::time::Duration::from_millis(TIME_BETWEEN_PROBE_MS)
+                }
+            };
             tokio::select! {
                 Some(conn_msg) = self.pkt_rx.recv() => self.handle_conn_msg(conn_msg),
                 Some(probe_msg) = self.probe_rx.recv() => self.handle_probe_msg(probe_msg),
+                _ = sleep_until(next_wakeup) => {
+                    debug!("Got woken up from my sleep");
+                    let work_item = self.work_queue.pop();
+                    if let Some((ip, _)) = work_item {
+                        self.do_work_item(ip);
+                    } else if self.should_terminate_loop {
+                        // Work queue is empty and we've been requested to termiante.
+                        break;
+                    }
+                },
                 else => break
 
             }
@@ -290,26 +372,83 @@ impl ProbeOMatic {
         info!("Exiting rx_loop");
     }
 
-    fn handle_conn_msg(&self, msg: ConnectionTrackerMsg) {
+    fn handle_conn_msg(&mut self, msg: ConnectionTrackerMsg) {
         use ConnectionTrackerMsg::*;
         match msg {
             Pkt(pkt) => match ProbePacketInfo::try_from_parsed_packet(&self.addr_config, pkt) {
-                Ok(_probe_info) => info!("We got a probe packet"),
+                Ok(probe_info) => {
+                    info!(
+                        "We got a probe packet (#{}) for {}",
+                        probe_info.probe_num, probe_info.target_ip
+                    );
+                    match self.probes.get_mut(&probe_info.target_ip) {
+                        Some(probe_state) => {
+                            probe_state.probe_infos.push(probe_info);
+                        }
+                        None => warn!(
+                            "Got probe response for {}, but don't have a record for it. Delayed?",
+                            probe_info.target_ip
+                        ),
+                    }
+                }
                 Err(e1) => match e1 {
                     ProbeInfoError::PacketParsingError(e2) => {
                         warn!("Failed to parse packet: {}", e2)
                     }
-                    ProbeInfoError::NotAProbe => info!("We got a Not-A-Probe"),
+                    ProbeInfoError::NotAProbe => debug!("We got a Not-A-Probe"),
                 },
             },
             _ => warn!("We can only handle `Pkt` messages, but got: {:?}", msg),
         }
     }
 
-    fn handle_probe_msg(&self, msg: ProbeOMaticMsg) {
+    fn handle_probe_msg(&mut self, msg: ProbeOMaticMsg) {
         use ProbeOMaticMsg::*;
         match msg {
-            ProbeAddr(_ip) => info!("Got a probe_rx msg"),
+            ProbeAddr(ip) => {
+                info!("Got a probe request msg for {}", ip);
+                let prev = self.probes.insert(ip, InProgressProbeState::new(ip));
+                if prev.is_some() {
+                    // TODO: do something more useful here
+                    error!("We already had a probe record for {}", ip);
+                }
+                self.do_work_item(ip);
+            }
+            TheEnd => self.should_terminate_loop = true,
+        }
+    }
+
+    fn do_work_item(&mut self, ip: IpAddr) {
+        if let Some(probe_state) = self.probes.get_mut(&ip) {
+            if probe_state.all_probes_sent() {
+                info!("We are done for IP {}", ip);
+                info!("{}", probe_state);
+                // TODO: ship off finished probe_state
+                self.probes.remove(&ip);
+                return;
+            }
+            probe_state.next_probe_num += 1;
+            let port_diff = (probe_state.next_probe_num - 1) / PROBES_PER_PORT;
+            let dst_port = START_DST_PORT + port_diff;
+            let payload: Vec<u8> = (0..probe_state.next_probe_num as u8).collect();
+            assert_eq!(payload.len(), probe_state.next_probe_num as usize);
+            let dst = SocketAddr::new(probe_state.target, dst_port);
+            let pkt = create_probe_packet(&self.addr_config, dst, DEFAULT_TTL, &payload);
+            match self.raw_sock.sendpacket(&pkt) {
+                Err(e) => warn!("Failed to send probe to {}: {}", probe_state.target, e),
+                Ok(_) => info!(
+                    "Sent probe #{} to {}",
+                    probe_state.next_probe_num, probe_state.target
+                ),
+            }
+            let deadline = tokio::time::Instant::now()
+                + tokio::time::Duration::from_millis(TIME_BETWEEN_PROBE_MS);
+            self.work_queue.push(probe_state.target, Reverse(deadline));
+        } else {
+            warn!(
+                "Got work for IP {}, but didn't find it in pending probes",
+                ip
+            );
         }
     }
 }
