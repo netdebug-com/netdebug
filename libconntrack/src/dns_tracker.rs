@@ -263,7 +263,13 @@ impl<'a> DnsTracker<'a> {
             // only match A/AAAA records, for now
             A(a) => Some((IpAddr::from(a.0), hostname, false)),
             AAAA(aaaa) => Some((IpAddr::from(aaaa.0), hostname, false)),
-            PTR(ptr) => Some((dns_ptr_decode(&hostname).unwrap(), ptr.0.to_string(), true)),
+            PTR(ptr) => match dns_ptr_decode(&hostname) {
+                Ok(ip) => Some((ip, ptr.0.to_string(), true)),
+                Err(e) => {
+                    warn!("dns_ptr_decode returned {}", e);
+                    None
+                }
+            },
             CNAME(_) | MX(_) | NS(_) | SOA(_) | SRV(_) | TXT(_) | HTTPS(_) | Unknown(_, _) => None,
         };
         if let Some((ip, hostname, from_ptr_record)) = reply {
@@ -547,7 +553,7 @@ fn dns_ptr_decode(name: &String) -> Result<IpAddr, Box<dyn std::error::Error>> {
         }
         Ok(IpAddr::try_from(addr)?)
     } else {
-        Err(format!("dns_ptr_decode() Didn't end with known domain").into())
+        Err(format!("dns_ptr_decode() Didn't end with known domain: '{}'", name).into())
     }
 }
 
