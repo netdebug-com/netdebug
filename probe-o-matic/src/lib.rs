@@ -1,5 +1,8 @@
 use chrono::{DateTime, Utc};
-use etherparse::{icmpv4, Icmpv4Type, IpHeader, Ipv4Extensions, Ipv6Extensions, TransportHeader};
+use etherparse::{
+    icmpv4, icmpv6, Icmpv4Type, Icmpv6Type, IpHeader, Ipv4Extensions, Ipv6Extensions,
+    TransportHeader,
+};
 use libconntrack::{
     connection::ConnectionTrackerMsg, owned_packet::OwnedParsedPacket, pcap::RawSocketWriter,
 };
@@ -138,6 +141,19 @@ impl TryFrom<&OwnedParsedPacket> for SimpleHeader {
             TransportHeader::Icmpv4(icmp4) => match &icmp4.icmp_type {
                 Icmpv4Type::DestinationUnreachable(unreach_hdr)
                     if *unreach_hdr == icmpv4::DestUnreachableHeader::Port =>
+                {
+                    (
+                        0,
+                        0,
+                        SimpleProtocol::IcmpPortUnreachable,
+                        pkt.payload.len() as u16,
+                    )
+                }
+                _ => (0, 0, SimpleProtocol::Other, 0),
+            },
+            TransportHeader::Icmpv6(icmp6) => match &icmp6.icmp_type {
+                Icmpv6Type::DestinationUnreachable(unreach_hdr)
+                    if *unreach_hdr == icmpv6::DestUnreachableCode::Port =>
                 {
                     (
                         0,
@@ -654,6 +670,41 @@ mod test {
         assert_eq!(ppi.probe_num, 4);
     }
 
+    #[test]
+    fn test_udp_probe_packet_handling_v6() {
+        let dst = SocketAddr::from_str("[2001:4860:4860::8888]:5353").unwrap();
+        let addr_config = mk_addr_config();
+
+        let serialized = create_probe_packet(&addr_config, dst, 12, &[0xde, 0xad, 0xbe, 0xef]);
+        let parsed = PacketHeaders::from_ethernet_slice(&serialized).unwrap();
+        let ts = Utc.timestamp_opt(1696473476, 12345).unwrap();
+        let owned_packet = Box::new(OwnedParsedPacket::from_headers_and_ts(
+            parsed,
+            ts,
+            serialized.len() as u32,
+        ));
+        let simple_hdr = SimpleHeader::try_from(&*owned_packet).unwrap();
+        assert_eq!(simple_hdr.timestamp, ts);
+        assert_eq!(simple_hdr.src_ip, IpAddr::from_str("1234::5678").unwrap());
+        assert_eq!(simple_hdr.dst_ip, dst.ip());
+        assert_eq!(simple_hdr.ip_id, None);
+        assert_eq!(simple_hdr.ttl, 12);
+        assert_eq!(simple_hdr.protocol, SimpleProtocol::Udp);
+        assert_eq!(simple_hdr.src_port, 23);
+        assert_eq!(simple_hdr.dst_port, 5353);
+        assert_eq!(simple_hdr.payload_len, 4);
+
+        let ppi = ProbePacketInfo::try_from_parsed_packet(&addr_config, owned_packet).unwrap();
+        assert_eq!(ppi.timestamp, ts);
+        assert_eq!(ppi.target_ip, dst.ip());
+        assert_eq!(ppi.direction, ProbeDirection::Outgoing);
+        assert_eq!(ppi.port, 5353);
+        assert_eq!(ppi.our_ip_id, None);
+        assert_eq!(ppi.remote_ip_id, None);
+        assert_eq!(ppi.remote_src_ip, None);
+        assert_eq!(ppi.probe_num, 4);
+    }
+
     fn mk_not_a_probe_udp() -> Vec<u8> {
         let mut buf = Vec::<u8>::new();
         let payload = vec![0xa, 0xb, 0xc];
@@ -664,9 +715,44 @@ mod test {
         buf
     }
 
+    fn mk_not_a_probe_udp_v6() -> Vec<u8> {
+        let mut buf = Vec::<u8>::new();
+        let payload = vec![0xa, 0xb, 0xc];
+        etherparse::PacketBuilder::ipv6(
+            [
+                11, 12, 13, 14, 15, 16, 17, 18, 19, 10, 21, 22, 23, 24, 25, 26,
+            ],
+            [
+                31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
+            ],
+            44,
+        )
+        .udp(1024 /* sport */, 123 /* dport */)
+        .write(&mut buf, &payload)
+        .unwrap();
+        buf
+    }
+
     #[test]
     fn test_udp_not_a_probe_packet_handling() {
         let raw_pkt = mk_not_a_probe_udp();
+        let parsed = etherparse::PacketHeaders::from_ip_slice(&raw_pkt).unwrap();
+        let ts = Utc.timestamp_opt(1696473476, 12345).unwrap();
+        let owned_packet = Box::new(OwnedParsedPacket::from_headers_and_ts(
+            parsed,
+            ts,
+            raw_pkt.len() as u32,
+        ));
+        let addr_config = mk_addr_config();
+        assert_eq!(
+            ProbePacketInfo::try_from_parsed_packet(&addr_config, owned_packet),
+            Err(ProbeInfoError::NotAProbe)
+        );
+    }
+
+    #[test]
+    fn test_udp_not_a_probe_packet_handling_v6() {
+        let raw_pkt = mk_not_a_probe_udp_v6();
         let parsed = etherparse::PacketHeaders::from_ip_slice(&raw_pkt).unwrap();
         let ts = Utc.timestamp_opt(1696473476, 12345).unwrap();
         let owned_packet = Box::new(OwnedParsedPacket::from_headers_and_ts(
@@ -732,6 +818,22 @@ mod test {
         IpHeader::Version4(iph, Default::default())
     }
 
+    fn mk_iph_with_icmp6() -> IpHeader {
+        let src = Ipv6Addr::from_str("2001:0db8::1").unwrap();
+        let dst = Ipv6Addr::from_str("2001:0db8:dead:beef::1").unwrap();
+
+        let iph = etherparse::Ipv6Header {
+            traffic_class: 0,
+            flow_label: 0,
+            payload_length: 0, // will be replaced during write
+            next_header: 0,    // will be replaced during write
+            hop_limit: 44,
+            source: src.octets(),
+            destination: dst.octets(),
+        };
+        IpHeader::Version6(iph, Default::default())
+    }
+
     #[test]
     fn test_icmp_probe_packet_handling() {
         let dst = SocketAddr::from_str("8.8.8.8:53").unwrap();
@@ -767,6 +869,45 @@ mod test {
         assert_eq!(
             ppi.remote_src_ip,
             Some(IpAddr::from_str("10.0.0.1").unwrap())
+        );
+        assert_eq!(ppi.probe_num, 2);
+    }
+
+    #[test]
+    fn test_icmp_probe_packet_handling_v6() {
+        let dst = SocketAddr::from_str("[2001:4860:4860::8888]:5353").unwrap();
+        let addr_config = mk_addr_config();
+
+        let serialized_embedded = create_probe_packet(&addr_config, dst, 12, &[0xde, 0xad]);
+        // skip ethernet header (14 bytes) and truncate payload (2 bytes)
+        let serialized_partial_embedded = &serialized_embedded[14..(serialized_embedded.len() - 2)];
+
+        let mut buf = Vec::<u8>::new();
+        etherparse::PacketBuilder::ip(mk_iph_with_icmp6())
+            .icmpv6(Icmpv6Type::DestinationUnreachable(
+                icmpv6::DestUnreachableCode::Port,
+            ))
+            .write(&mut buf, serialized_partial_embedded)
+            .unwrap();
+
+        let parsed = etherparse::PacketHeaders::from_ip_slice(&buf).unwrap();
+        let ts = Utc.timestamp_opt(1696473476, 12345).unwrap();
+        let owned_packet = Box::new(OwnedParsedPacket::from_headers_and_ts(
+            parsed,
+            ts,
+            buf.len() as u32,
+        ));
+        let addr_config = mk_addr_config();
+        let ppi = ProbePacketInfo::try_from_parsed_packet(&addr_config, owned_packet).unwrap();
+        assert_eq!(ppi.timestamp, ts);
+        assert_eq!(ppi.target_ip, dst.ip());
+        assert_eq!(ppi.direction, ProbeDirection::Incoming);
+        assert_eq!(ppi.port, 5353);
+        assert_eq!(ppi.our_ip_id, None);
+        assert_eq!(ppi.remote_ip_id, None);
+        assert_eq!(
+            ppi.remote_src_ip,
+            Some(IpAddr::from_str("2001:0db8::1").unwrap())
         );
         assert_eq!(ppi.probe_num, 2);
     }
