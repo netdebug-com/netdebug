@@ -11,8 +11,8 @@ name = "storage-server"
 path = "src/storage-server.rs"
 
 [[bin]]
-name = "extract-router-ips"
-path = "src/extract-router-ips.rs"
+name = "extract-ips"
+path = "src/extract-ips.rs"
 
 [dependencies]
 # pls keep in alpha order
