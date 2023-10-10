@@ -18,7 +18,8 @@ type BoxError = Box<dyn std::error::Error>;
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     utils::init::netdebug_init();
     let args = Args::parse();
-    let mut ips = HashSet::new();
+    let mut router_ips = HashSet::new();
+    let mut remote_ips = HashSet::new();
     for fname in &args.sqlite_filenames {
         info!("Reading sqlite file: {}", fname);
         let db = Connection::open_with_flags(fname, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -31,6 +32,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         })?;
         for entry in entries {
             let entry = entry?;
+            remote_ips.insert(entry.remote_ip);
             for probe_round in entry.probe_rounds {
                 for probe in &probe_round.probes {
                     if let Some(sender_ip) = probe.sender_ip.clone() {
@@ -40,7 +42,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             | NatReplyNoProbe => {
                                 // XXX: the match is probably redundant since `sender_ip` is only
                                 // populated for the above variants. But better to explicit here.
-                                ips.insert(sender_ip);
+                                router_ips.insert(sender_ip);
                             }
                             EndHostReplyFound | EndHostReplyNoProbe | NoReply | NoOutgoing
                             | UnspecifiedProbeType => (),
@@ -49,8 +51,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        for ip in &ips {
-            println!("{}", ip);
+        for ip in &router_ips {
+            println!("router {}", ip);
+        }
+        for ip in &remote_ips {
+            println!("remote {}", ip);
         }
     }
     Ok(())
