@@ -2,7 +2,7 @@ use clap::Parser;
 use lib_probe_o_matic::*;
 use libconntrack::connection::ConnectionTrackerMsg;
 use libconntrack::pcap::{find_interesting_pcap_interfaces, run_blocking_pcap_loop_in_thread};
-use log::{info, warn};
+use log::{error, info, warn};
 use std::io;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -20,6 +20,10 @@ struct Args {
     /// The MAC address of the default gateway.
     #[arg(long)]
     pub gateway_mac: String,
+
+    /// The MAC address of the egress interface; default is autodetect
+    #[arg(long)]
+    pub egress_mac: Option<String>,
 
     /// Maximum number of IPs that will be probed in parallel
     #[arg(long, default_value_t = 5)]
@@ -69,7 +73,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let devices = find_interesting_pcap_interfaces(&args.pcap_device)?;
     assert_eq!(devices.len(), 1);
     let dev = devices.first().unwrap();
-    let src_mac = mac_address::mac_address_by_name(&dev.name)?.unwrap();
+    info!("Binding pcap interface {}", dev.name);
+    let src_mac = if let Some(src_mac) = args.egress_mac {
+        mac_address::MacAddress::from_str(&src_mac).expect("Valid egress MAC address")
+    } else if let Some(src_mac) = mac_address::mac_address_by_name(&dev.name)? {
+        src_mac
+    } else {
+        error!("Couldn't auto-detect the egress src mac; must specify with --egress-mac");
+        std::process::exit(1);
+    };
     info!("Got pcap device: {}, mac address {} ", dev.name, src_mac);
     // TODO: can check that the src IPs are actually IPs on the pcap_device
     let outgoing_addr_config = LocalAddressConfig {

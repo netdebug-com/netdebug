@@ -5,6 +5,7 @@ use std::str::FromStr;
 use crate::connection::ConnectionTrackerMsg;
 #[cfg(not(windows))]
 use futures_util::StreamExt;
+use itertools::Itertools;
 use log::{debug, info, warn};
 use pcap::Capture;
 
@@ -259,9 +260,13 @@ pub fn lookup_pcap_device_by_name(name: &String) -> Result<pcap::Device, Box<dyn
             return Ok(d.clone());
         }
     }
+    let all_interfaces = pcap::Device::list()?
+        .iter()
+        .map(|d| d.name.clone())
+        .join(" , ");
     Err(Box::new(pcap::Error::PcapError(format!(
-        "Failed to find any pcap device with name '{}'",
-        name
+        "Failed to find any pcap device with name '{}' out of {}",
+        name, all_interfaces
     ))))
 }
 
