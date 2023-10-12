@@ -10,7 +10,10 @@ use common::{
     ProbeReportEntry, ProbeReportSummary, ProbeRoundReport, PROBE_MAX_TTL,
 };
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
-use libconntrack_wasm::{DnsTrackerEntry, IpProtocol, RateEstimator};
+use libconntrack_wasm::{
+    aggregate_counters::{AggregateCounter, AggregateCounterKind, BucketedTimeSeries},
+    DnsTrackerEntry, IpProtocol, RateEstimator,
+};
 #[cfg(not(test))]
 use log::{debug, info, warn};
 use netstat2::ProtocolSocketInfo;
@@ -209,6 +212,9 @@ where
     dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
     tx: UnboundedSender<ConnectionTrackerMsg>, // so we can tell others how to send msgs to us
     rx: UnboundedReceiver<ConnectionTrackerMsg>, // to read messages sent to us
+    // aggregate counters of everything that's gone through this connection manager
+    tx_bytes: AggregateCounter,
+    rx_bytes: AggregateCounter,
 }
 impl<'a, R> ConnectionTracker<'a, R>
 where
@@ -223,6 +229,10 @@ where
     ) -> ConnectionTracker<'a, R> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let storage_service_msg_tx_clone = storage_service_msg_tx.clone();
+        // for now, track these big counters by minute and second
+        let system_start = Instant::now();
+        let tx_bytes = ConnectionTracker::<R>::create_aggregate_counter(system_start, "tx_bytes");
+        let rx_bytes = ConnectionTracker::<R>::create_aggregate_counter(system_start, "rx_bytes");
         ConnectionTracker {
             connections: EvictingHashMap::new(
                 max_connections_per_tracker,
@@ -237,6 +247,8 @@ where
             dns_tx: None,
             tx,
             rx,
+            tx_bytes,
+            rx_bytes,
         }
     }
 
@@ -296,6 +308,11 @@ where
     pub fn add(&mut self, packet: Box<OwnedParsedPacket>) {
         let mut needs_dns_lookup = false;
         if let Some((key, src_is_local)) = packet.to_connection_key(&self.local_addrs) {
+            if src_is_local {
+                self.tx_bytes.update(packet.len as u64);
+            } else {
+                self.rx_bytes.update(packet.len as u64);
+            }
             let connection = match self.connections.get_mut(&key) {
                 Some(connection) => connection,
                 None => {
@@ -489,6 +506,29 @@ where
 
     pub fn get_tx(&self) -> UnboundedSender<ConnectionTrackerMsg> {
         self.tx.clone()
+    }
+
+    /**
+     * Create the aggregate counter for this connection tracker
+     * Just do per second and per minute for now
+     */
+    fn create_aggregate_counter(system_start: Instant, counter_name: &str) -> AggregateCounter {
+        let mut agg_counter = AggregateCounter::new(
+            AggregateCounterKind::ConnectionTracker,
+            counter_name.to_string(),
+        );
+        agg_counter.add_time_series(BucketedTimeSeries::new_with_create_time(
+            system_start,
+            std::time::Duration::from_secs(1),
+            60,
+        ));
+        agg_counter.add_time_series(BucketedTimeSeries::new_with_create_time(
+            system_start,
+            std::time::Duration::from_secs(60), // minutes
+            60,
+        ));
+
+        agg_counter
     }
 }
 
