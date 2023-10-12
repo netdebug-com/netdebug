@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod connection_measurements;
 pub use connection_measurements::*; // reshare these identifiers in this namespace
+pub mod aggregate_counters;
 
 #[serde_with::serde_as]
 #[derive(Debug, Clone, Hash, Serialize, Deserialize, PartialEq, Eq)]
