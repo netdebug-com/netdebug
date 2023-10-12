@@ -12,9 +12,9 @@ use libconntrack::{
     connection::ConnectionTrackerMsg, dns_tracker::DnsTrackerMessage, perf_check,
     process_tracker::ProcessTrackerMessage,
 };
-use libconntrack_wasm::ConnectionMeasurements;
+use libconntrack_wasm::{ConnectionMeasurements, aggregate_counters::AggregateCounterKind};
 use log::{debug, info, warn};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{UnboundedSender, self};
 use warp::ws::{self, Message, WebSocket};
 
 use desktop_common::{GuiToServerMessages, ServerToGuiMessages};
@@ -104,8 +104,30 @@ async fn handle_gui_to_server_msg(
         GuiToServerMessages::DumpDnsCache() => {
             handle_gui_dump_dns_cache(tx, connection_tracker, dns_tracker).await
         }
+        GuiToServerMessages::DumpAggregateCounters { kind, name } => {
+            handle_dump_aggregate_counters(tx, connection_tracker, kind.clone(), name.clone()).await
+        }
     }
     perf_check!("process gui message", start, Duration::from_millis(200));
+}
+
+async fn handle_dump_aggregate_counters(
+    tx: &UnboundedSender<ServerToGuiMessages>,
+    connection_tracker: &UnboundedSender<ConnectionTrackerMsg>,
+    kind: AggregateCounterKind,
+    name: String,
+) {
+    let (reply_tx, mut reply_rx) = mpsc::unbounded_channel();
+    if let Err(e) = connection_tracker.send(ConnectionTrackerMsg::GetAggregateCounters { kind, name, tx: reply_tx }) {
+        warn!("Failed to send GetAggregateCounters to the connection tracker!?: {}", e);
+    }
+    if let Some(counters) = reply_rx.recv().await {
+        if let Err(e) = tx.send(ServerToGuiMessages::DumpAggregateCountersReply(counters)) {
+            warn!("Error talking to GUI: {}", e);
+        }
+    } else {
+        warn!("Got None from ConnectionTrackerMsg::GetAggregateCounters !?");
+    }
 }
 
 /**

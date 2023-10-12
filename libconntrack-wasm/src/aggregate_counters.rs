@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+use serde::{Serialize, Deserialize};
+
 /**
  * Aggregate Counters group sets of BucketedTimeSeries counters together at different time resolutions and
  * try to represent the whole.
@@ -16,7 +18,7 @@ use std::time::{Duration, Instant};
  *
  */
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct CounterBucket {
     pub sum: u64,
     pub num_entries: u64,
@@ -43,9 +45,17 @@ impl CounterBucket {
 }
 type BucketIndex = usize;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct BucketedTimeSeries {
-    pub created_time: Instant,
+    /**
+     * Instant can't be serialized and has no default, so we can't just skip it.  But we can
+     * make it an Option<Instant> which has a default and just panic if someone tries to update
+     * the timeseries when created_time is None.
+     * 
+     * A bit fugly, but I'm moving on to bigger things.
+     */
+    #[serde(skip)]
+    pub created_time: Option<Instant>,
     pub bucket_time_window: Duration,
     pub buckets: Vec<CounterBucket>,
     pub num_buckets: BucketIndex,
@@ -71,7 +81,7 @@ impl BucketedTimeSeries {
         num_buckets: usize,
     ) -> BucketedTimeSeries {
         BucketedTimeSeries {
-            created_time,
+            created_time: Some(created_time),
             // store Duration in Micros for faster calcs
             bucket_time_window,
             buckets: vec![CounterBucket::new(); num_buckets],
@@ -82,7 +92,7 @@ impl BucketedTimeSeries {
     }
     fn update_with_time(&mut self, count: u64, now: Instant) {
         // how much time from system start?
-        let offset_time = (now - self.created_time).as_micros();
+        let offset_time = (now - self.created_time.unwrap()).as_micros();
         // break that down by the time series time window
         // thought about storing bucket_time_window as micros to avoid the conversion here but was premature optimization
         let quantized_time = offset_time / self.bucket_time_window.as_micros();
@@ -174,7 +184,7 @@ impl BucketedTimeSeries {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum AggregateCounterKind {
     DnsDstDomain,
     Application,
@@ -183,6 +193,7 @@ pub enum AggregateCounterKind {
 
 impl Copy for AggregateCounterKind {}
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct AggregateCounter {
     kind: AggregateCounterKind,
     name: String,

@@ -174,6 +174,11 @@ pub enum ConnectionTrackerMsg {
         key: ConnectionKey,
         remote_hostname: Option<String>, // will be None if lookup fails
     },
+    GetAggregateCounters {
+        kind: AggregateCounterKind,
+        name: String,
+        tx: mpsc::UnboundedSender<Vec<AggregateCounter>>,
+    },
 }
 
 fn send_connection_storage_msg(
@@ -299,6 +304,9 @@ where
                     remote_hostname,
                 } => {
                     self.set_connection_remote_hostname_dns(key, remote_hostname);
+                }
+                GetAggregateCounters { kind, name, tx } => {
+                    self.get_aggregate_counters(kind, name, tx)
                 }
             }
         }
@@ -529,6 +537,27 @@ where
         ));
 
         agg_counter
+    }
+
+    fn get_aggregate_counters(
+        &self,
+        kind: AggregateCounterKind,
+        _name: String,
+        tx: UnboundedSender<Vec<AggregateCounter>>,
+    ) {
+        use AggregateCounterKind::*;
+        let counters = match kind {
+            ConnectionTracker => {
+                vec![self.tx_bytes.clone(), self.rx_bytes.clone()]
+            }
+            _ => todo!(), // panic if they ask for something else, need to impl later
+        };
+        if let Err(e) = tx.send(counters) {
+            warn!(
+                "Tried to send aggregate_counters back to caller but got {}",
+                e
+            );
+        }
     }
 }
 
