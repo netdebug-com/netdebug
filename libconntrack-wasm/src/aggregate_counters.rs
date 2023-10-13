@@ -92,7 +92,11 @@ impl BucketedTimeSeries {
     }
     fn update_with_time(&mut self, count: u64, now: Instant) {
         // how much time from system start?
-        let offset_time = (now - self.created_time.unwrap()).as_micros();
+        let offset_time = (now
+            - self
+                .created_time
+                .expect("Can't updated a serialized BucketedTimeSeries"))
+        .as_micros();
         // break that down by the time series time window
         // thought about storing bucket_time_window as micros to avoid the conversion here but was premature optimization
         let quantized_time = offset_time / self.bucket_time_window.as_micros();
