@@ -1,9 +1,11 @@
+mod bandwidth_graph;
 mod dns_tracker;
 mod flow_tracker;
 mod tabs;
 mod utils;
 use std::{sync::Arc, time::Duration};
 
+use bandwidth_graph::BandwidthGraph;
 use dns_tracker::DnsTracker;
 use flow_tracker::FlowTracker;
 use tabs::{Tab, Tabs, TabsContext};
@@ -65,6 +67,7 @@ fn init_tabs(ws: WebSocket) -> Result<Tabs, JsValue> {
         })
         .collect();
     let mut tabs = Vec::new();
+    tabs.push(BandwidthGraph::new());
     tabs.push(FlowTracker::new());
     tabs.push(DnsTracker::new());
     tabs.extend(test_tabs);
@@ -92,6 +95,9 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, tabs: Tabs) -> Result<(), J
                     flow_tracker::handle_dumpflows_reply(flows, ws.clone(), tabs.clone())
                 }
                 DumpDnsCache(cache) => dns_tracker::handle_dump_dns_cache_reply(cache, ws, tabs),
+                DumpAggregateCountersReply(counters) => {
+                    bandwidth_graph::handle_aggregate_counters(counters, ws, tabs)
+                }
             }
         }
         Err(e) => {
