@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -197,11 +200,11 @@ pub enum AggregateCounterKind {
 
 impl Copy for AggregateCounterKind {}
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AggregateCounter {
-    kind: AggregateCounterKind,
-    name: String,
-    counts: Vec<BucketedTimeSeries>,
+    pub kind: AggregateCounterKind,
+    pub name: String,
+    pub counts: HashMap<String, BucketedTimeSeries>, // "label" --> "BucketedTimeSeries"
 }
 
 impl AggregateCounter {
@@ -212,7 +215,7 @@ impl AggregateCounter {
         AggregateCounter {
             kind,
             name,
-            counts: Vec::new(),
+            counts: HashMap::new(),
         }
     }
 
@@ -221,7 +224,7 @@ impl AggregateCounter {
     }
 
     fn update_with_time(&mut self, count: u64, now: Instant) {
-        for ts in &mut self.counts {
+        for ts in &mut self.counts.values_mut() {
             ts.update_with_time(count, now);
         }
     }
@@ -230,9 +233,21 @@ impl AggregateCounter {
         (self.name.clone(), self.kind)
     }
 
-    pub fn add_time_series(&mut self, time_series: BucketedTimeSeries) {
-        self.counts.push(time_series)
+    pub fn add_time_series(
+        &mut self,
+        label: String,
+        time_window: Duration,
+        num_buckets: BucketIndex,
+    ) {
+        let ts = BucketedTimeSeries::new(time_window, num_buckets);
+        self.counts.insert(label, ts);
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AggregateCounterConnectionTracker {
+    pub send: AggregateCounter,
+    pub recv: AggregateCounter,
 }
 
 #[cfg(test)]

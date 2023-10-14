@@ -39,7 +39,7 @@ extern "C" {
     fn plot_chart(element_id: &str, cfg: JsValue, verbose: bool) -> JsValue;
     // Above is a PITA to get working, just pass the JSON as a string
     pub fn plot_json_chart(s: &str, json: &str, verbose: bool) -> JsValue;
-    pub fn plot_json_chart_update(chat: JsValue, data_json: &str, verbose: bool);
+    pub fn plot_json_chart_update(chart: JsValue, data_json: &str, verbose: bool);
     // lost too much time fuxzing with wasm2js stuff - just pass
     // the nine variables explicitly - sigh
     fn plot_latency_chart(

@@ -1,20 +1,23 @@
-use chrono::Duration;
 use desktop_common::GuiToServerMessages;
-use libconntrack_wasm::aggregate_counters::{AggregateCounter, AggregateCounterKind};
+use libconntrack_wasm::aggregate_counters::AggregateCounterConnectionTracker;
+use std::collections::HashMap;
+use std::time::Duration;
 use wasm_bindgen::prelude::Closure;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{window, MessageEvent, WebSocket};
 
 use crate::tabs::{Tab, Tabs};
-use crate::{console_log, log};
+use crate::{console_log, html, log, plot_json_chart, plot_json_chart_update};
 
 pub const BANDWIDTH_GRAPH_TAB: &str = "bandwidth_graph";
+pub const CANVAS_MILLIS: &str = "CANVAS_millis";
+pub const CANVAS_SECONDS: &str = "CANVAS_seconds";
+pub const CANVAS_MINUTES: &str = "CANVAS_minutes";
 
-#[allow(unused)]
 pub struct BandwidthGraph {
     min_request_interval: Duration,
     last_request_sent: f64,
-    last_aggregate_counters: Vec<AggregateCounter>,
+    rendered_charts: HashMap<String, JsValue>, // map the Chart Label to the Chart Object, if rendered
 }
 
 impl BandwidthGraph {
@@ -29,9 +32,9 @@ impl BandwidthGraph {
                 BandwidthGraph::on_deactivate(tab, ws);
             }),
             data: Some(Box::new(BandwidthGraph {
-                min_request_interval: Duration::milliseconds(50),
+                min_request_interval: Duration::from_millis(50),
                 last_request_sent: 0.0,
-                last_aggregate_counters: Vec::new(),
+                rendered_charts: HashMap::new(),
             })),
         }
     }
@@ -42,19 +45,21 @@ impl BandwidthGraph {
         let content = d
             .get_element_by_id(crate::tabs::TAB_CONTENT)
             .expect("tab content div");
-        content.set_inner_html("TODO"); // TODO!
+        content.set_inner_html("");
+        // Create three canvas's, one for each of the milliseconds, seconds, minutes view
+        for canvas_id in [CANVAS_MILLIS, CANVAS_SECONDS, CANVAS_MINUTES] {
+            let canvas = html!("canvas", {"id" => canvas_id, "height" => "30%"}).unwrap();
+            content.append_child(&canvas).unwrap();
+        }
 
         let bandwidth_graph = tab
             .get_tab_data::<BandwidthGraph>()
             .expect("No BandwidthGraph data!?");
 
         bandwidth_graph.last_request_sent = window.performance().expect("performance").now();
+        bandwidth_graph.rendered_charts = HashMap::new();
 
-        send_aggregate_request_now(
-            ws,
-            AggregateCounterKind::ConnectionTracker,
-            "ConnectionTracker".to_string(),
-        );
+        send_aggregate_request_now(ws);
     }
 
     pub fn on_deactivate(_tab: &mut Tab, _ws: WebSocket) {
@@ -62,8 +67,8 @@ impl BandwidthGraph {
     }
 }
 
-fn send_aggregate_request_now(ws: WebSocket, kind: AggregateCounterKind, name: String) {
-    let msg = GuiToServerMessages::DumpAggregateCounters { kind, name };
+fn send_aggregate_request_now(ws: WebSocket) {
+    let msg = GuiToServerMessages::DumpAggregateCounters {};
     if let Err(e) = ws.send_with_str(&serde_json::to_string(&msg).unwrap()) {
         console_log!("Error talking to server: {:?}", e);
     }
@@ -75,25 +80,18 @@ fn send_aggregate_request_now(ws: WebSocket, kind: AggregateCounterKind, name: S
  * sending a high rate of requests.
  */
 
-fn send_aggregate_request(
-    ws: WebSocket,
-    kind: AggregateCounterKind,
-    name: String,
-    last_sent_ms: f64,
-    min_interval: Duration,
-    tabs: Tabs,
-) {
+fn send_aggregate_request(ws: WebSocket, last_sent_ms: f64, min_interval: Duration, tabs: Tabs) {
     let now = window()
         .expect("window")
         .performance()
         .expect("performance")
         .now();
-    if (now - last_sent_ms) > min_interval.num_milliseconds() as f64 {
+    if (now - last_sent_ms) > min_interval.as_millis() as f64 {
         // send right away if it's been long enough
-        send_aggregate_request_now(ws, kind, name);
+        send_aggregate_request_now(ws);
     } else {
         // delayed sent
-        let delay_ms = (min_interval.num_milliseconds() - (now - last_sent_ms) as i64) as i32;
+        let delay_ms = (min_interval.as_millis() - (now - last_sent_ms) as u128) as i32;
         assert!(delay_ms > 0);
         let ws_clone = ws.clone();
         let delayed_send = Closure::<dyn FnMut(_)>::new(move |_e: MessageEvent| {
@@ -107,7 +105,7 @@ fn send_aggregate_request(
                     .now();
                 let bandwidth_graph = tabs_lock.get_active_tab_data::<BandwidthGraph>().unwrap();
                 bandwidth_graph.last_request_sent = now;
-                send_aggregate_request_now(ws_clone.clone(), kind, name.clone())
+                send_aggregate_request_now(ws_clone.clone())
             }
         });
         let window = window().expect("window");
@@ -122,13 +120,12 @@ fn send_aggregate_request(
     }
 }
 
-#[allow(unused)] // TODO: will fix in next patch
 pub(crate) fn handle_aggregate_counters(
-    counters: Vec<AggregateCounter>,
+    counters: AggregateCounterConnectionTracker,
     ws: WebSocket,
     tabs: Tabs,
 ) -> Result<(), wasm_bindgen::JsValue> {
-    let (last_request_sent, min_interval) = {
+    let (last_request_sent, min_interval, rendered_chart) = {
         // don't hold to the lock longer than we need
         let mut lock = tabs.lock().unwrap();
         if lock.get_active_tab_name() != BANDWIDTH_GRAPH_TAB {
@@ -138,17 +135,117 @@ pub(crate) fn handle_aggregate_counters(
         (
             bandwidth_graph.last_request_sent,
             bandwidth_graph.min_request_interval,
+            bandwidth_graph.rendered_charts.clone(),
         )
     };
     console_log!("Got a AggregateCounters reply, sending another");
     // Only send a new request after we've received a reply from the old one (i.e., this function)
-    send_aggregate_request(
-        ws,
-        AggregateCounterKind::ConnectionTracker,
-        "ConnectionTracker".to_string(),
-        last_request_sent,
-        min_interval,
-        tabs.clone(),
-    );
+    send_aggregate_request(ws, last_request_sent, min_interval, tabs.clone());
+
+    // assume the send and recv counters track the same Durations + num_buckets
+    for ts_label in counters.send.counts.keys() {
+        let duration = counters
+            .send
+            .counts
+            .get(ts_label)
+            .unwrap()
+            .bucket_time_window;
+        let (units, units_per_bucket, canvas_id) = match &duration {
+            // Sigh - one day we'll do micro-second level precision --- just not today :-)
+            // x  if *x < Duration::from_millis(1) => ("Micro-seconds", duration.as_micros()),
+            x if *x < Duration::from_secs(1) => ("Millis", duration.as_millis(), CANVAS_MILLIS),
+            x if *x < Duration::from_secs(60) => {
+                ("Seconds", duration.as_secs() as u128, CANVAS_SECONDS)
+            }
+            x if *x >= Duration::from_secs(60) => {
+                ("Minutes", duration.as_secs() as u128, CANVAS_MINUTES)
+            }
+            _ => todo!("Unknown Duration !!",),
+        };
+        // format the data for chart.js
+        let rx_data: Vec<serde_json::Value> = counters
+            .recv
+            .counts
+            .get(ts_label)
+            .expect("RX and TX to have same durations")
+            .buckets
+            .iter()
+            .enumerate()
+            .map(|(bucket_index, b)| {
+                serde_json::json!({
+                    "y": b.sum,
+                    "x": bucket_index * units_per_bucket as usize
+                })
+            })
+            .collect();
+        let tx_data: Vec<serde_json::Value> = counters
+            .send
+            .counts
+            .get(ts_label)
+            .expect("RX and TX to have same durations")
+            .buckets
+            .iter()
+            .enumerate()
+            .map(|(bucket_index, b)| {
+                serde_json::json!({
+                    "y": b.sum,
+                    "x": bucket_index * units_per_bucket as usize
+                })
+            })
+            .collect();
+        let datasets = vec![
+            serde_json::json!({
+                "label": "Download Bandwidth",
+                "data": rx_data,
+            }),
+            serde_json::json!({
+                "label": "Upload Bandwidth",
+                "data": tx_data,
+            }),
+        ];
+
+        if let Some(chart) = rendered_chart.get(ts_label) {
+            // just update the existing chart with the new data
+            plot_json_chart_update(
+                chart.clone(),
+                serde_json::to_string(&datasets).unwrap().as_str(),
+                false,
+            )
+        } else {
+            // create a new chart from scratch
+            let chart_json = serde_json::to_string(&serde_json::json!({
+                "type": "scatter",
+                "data": {
+                    "datasets": datasets,
+                },
+                "options": {
+                    "showLine": true,
+                    "scales": {
+                        "x": {
+                            "title": {
+                                "display": true,
+                                "text" : format!("{} ({})", ts_label, units).as_str(),
+                            }
+                        },
+                        "y": {
+                            "title": {
+                                "display": true,
+                                "text": format!("Bytes/{}", units).as_str(),
+                            }
+                        }
+                    }
+                }
+            }))
+            .unwrap();
+            let new_chart = plot_json_chart(canvas_id, chart_json.as_str(), true);
+            tabs.lock()
+                .unwrap()
+                .get_tab_data::<BandwidthGraph>(BANDWIDTH_GRAPH_TAB.to_string())
+                .unwrap()
+                .rendered_charts
+                .insert(ts_label.clone(), new_chart);
+        }
+    }
+
     Ok(())
 }

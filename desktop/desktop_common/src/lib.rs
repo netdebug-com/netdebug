@@ -1,6 +1,5 @@
 use libconntrack_wasm::{
-    aggregate_counters::{AggregateCounter, AggregateCounterKind},
-    ConnectionMeasurements, DnsTrackerEntry,
+    aggregate_counters::AggregateCounterConnectionTracker, ConnectionMeasurements, DnsTrackerEntry,
 };
 /**
  * Anything in this file must compile for both native rust/x86 AND WASM
@@ -19,15 +18,12 @@ pub enum ServerToGuiMessages {
     VersionCheck(String),
     DumpFlowsReply(Vec<ConnectionMeasurements>),
     DumpDnsCache(HashMap<IpAddr, DnsTrackerEntry>),
-    DumpAggregateCountersReply(Vec<AggregateCounter>),
+    DumpAggregateCountersReply(AggregateCounterConnectionTracker),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GuiToServerMessages {
     DumpFlows(),
     DumpDnsCache(),
-    DumpAggregateCounters {
-        kind: AggregateCounterKind,
-        name: String,
-    },
+    DumpAggregateCounters(),
 }

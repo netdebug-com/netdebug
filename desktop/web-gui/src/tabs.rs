@@ -162,6 +162,18 @@ impl TabsContext {
     pub fn get_active_tab_data<T: Any>(&mut self) -> Option<&mut T> {
         self.get_active_tab().unwrap().get_tab_data()
     }
+
+    /**
+     * Get the internal data for a named tab
+     */
+
+    pub fn get_tab_data<T: Any>(&mut self, tab_name: String) -> Option<&mut T> {
+        if let Some(tab) = self.tabs.get_mut(&tab_name) {
+            tab.get_tab_data()
+        } else {
+            None
+        }
+    }
 }
 
 pub struct Tab {
