@@ -12,7 +12,7 @@ use libconntrack::{
     connection::ConnectionTrackerMsg, dns_tracker::DnsTrackerMessage, perf_check,
     process_tracker::ProcessTrackerMessage,
 };
-use libconntrack_wasm::{aggregate_counters::AggregateCounterKind, ConnectionMeasurements};
+use libconntrack_wasm::ConnectionMeasurements;
 use log::{debug, info, warn};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use warp::ws::{self, Message, WebSocket};
@@ -34,12 +34,14 @@ pub async fn websocket_sender(
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if let Err(e) = ws_tx
-                .send(ws::Message::text(
-                    serde_json::to_string(&msg).unwrap().as_str(),
-                ))
-                .await
-            {
+            let json_str = match serde_json::to_string(&msg) {
+                Ok(json) => json,
+                Err(e) => {
+                    warn!("Failed to json marshall/serde msg!? {} :: {:?}", e, &msg);
+                    continue;
+                }
+            };
+            if let Err(e) = ws_tx.send(ws::Message::text(json_str.as_str())).await {
                 warn!("Error sending on websocket channel : {}", e);
             }
         }
@@ -104,25 +106,21 @@ async fn handle_gui_to_server_msg(
         GuiToServerMessages::DumpDnsCache() => {
             handle_gui_dump_dns_cache(tx, connection_tracker, dns_tracker).await
         }
-        GuiToServerMessages::DumpAggregateCounters { kind, name } => {
-            handle_dump_aggregate_counters(tx, connection_tracker, kind.clone(), name.clone()).await
+        GuiToServerMessages::DumpAggregateCounters {} => {
+            handle_dump_aggregate_connection_tracker_counters(tx, connection_tracker).await
         }
     }
     perf_check!("process gui message", start, Duration::from_millis(200));
 }
 
-async fn handle_dump_aggregate_counters(
+async fn handle_dump_aggregate_connection_tracker_counters(
     tx: &UnboundedSender<ServerToGuiMessages>,
     connection_tracker: &UnboundedSender<ConnectionTrackerMsg>,
-    kind: AggregateCounterKind,
-    name: String,
 ) {
     let (reply_tx, mut reply_rx) = mpsc::unbounded_channel();
-    if let Err(e) = connection_tracker.send(ConnectionTrackerMsg::GetAggregateCounters {
-        kind,
-        name,
-        tx: reply_tx,
-    }) {
+    if let Err(e) = connection_tracker
+        .send(ConnectionTrackerMsg::GetAggregateCountersConnectionTracker { tx: reply_tx })
+    {
         warn!(
             "Failed to send GetAggregateCounters to the connection tracker!?: {}",
             e

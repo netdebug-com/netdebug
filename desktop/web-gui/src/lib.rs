@@ -26,6 +26,15 @@ extern "C" {
     pub fn log(s: &str);
 }
 
+#[wasm_bindgen(module = "/js/utils.js")]
+extern "C" {
+    // populate the cfg JsValue with a ChartConfig struct to JSON
+    fn plot_chart(element_id: &str, cfg: JsValue, verbose: bool) -> JsValue;
+    // Above is a PITA to get working, just pass the JSON as a string
+    pub fn plot_json_chart(s: &str, json: &str, verbose: bool) -> JsValue;
+    pub fn plot_json_chart_update(chat: JsValue, data_json: &str, verbose: bool);
+}
+
 fn create_websocket() -> Result<WebSocket, JsValue> {
     let location = web_sys::window().expect("web_sys::window()").location();
     // connect back to server with same host + port and select wss vs. ws

@@ -11,7 +11,9 @@ use common::{
 };
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{
-    aggregate_counters::{AggregateCounter, AggregateCounterKind, BucketedTimeSeries},
+    aggregate_counters::{
+        AggregateCounter, AggregateCounterConnectionTracker, AggregateCounterKind,
+    },
     DnsTrackerEntry, IpProtocol, RateEstimator,
 };
 #[cfg(not(test))]
@@ -174,10 +176,8 @@ pub enum ConnectionTrackerMsg {
         key: ConnectionKey,
         remote_hostname: Option<String>, // will be None if lookup fails
     },
-    GetAggregateCounters {
-        kind: AggregateCounterKind,
-        name: String,
-        tx: mpsc::UnboundedSender<Vec<AggregateCounter>>,
+    GetAggregateCountersConnectionTracker {
+        tx: mpsc::UnboundedSender<AggregateCounterConnectionTracker>,
     },
 }
 
@@ -235,9 +235,8 @@ where
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let storage_service_msg_tx_clone = storage_service_msg_tx.clone();
         // for now, track these big counters by minute and second
-        let system_start = Instant::now();
-        let tx_bytes = ConnectionTracker::<R>::create_aggregate_counter(system_start, "tx_bytes");
-        let rx_bytes = ConnectionTracker::<R>::create_aggregate_counter(system_start, "rx_bytes");
+        let tx_bytes = ConnectionTracker::<R>::create_aggregate_counter("tx_bytes");
+        let rx_bytes = ConnectionTracker::<R>::create_aggregate_counter("rx_bytes");
         ConnectionTracker {
             connections: EvictingHashMap::new(
                 max_connections_per_tracker,
@@ -305,8 +304,8 @@ where
                 } => {
                     self.set_connection_remote_hostname_dns(key, remote_hostname);
                 }
-                GetAggregateCounters { kind, name, tx } => {
-                    self.get_aggregate_counters(kind, name, tx)
+                GetAggregateCountersConnectionTracker { tx } => {
+                    self.get_aggregate_connection_tracker_counters(tx)
                 }
             }
         }
@@ -520,37 +519,37 @@ where
      * Create the aggregate counter for this connection tracker
      * Just do per second and per minute for now
      */
-    fn create_aggregate_counter(system_start: Instant, counter_name: &str) -> AggregateCounter {
+    fn create_aggregate_counter(counter_name: &str) -> AggregateCounter {
         let mut agg_counter = AggregateCounter::new(
             AggregateCounterKind::ConnectionTracker,
             counter_name.to_string(),
         );
-        agg_counter.add_time_series(BucketedTimeSeries::new_with_create_time(
-            system_start,
+        agg_counter.add_time_series(
+            "Last 5 Seconds".to_string(),
+            std::time::Duration::from_millis(10),
+            500,
+        );
+        agg_counter.add_time_series(
+            "Last Minute".to_string(),
             std::time::Duration::from_secs(1),
             60,
-        ));
-        agg_counter.add_time_series(BucketedTimeSeries::new_with_create_time(
-            system_start,
-            std::time::Duration::from_secs(60), // minutes
+        );
+        agg_counter.add_time_series(
+            "Last Hour".to_string(),
+            std::time::Duration::from_secs(60),
             60,
-        ));
+        );
 
         agg_counter
     }
 
-    fn get_aggregate_counters(
+    fn get_aggregate_connection_tracker_counters(
         &self,
-        kind: AggregateCounterKind,
-        _name: String,
-        tx: UnboundedSender<Vec<AggregateCounter>>,
+        tx: UnboundedSender<AggregateCounterConnectionTracker>,
     ) {
-        use AggregateCounterKind::*;
-        let counters = match kind {
-            ConnectionTracker => {
-                vec![self.tx_bytes.clone(), self.rx_bytes.clone()]
-            }
-            _ => todo!(), // panic if they ask for something else, need to impl later
+        let counters = AggregateCounterConnectionTracker {
+            send: self.tx_bytes.clone(),
+            recv: self.rx_bytes.clone(),
         };
         if let Err(e) = tx.send(counters) {
             warn!(
