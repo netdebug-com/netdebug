@@ -756,7 +756,19 @@ impl Connection {
             Some(IpHeader::Version4(ip4, _)) => {
                 ip4.total_len() - ip4.header_len() as u16 - tcp.header_len()
             }
-            Some(IpHeader::Version6(ip6, _)) => ip6.payload_length - tcp.header_len(),
+            Some(IpHeader::Version6(ip6, _)) => {
+                if ip6.payload_length >= tcp.header_len() {
+                    ip6.payload_length - tcp.header_len() // regular packet
+                } else {
+                    warn!(
+                        "Malformed TCP packet with ip6.payload ({}) < tcp.header_len ({}) :: {:?}",
+                        ip6.payload_length,
+                        tcp.header_len(),
+                        &packet
+                    );
+                    0
+                }
+            }
         };
         // every packet has a SEQ so just record the most recently one
         // we might thrash a bit if there's packet re-ordering but maybe that's OK?
