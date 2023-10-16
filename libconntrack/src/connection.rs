@@ -779,13 +779,10 @@ impl Connection {
 
         // did we send some payload?
         if !packet.payload.is_empty() {
-            let mut first_time = false;
-            if self.local_data.is_none() {
-                // this is the first time in the connection lifetime we sent some payload
-                // spawn an inband probe
-                first_time = true;
-            }
+            let first_time = self.local_data.is_none();
             self.local_data = Some(packet.clone());
+            // this is the first time in the connection lifetime we sent some payload
+            // spawn an inband probe
             if first_time {
                 // reset the probe state
                 self.probe_round =
