@@ -34,7 +34,7 @@ use crate::{
     pcap::RawSocketWriter,
     perf_check,
     process_tracker::ProcessTrackerEntry,
-    utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, timestamp_to_ms},
+    utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, packet_is_tcp_rst, timestamp_to_ms},
 };
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ConnectionKey {
@@ -242,6 +242,7 @@ where
             connections: EvictingHashMap::new(
                 max_connections_per_tracker,
                 move |_k, v: Connection| {
+                    debug!("Evicting connection");
                     send_connection_storage_msg(&storage_service_msg_tx_clone, v);
                 },
             ),
@@ -324,6 +325,10 @@ where
             let connection = match self.connections.get_mut(&key) {
                 Some(connection) => connection,
                 None => {
+                    if packet_is_tcp_rst(&packet) {
+                        debug!("Not creating a new connection entry on RST");
+                        return;
+                    }
                     // else create the state and look it up again
                     self.new_connection(key.clone());
                     needs_dns_lookup = true;
@@ -364,6 +369,11 @@ where
 
     fn new_connection(&mut self, key: ConnectionKey) {
         let now = Utc::now();
+        let need_disk_logging = if cfg!(test) {
+            false
+        } else {
+            self.storage_service_msg_tx.is_none()
+        };
         let connection = Connection {
             connection_key: key.clone(),
             local_syn: None,
@@ -374,10 +384,7 @@ where
             local_data: None,
             probe_round: None,
             send_probes_on_idle: false,
-            #[cfg(test)]
-            needs_logging: false, // logging is off for testing, but on for production
-            #[cfg(not(test))]
-            needs_logging: true,
+            needs_disk_logging: need_disk_logging,
             close_time: None,
             local_fin_seq: None,
             remote_fin_seq: None,
@@ -616,7 +623,7 @@ pub struct Connection {
     pub local_data: Option<OwnedParsedPacket>, // data sent for retransmits
     pub probe_round: Option<ProbeRound>,
     pub send_probes_on_idle: bool, // should we send probes when the connection is idle?
-    pub needs_logging: bool,       // on connection close, should we log state to disk?
+    pub needs_disk_logging: bool,  // on connection close, should we log state to disk?
     pub close_time: Option<String>, // Grr! none of the time instants/DataTIme's implement Serialize!!
     pub local_fin_seq: Option<u32>, // used for tracking connection close
     pub remote_fin_seq: Option<u32>,
@@ -1377,7 +1384,7 @@ impl Connection {
     // TODO: just write out to a file in JSON for now, but will ultimately need
     // some sort of database... I think? SQL scheme may be a PITA
     fn log_to_disk(&mut self) {
-        self.needs_logging = false;
+        self.needs_disk_logging = false;
         if self.in_active_probe_session() {
             let probe_round = self.probe_report_summary.raw_reports.len() as u32;
             self.generate_probe_report(probe_round, None, true);
@@ -1581,7 +1588,7 @@ impl Connection {
 impl Drop for Connection {
     fn drop(&mut self) {
         let start = Instant::now();
-        if self.needs_logging {
+        if self.needs_disk_logging {
             self.log_to_disk();
         }
         perf_check!(
@@ -2200,8 +2207,8 @@ pub mod test {
         }
         // now test that the logfile is generated
         let outfile = connection.generate_output_filename();
-        connection.needs_logging = true; // because we're going to test it
-                                         // make sure the file doesn't exist at first
+        connection.needs_disk_logging = true; // because we're going to test it
+                                              // make sure the file doesn't exist at first
         println!(
             "Checking that log exists: {} -- {} ",
             env::current_dir().unwrap().display(),

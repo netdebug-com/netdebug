@@ -3,6 +3,8 @@ use std::net::IpAddr;
 use chrono::{DateTime, Utc};
 use etherparse::IpHeader;
 
+use crate::owned_packet::OwnedParsedPacket;
+
 pub fn etherparse_ipheaders2ipaddr(ip: &Option<IpHeader>) -> Result<(IpAddr, IpAddr), pcap::Error> {
     match ip {
         Some(IpHeader::Version4(ip4, _)) => {
@@ -63,6 +65,18 @@ pub fn ip_proto_to_string(ip_proto: u8) -> String {
         String::from("Udp")
     } else {
         format!("ip_proto={}", ip_proto)
+    }
+}
+
+pub fn packet_is_tcp_rst(packet: &OwnedParsedPacket) -> bool {
+    if let Some(rst) = &(packet.transport)
+        .as_ref()
+        .map(|th| th.clone().tcp().map(|tcph| tcph.rst))
+        .flatten()
+    {
+        *rst
+    } else {
+        false
     }
 }
 
