@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
+    num::Wrapping,
     time::Instant,
 };
 
@@ -617,16 +618,16 @@ pub struct Connection {
     pub last_packet_time: DateTime<Utc>,
     pub local_syn: Option<OwnedParsedPacket>,
     pub remote_syn: Option<OwnedParsedPacket>,
-    pub local_seq: Option<u32>, // the most recent seq seen from local INCLUDING the TCP payload
-    pub local_ack: Option<u32>,
-    pub remote_ack: Option<u32>,
+    pub local_seq: Option<Wrapping<u32>>, // the most recent seq seen from local INCLUDING the TCP payload
+    pub local_ack: Option<Wrapping<u32>>,
+    pub remote_ack: Option<Wrapping<u32>>,
     pub local_data: Option<OwnedParsedPacket>, // data sent for retransmits
     pub probe_round: Option<ProbeRound>,
     pub send_probes_on_idle: bool, // should we send probes when the connection is idle?
     pub needs_disk_logging: bool,  // on connection close, should we log state to disk?
     pub close_time: Option<String>, // Grr! none of the time instants/DataTIme's implement Serialize!!
-    pub local_fin_seq: Option<u32>, // used for tracking connection close
-    pub remote_fin_seq: Option<u32>,
+    pub local_fin_seq: Option<Wrapping<u32>>, // used for tracking connection close
+    pub remote_fin_seq: Option<Wrapping<u32>>,
     pub remote_rst: bool,
     pub local_rst: bool,
     pub probe_report_summary: ProbeReportSummary,
@@ -761,7 +762,7 @@ impl Connection {
         // every packet has a SEQ so just record the most recently one
         // we might thrash a bit if there's packet re-ordering but maybe that's OK?
         // currently this is only used for the self.is_idle_check()
-        self.local_seq = Some(tcp.sequence_number + payload_len as u32);
+        self.local_seq = Some(Wrapping(tcp.sequence_number) + Wrapping(payload_len as u32));
         // record the SYN to see which TCP options are negotiated
         if tcp.syn {
             self.local_syn = Some(packet.clone()); // memcpy() but doesn't happen that much or with much data
@@ -774,7 +775,7 @@ impl Connection {
 
         // record how far the local side has acknowledged
         if tcp.ack {
-            self.local_ack = Some(tcp.acknowledgment_number);
+            self.local_ack = Some(Wrapping(tcp.acknowledgment_number));
         }
 
         // did we send some payload?
@@ -807,7 +808,7 @@ impl Connection {
         if tcp.fin {
             // FIN's "use" a sequence number as if they sent a byte of data
             if let Some(fin_seq) = self.local_fin_seq {
-                if fin_seq != tcp.sequence_number {
+                if fin_seq != Wrapping(tcp.sequence_number) {
                     warn!(
                         "Weird: got multiple local FIN seqnos: {} != {}",
                         fin_seq, tcp.sequence_number
@@ -815,7 +816,7 @@ impl Connection {
                 }
                 // else it's just a duplicate packet
             }
-            self.local_fin_seq = Some(tcp.sequence_number);
+            self.local_fin_seq = Some(Wrapping(tcp.sequence_number));
         } else {
             action = self.check_three_way_close_done();
         }
@@ -847,7 +848,7 @@ impl Connection {
             // also make sure neither SYN or FIN are set as these can look like dupACKs if we're not careful
             if let Some(old_ack) = self.remote_ack {
                 // Is this ACK a duplicate ACK?
-                if old_ack == tcp.acknowledgment_number
+                if old_ack == Wrapping(tcp.acknowledgment_number)
                     && packet.payload.len() == 0
                     && !tcp.syn
                     && !tcp.fin
@@ -928,7 +929,7 @@ impl Connection {
             }
             // what ever the case, update the ack for next time
             // NOTE: this could be a NOOP in the dup ack case
-            self.remote_ack = Some(tcp.acknowledgment_number);
+            self.remote_ack = Some(Wrapping(tcp.acknowledgment_number));
             if self.idle_check() {
                 // launch queued idle probes
                 self.send_probes_on_idle = false;
@@ -942,7 +943,7 @@ impl Connection {
         if tcp.fin {
             // FIN's "use" a sequence number as if they sent a byte of data
             if let Some(fin_seq) = self.remote_fin_seq {
-                if fin_seq != tcp.sequence_number {
+                if fin_seq != Wrapping(tcp.sequence_number) {
                     warn!(
                         "Weird: got multiple remote FIN seqnos: {} != {}",
                         fin_seq, tcp.sequence_number
@@ -950,7 +951,7 @@ impl Connection {
                 }
                 // else it's just a duplicate packet
             }
-            self.remote_fin_seq = Some(tcp.sequence_number);
+            self.remote_fin_seq = Some(Wrapping(tcp.sequence_number));
         } else {
             action = self.check_three_way_close_done();
         }
@@ -2346,5 +2347,48 @@ pub mod test {
         assert_eq!(connections.len(), 1);
         let first_connection = connections.pop().unwrap();
         assert_eq!(first_connection.remote_hostname, Some(test_hostname));
+    }
+
+    #[test]
+    fn connection_seq_wrap() {
+        let builder = etherparse::PacketBuilder::ethernet2(
+            [1, 2, 3, 4, 5, 6], //source mac
+            [7, 8, 9, 10, 11, 12],
+        ) //destionation mac
+        .ipv4(
+            [192, 168, 1, 1], //source ip
+            [192, 168, 1, 2], //desitionation ip
+            20,
+        )
+        // create the TCP header with MAX_INT as the seq to force a wrap
+        .tcp_header(TcpHeader::new(1000, 2000, u32::MAX, 1000));
+        //payload of the tcp packet, will push the ACK to wrap!
+        let payload = [1, 2, 3, 4, 5, 6, 7, 8];
+
+        // get some memory to store the result
+        let mut pkt_buf = Vec::<u8>::with_capacity(builder.size(payload.len()));
+        builder.write(&mut pkt_buf, &payload).unwrap();
+        let wrapping_pkt = OwnedParsedPacket::try_from_fake_time(pkt_buf.to_vec()).unwrap();
+        // make sure we set it up right
+        match &wrapping_pkt.transport {
+            Some(TransportHeader::Tcp(tcph)) => assert_eq!(tcph.sequence_number, u32::MAX),
+            _ => panic!("Should be TCP"),
+        }
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.1").unwrap()]);
+        let log_dir = ".".to_string();
+        let storage_service_client = None;
+        let max_connections_per_tracker = 32;
+        let raw_sock = MockRawSocketWriter::new();
+        let mut connection_tracker = ConnectionTracker::new(
+            log_dir,
+            storage_service_client,
+            max_connections_per_tracker,
+            local_addrs,
+            raw_sock,
+        );
+        connection_tracker.add(wrapping_pkt);
+        assert_eq!(connection_tracker.connections.len(), 1);
+        let conn = connection_tracker.connections.values().next().unwrap();
+        assert_eq!(conn.local_seq.unwrap(), Wrapping(payload.len() as u32 - 1));
     }
 }
