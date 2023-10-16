@@ -556,7 +556,7 @@ dependencies = [
 [[package]]
 name = "dns-parser"
 version = "0.8.0"
-source = "git+https://github.com/netdebug-com/dns-parser?branch=pr47#dc5c4a3e6891c6e28bcc9799febe51b09b6907ed"
+source = "git+https://github.com/netdebug-com/dns-parser?branch=pr47#60a570446e8096ee81a16203f6d32d1cd435e2e4"
 dependencies = [
  "byteorder",
  "quick-error",
