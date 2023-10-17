@@ -2,7 +2,6 @@ use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
     num::Wrapping,
-    time::Instant,
 };
 
 use chrono::{DateTime, Duration, Utc};
@@ -35,7 +34,6 @@ use crate::{
     in_band_probe::tcp_inband_probe,
     owned_packet::OwnedParsedPacket,
     pcap::RawSocketWriter,
-    perf_check,
     process_tracker::ProcessTrackerEntry,
     utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, packet_is_tcp_rst, timestamp_to_ms},
 };
@@ -369,11 +367,6 @@ where
 
     fn new_connection(&mut self, key: ConnectionKey) {
         let now = Utc::now();
-        let need_disk_logging = if cfg!(test) {
-            false
-        } else {
-            self.storage_service_msg_tx.is_none()
-        };
         let connection = Connection {
             connection_key: key.clone(),
             local_syn: None,
@@ -384,7 +377,6 @@ where
             local_data: None,
             probe_round: None,
             send_probes_on_idle: false,
-            needs_disk_logging: need_disk_logging,
             close_time: None,
             local_fin_seq: None,
             remote_fin_seq: None,
@@ -623,7 +615,6 @@ pub struct Connection {
     pub local_data: Option<OwnedParsedPacket>, // data sent for retransmits
     pub probe_round: Option<ProbeRound>,
     pub send_probes_on_idle: bool, // should we send probes when the connection is idle?
-    pub needs_disk_logging: bool,  // on connection close, should we log state to disk?
     pub close_time: Option<String>, // Grr! none of the time instants/DataTIme's implement Serialize!!
     pub local_fin_seq: Option<Wrapping<u32>>, // used for tracking connection close
     pub remote_fin_seq: Option<Wrapping<u32>>,
@@ -1327,79 +1318,8 @@ impl Connection {
         self.send_probes_on_idle && self.remote_ack == self.local_seq
     }
 
-    /**
-     * Generate the filename to log to
-     *
-     * If our close time isn't set, set it now.
-     *
-     * NOTE: it's important to cache the result of the close time because if we didn't, two
-     * subsequent calls to this file (e.g., like in our tests) will never generate the same
-     * file name because of subtle differences in the time.
-     */
-
-    fn generate_output_filename(&mut self) -> String {
-        if self.close_time.is_none() {
-            let now = Utc::now();
-            self.close_time = Some(now.to_rfc3339());
-        }
-
-        let label = if self.user_annotation.is_some() {
-            "annotated"
-        } else if self.probe_report_summary.raw_reports.len() > 0 {
-            "report"
-        } else {
-            "simple"
-        };
-
-        let filename = std::path::Path::new(&self.log_dir)
-            .join(format!(
-                "{}_{}____{}_{}____{}_{}_{}.log",
-                label,
-                self.close_time.as_ref().unwrap(),
-                self.connection_key.remote_ip,
-                self.connection_key.remote_l4_port,
-                self.connection_key.local_ip,
-                self.connection_key.local_l4_port,
-                self.connection_key.ip_proto,
-            ))
-            .into_os_string()
-            .into_string()
-            .unwrap()
-            // silly windows doesn't allow ':'s from time + Ipv6 addrs in the filename
-            // keep it the same file name on all systems
-            .replace(":", "-");
-
-        filename
-    }
-
     fn in_active_probe_session(&self) -> bool {
         self.probe_round.is_some()
-    }
-
-    // Write Connection details and stats out to a logfile when it goes away
-    // NOTE this can go away by FIN/RST or also by HashLru eviction
-    // TODO: just write out to a file in JSON for now, but will ultimately need
-    // some sort of database... I think? SQL scheme may be a PITA
-    fn log_to_disk(&mut self) {
-        self.needs_disk_logging = false;
-        if self.in_active_probe_session() {
-            let probe_round = self.probe_report_summary.raw_reports.len() as u32;
-            self.generate_probe_report(probe_round, None, true);
-        }
-        let outfile = self.generate_output_filename();
-        debug!("Writing connection out to {}", outfile);
-        // write to $CWD for now... figure it out later
-        let json = serde_json::to_string(self);
-        match json {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(&outfile, json) {
-                    warn!("Writing out to {} -- {}", outfile, e);
-                }
-            }
-            Err(e) => {
-                warn!("Error serializing connection {} -- {}", outfile, e);
-            }
-        }
     }
 
     fn to_connection_storage_entry(&mut self) -> ConnectionStorageEntry {
@@ -1575,24 +1495,6 @@ impl Connection {
             start_tracking_time: self.start_tracking_time.clone(),
             last_packet_time: self.last_packet_time,
         }
-    }
-}
-
-/**
- * This should only be called for Connections that are LRU evicted; all other
- * connections (e.g., as closed by FIN/RST) should have this called through other means
- */
-impl Drop for Connection {
-    fn drop(&mut self) {
-        let start = Instant::now();
-        if self.needs_disk_logging {
-            self.log_to_disk();
-        }
-        perf_check!(
-            "Connection logging to disk",
-            start,
-            std::time::Duration::from_millis(50)
-        );
     }
 }
 
@@ -2202,24 +2104,6 @@ pub mod test {
                 }
             ));
         }
-        // now test that the logfile is generated
-        let outfile = connection.generate_output_filename();
-        connection.needs_disk_logging = true; // because we're going to test it
-                                              // make sure the file doesn't exist at first
-        println!(
-            "Checking that log exists: {} -- {} ",
-            env::current_dir().unwrap().display(),
-            outfile
-        );
-        assert_eq!(std::fs::metadata(&outfile).is_ok(), false);
-        // delete by hand for now; will eventually autodelete itself when we do FIN/RST tracking
-        // NOTE: reference checker here is smart; it will forget the connection reference b/c
-        // we don't use it anymore, which allows the connection_tracker to be mut borrowed for the
-        // .clear()
-        connection_tracker.connections.clear();
-        assert_eq!(std::fs::metadata(&outfile).is_ok(), true);
-        // clean it up
-        std::fs::remove_file(outfile).unwrap();
     }
 
     /**
