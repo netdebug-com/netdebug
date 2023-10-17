@@ -150,16 +150,41 @@ pub(crate) fn handle_aggregate_counters(
             .get(ts_label)
             .unwrap()
             .bucket_time_window;
-        let (units, units_per_bucket, canvas_id) = match &duration {
+        /*
+         * This math seems annoying to get right so I'm writing the derivation here:
+         *
+         * Convert bytes/bucket (which are variable length in time) to mega-bits/second
+         * e.g., with a sum of 'x' and a bucket size of 'd' seconds, the following conversion applies:
+         *  (x bytes/bucket) * (bucket/d seconds) --> (x/d bytes/second)
+         *  (x/d bytes/second) * (8 bits/byte) --> (8x/d bits/second)
+         *  (8x/d bits/second) * (Megabit/1e6 bits) --> (8x/1e6d megabits/second)
+         *
+         *  Factoring out a 'y_scale' means normalized = x/y_scale and
+         *  y_scale = 1e6*d/8 for d in seconds and
+         *  y_scale = 1e3*d/8 for d in milliseconds
+         *
+         */
+        let (units, units_per_bucket, y_scale, canvas_id) = match &duration {
             // Sigh - one day we'll do micro-second level precision --- just not today :-)
             // x  if *x < Duration::from_millis(1) => ("Micro-seconds", duration.as_micros()),
-            x if *x < Duration::from_secs(1) => ("Millis", duration.as_millis(), CANVAS_MILLIS),
-            x if *x < Duration::from_secs(60) => {
-                ("Seconds", duration.as_secs() as u128, CANVAS_SECONDS)
-            }
-            x if *x >= Duration::from_secs(60) => {
-                ("Minutes", duration.as_secs() as u128, CANVAS_MINUTES)
-            }
+            x if *x < Duration::from_secs(1) => (
+                "Millis",
+                duration.as_millis(),
+                1e3 * duration.as_millis() as f64 / 8.0,
+                CANVAS_MILLIS,
+            ),
+            x if *x < Duration::from_secs(60) => (
+                "Seconds",
+                duration.as_secs() as u128,
+                1e6 * duration.as_secs() as f64 / 8.0,
+                CANVAS_SECONDS,
+            ),
+            x if *x >= Duration::from_secs(60) => (
+                "Minutes",
+                duration.as_secs() as u128,
+                1e6 * duration.as_secs() as f64 / 8.0,
+                CANVAS_MINUTES,
+            ),
             _ => todo!("Unknown Duration !!",),
         };
         // format the data for chart.js
@@ -173,7 +198,7 @@ pub(crate) fn handle_aggregate_counters(
             .enumerate()
             .map(|(bucket_index, b)| {
                 serde_json::json!({
-                    "y": b.sum,
+                    "y": b.sum as f64/ y_scale,
                     "x": bucket_index * units_per_bucket as usize
                 })
             })
@@ -188,7 +213,7 @@ pub(crate) fn handle_aggregate_counters(
             .enumerate()
             .map(|(bucket_index, b)| {
                 serde_json::json!({
-                    "y": b.sum,
+                    "y": b.sum as f64 / y_scale,
                     "x": bucket_index * units_per_bucket as usize
                 })
             })
@@ -230,14 +255,15 @@ pub(crate) fn handle_aggregate_counters(
                         "y": {
                             "title": {
                                 "display": true,
-                                "text": format!("Bytes/{}", units).as_str(),
+                                "text": "Mbits/s",
                             }
                         }
                     }
                 }
             }))
             .unwrap();
-            let new_chart = plot_json_chart(canvas_id, chart_json.as_str(), true);
+            let new_chart = plot_json_chart(canvas_id, chart_json.as_str(), false);
+            // store a pointer to the new chart back in the shared state
             tabs.lock()
                 .unwrap()
                 .get_tab_data::<BandwidthGraph>(BANDWIDTH_GRAPH_TAB.to_string())
