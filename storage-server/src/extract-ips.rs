@@ -16,7 +16,7 @@ struct Args {
 type BoxError = Box<dyn std::error::Error>;
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    utils::init::netdebug_init();
+    common::init::netdebug_init();
     let args = Args::parse();
     let mut router_ips = HashSet::new();
     let mut remote_ips = HashSet::new();

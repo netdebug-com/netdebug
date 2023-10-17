@@ -18,7 +18,7 @@
  * More tests to be added with time
  */
 use chrono::Utc;
-use common::{analysis_messages::AnalysisInsights, Message, ProbeRoundReport};
+use common_wasm::{analysis_messages::AnalysisInsights, Message, ProbeRoundReport};
 use std::{
     net::{IpAddr, SocketAddr},
     time::Duration,
@@ -82,7 +82,7 @@ pub async fn handle_websocket(
     };
 
     // wrap the ws_tx with an unbounded mpsc channel because we can't clone it...
-    let (tx, mut rx) = mpsc::unbounded_channel::<common::Message>();
+    let (tx, mut rx) = mpsc::unbounded_channel::<common_wasm::Message>();
     let (barrier_tx, mut barrier_rx) = mpsc::unbounded_channel::<f64>();
     let tx_clone = tx.clone();
     let addr_str_clone = addr_str.clone();
@@ -112,7 +112,7 @@ pub async fn handle_websocket(
         }
     }
     // Version check - is the client build from the same git hash as the server?
-    tx.send(common::Message::make_version_check())
+    tx.send(common_wasm::Message::make_version_check())
         .unwrap_or_else(|e| {
             warn!("Sending version check: {} got {}", addr_str, e);
         });
@@ -176,7 +176,7 @@ async fn run_probe_round(
     send_idle_probes: &bool,
     max_rounds: u32,
 ) {
-    use common::Message::*;
+    use common_wasm::Message::*;
     tx.send(Ping1FromServer {
         server_timestamp_ms: make_time_ms(),
         probe_round,
@@ -217,7 +217,7 @@ async fn run_probe_round(
         // TODO: also log the report centrally - useful data!
         // if we got the report, send it to the remote WASM client
         Some(report) => {
-            tx.send(common::Message::ProbeReport {
+            tx.send(common_wasm::Message::ProbeReport {
                 report,
                 probe_round,
             })
@@ -257,7 +257,7 @@ async fn run_probe_round(
             // if we got the report, send it to the remote WASM client
             Some(report) => {
                 // if we do lots of idle probes, consider a separate probe report summary
-                tx.send(common::Message::ProbeReport {
+                tx.send(common_wasm::Message::ProbeReport {
                     report,
                     probe_round,
                 })
@@ -304,7 +304,7 @@ async fn get_probe_report(
 }
 
 /*
- * A ws::Message wraps our common::Message; unpack it from JSON and pass
+ * A ws::Message wraps our common_wasm::Message; unpack it from JSON and pass
  * on to the real handle_message() handler
  */
 async fn handle_ws_message(
@@ -432,7 +432,7 @@ fn handle_version_check(git_hash: String, _tx: &mpsc::UnboundedSender<Message>) 
             "Weird: client has differnt version than server but thinks it's the same: 
         {} != {}",
             &git_hash,
-            common::get_git_hash_version(),
+            common_wasm::get_git_hash_version(),
         );
     }
 }

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, vec};
 
-use common::{ProbeReportEntry, ProbeReportSummary, ProbeRoundReport};
+use common_wasm::{ProbeReportEntry, ProbeReportSummary, ProbeRoundReport};
 use itertools::Itertools;
 use sorted_vec::SortedVec;
 use wasm_bindgen::JsValue;

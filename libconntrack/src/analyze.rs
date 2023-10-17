@@ -10,7 +10,7 @@ use std::{collections::HashMap, error::Error};
 
 use itertools::Itertools;
 
-use common::{
+use common_wasm::{
     analysis_messages::{AnalysisInsights, Blame, Goodness, ProbeReportLatencies},
     ProbeReportEntry, ProbeReportSummaryNode,
 };

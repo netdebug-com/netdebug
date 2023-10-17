@@ -82,7 +82,7 @@ pub struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    utils::init::netdebug_init();
+    common::init::netdebug_init();
     let args = Args::parse();
 
     info!("Starting storage server");

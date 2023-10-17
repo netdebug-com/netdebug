@@ -1,6 +1,6 @@
 mod utils;
 
-use common::{get_git_hash_version, Message};
+use common_wasm::get_git_hash_version;
 use graph::Graph;
 use utils::set_panic_hook;
 use wasm_bindgen::prelude::*;
@@ -142,7 +142,7 @@ fn setup_annotation_onclick_message(ws: WebSocket) -> Result<(), JsValue> {
             .dyn_into::<HtmlTextAreaElement>()
             .unwrap();
         let annotation = text_area.value();
-        let msg = common::Message::SetUserAnnotation { annotation };
+        let msg = common_wasm::Message::SetUserAnnotation { annotation };
         if let Err(e) = ws.send_with_str(&serde_json::to_string(&msg).unwrap()) {
             console_log!("Error sending annotation: {:?}", e);
         } else {
@@ -164,8 +164,8 @@ fn lookup_by_id(id: &str) -> Option<Element> {
 
 fn handle_ws_message(e: MessageEvent, ws: WebSocket, graph: &mut Graph) -> Result<(), JsValue> {
     let raw_msg = e.data().as_string().unwrap();
-    let msg: common::Message = serde_json::from_str(raw_msg.as_str()).unwrap();
-    use common::Message::*;
+    let msg: common_wasm::Message = serde_json::from_str(raw_msg.as_str()).unwrap();
+    use common_wasm::Message::*;
     match msg {
         // TODO: add logic to reload client on version check mismatch
         VersionCheck { git_hash } => handle_version_check(git_hash, &ws),
@@ -199,7 +199,7 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, graph: &mut Graph) -> Resul
 }
 
 fn handle_insights(
-    insights: Vec<common::analysis_messages::AnalysisInsights>,
+    insights: Vec<common_wasm::analysis_messages::AnalysisInsights>,
 ) -> Result<(), JsValue> {
     let document = web_sys::window().unwrap().document().unwrap();
     let tab_div = lookup_by_id(INSIGHTS_TAB).unwrap();
@@ -242,7 +242,7 @@ fn handle_insights(
 }
 
 fn handle_probe_report(
-    report: common::ProbeRoundReport,
+    report: common_wasm::ProbeRoundReport,
     probe_round: u32,
     graph: &mut Graph,
 ) -> Result<(), JsValue> {
@@ -292,7 +292,7 @@ fn handle_ping1(t: &f64, ws: &WebSocket, probe_round: u32, max_rounds: u32) -> R
         .performance()
         .expect("performance should be available");
     let client_ts = performance.now();
-    let reply = Message::Ping2FromClient {
+    let reply = common_wasm::Message::Ping2FromClient {
         server_timestamp_ms: *t,
         client_timestamp_ms: client_ts,
         probe_round,
@@ -302,12 +302,12 @@ fn handle_ping1(t: &f64, ws: &WebSocket, probe_round: u32, max_rounds: u32) -> R
 }
 
 fn handle_version_check(git_hash: String, ws: &WebSocket) -> Result<(), JsValue> {
-    if common::Message::check_version(&git_hash) {
+    if common_wasm::Message::check_version(&git_hash) {
         console_log!(
             "Version checked passed: both client and server on {}",
             git_hash
         );
-        let reply = common::Message::make_version_check();
+        let reply = common_wasm::Message::make_version_check();
         ws.send_with_str(serde_json::to_string(&reply).unwrap().as_str())
     } else {
         console_log!(
