@@ -383,6 +383,14 @@ checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 name = "common"
 version = "0.1.0"
 dependencies = [
+ "env_logger",
+ "log",
+]
+
+[[package]]
+name = "common-wasm"
+version = "0.1.0"
+dependencies = [
  "chrono",
  "itertools 0.10.5",
  "linked-hash-map",
@@ -506,6 +514,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "common",
  "desktop_common",
  "etherparse",
  "futures",
@@ -520,7 +529,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "utils",
  "warp",
  "webserver",
 ]
@@ -1089,7 +1097,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "chrono",
- "common",
+ "common-wasm",
  "dns-parser",
  "etherparse",
  "futures",
@@ -1118,7 +1126,7 @@ name = "libconntrack-wasm"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "common",
+ "common-wasm",
  "serde",
  "serde_json",
  "serde_with",
@@ -1516,6 +1524,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "common",
  "etherparse",
  "libconntrack",
  "log",
@@ -1525,7 +1534,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "utils",
 ]
 
 [[package]]
@@ -1938,6 +1946,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "common",
  "log",
  "pb-conntrack-types",
  "pb-storage-service",
@@ -1947,7 +1956,6 @@ dependencies = [
  "tokio-rusqlite",
  "tonic",
  "tonic-build",
- "utils",
 ]
 
 [[package]]
@@ -2353,14 +2361,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
 
 [[package]]
-name = "utils"
-version = "0.1.0"
-dependencies = [
- "env_logger",
- "log",
-]
-
-[[package]]
 name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2512,7 +2512,7 @@ dependencies = [
 name = "web-client"
 version = "0.1.0"
 dependencies = [
- "common",
+ "common-wasm",
  "console_error_panic_hook",
  "itertools 0.11.0",
  "js-sys",
@@ -2564,6 +2564,7 @@ dependencies = [
  "chrono",
  "clap",
  "common",
+ "common-wasm",
  "etherparse",
  "futures",
  "futures-util",
@@ -2578,7 +2579,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "utils",
  "warp",
 ]
 

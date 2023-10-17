@@ -191,7 +191,7 @@ pub fn build_info_div(document: &Document) -> Result<Element, JsValue> {
     list_item.set_inner_html(format!("Last Modified = {}", document.last_modified()).as_str());
     list.append_child(&list_item)?;
     let list_item = document.create_element("li")?;
-    list_item.set_inner_html(format!("GitHash = {}", common::get_git_hash_version()).as_str());
+    list_item.set_inner_html(format!("GitHash = {}", common_wasm::get_git_hash_version()).as_str());
     list.append_child(&list_item)?;
     div.append_child(&list)?;
     Ok(div)

@@ -1,7 +1,7 @@
-extern crate utils;
+extern crate common;
 
 fn main() {
-    utils::init::netdebug_init();
+    common::init::netdebug_init();
     println!("Hello, World!");
 
     let _ = std::thread::spawn(|| {

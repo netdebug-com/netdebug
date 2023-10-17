@@ -49,7 +49,7 @@ pub struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    utils::init::netdebug_init();
+    common::init::netdebug_init();
 
     let args = Args::parse();
 

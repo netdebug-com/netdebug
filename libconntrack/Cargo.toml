@@ -8,10 +8,10 @@ edition = "2021"
 [dependencies]
 
 bytes = "1.5.0"
-common = { path = "../webserver/common" }                                                 # TODO move this dir to the top level?
+common-wasm = { path = "../common/wasm" }             # TODO move this dir to the top level?
 chrono = { version = "0.4.26", features = ["serde"] }
 # use our own private upstream until they land our qtype=65/https patch
-dns-parser = { git = "https://github.com/netdebug-com/dns-parser", branch = "pr47"}
+dns-parser = { git = "https://github.com/netdebug-com/dns-parser", branch = "pr47" }
 # use our own private upstream until they land our tcp_header patch
 etherparse = { git = "https://github.com/robs-zeynet/etherparse", branch = "tcp_header" }
 futures = "0.3.28"

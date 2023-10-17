@@ -19,6 +19,7 @@ path = "src/extract-ips.rs"
 bytes = "1.4"
 chrono = "0.4"
 clap = { version = "4.4.3", features = ["derive"] }
+common = { path = "../common" }
 log = "0.4.18"
 pb-conntrack-types = { path = "../protobuf/conntrack-types" }
 pb-storage-service = { path = "../protobuf/storage-service" }
@@ -27,7 +28,6 @@ rusqlite = { version = "0.29.0", features = ["bundled", "blob"] }
 tokio = { version = "1.28.2", features = ["full"] }
 tokio-rusqlite = "0.4.0"
 tonic = "0.10"
-utils = { path = "../utils" }
 
 [build-dependencies]
 tonic-build = "0.10"

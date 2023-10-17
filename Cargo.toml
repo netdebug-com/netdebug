@@ -3,12 +3,12 @@
 
 [workspace]
 members = [
+  "common",
   "desktop",
   "desktop/web-gui",
   "libconntrack",
   "probe-o-matic",
   "storage-server",
-  "utils",
   "webserver",
   "webserver/web-client",
 ]

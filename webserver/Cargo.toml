@@ -34,9 +34,10 @@ cli = []
 
 [dependencies]
 # pls keep in alpha order
-common = { path = "./common" }
 chrono = "0.4.26"
 clap = { version = "4.2.7", features = ["derive"] }
+common = { path = "../common" }
+common-wasm = { path = "../common/wasm" }
 # move back to the public branch once https://github.com/JulianSchmid/etherparse/pull/66 is merged
 # NOTE: 0.14.0 looks like it breaks partial IpHeader::from_slice() parsing
 # See https://github.com/JulianSchmid/etherparse/issues/46
@@ -55,5 +56,4 @@ rand = "0.8.5"
 serde = { version = "1.0.163", features = ["derive"] }
 serde_json = "1.0.96"
 tokio = { version = "1.28.2", features = ["full"] }
-utils = { path = "../utils" }
 warp = "0.3.5"

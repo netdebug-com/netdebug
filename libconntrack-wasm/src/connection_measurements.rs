@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::IpAddr};
 
 use chrono::{DateTime, Utc};
-use common::ProbeReportSummary;
+use common_wasm::ProbeReportSummary;
 use serde::{Deserialize, Serialize};
 
 use crate::{IpProtocol, RateEstimator};

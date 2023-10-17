@@ -6,7 +6,7 @@ use std::{
 };
 
 use chrono::{DateTime, Duration, Utc};
-use common::{
+use common_wasm::{
     analysis_messages::AnalysisInsights, evicting_hash_map::EvictingHashMap, ProbeId,
     ProbeReportEntry, ProbeReportSummary, ProbeRoundReport, PROBE_MAX_TTL,
 };

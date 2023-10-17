@@ -1,5 +1,5 @@
 use bytes::{BufMut, BytesMut};
-use common::evicting_hash_map::EvictingHashMap;
+use common_wasm::evicting_hash_map::EvictingHashMap;
 #[cfg(not(test))]
 use log::{debug, warn};
 use rand::Rng;

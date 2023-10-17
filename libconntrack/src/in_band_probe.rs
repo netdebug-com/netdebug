@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use common::PROBE_MAX_TTL;
+use common_wasm::PROBE_MAX_TTL;
 use etherparse::{PacketHeaders, TcpHeader, TransportHeader};
 use log::{debug, warn};
 

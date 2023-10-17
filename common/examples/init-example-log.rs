@@ -1,4 +1,4 @@
-extern crate utils;
+extern crate common;
 
 use log::error;
 use log::info;
@@ -12,7 +12,7 @@ mod foo {
 }
 
 fn main() {
-    utils::init::netdebug_init();
+    common::init::netdebug_init();
     info!("Hello, World!");
     error!("Hello, World!");
     foo::bar::xxx();

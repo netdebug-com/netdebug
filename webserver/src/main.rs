@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 #[cfg(not(windows))]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    utils::init::netdebug_init();
+    common::init::netdebug_init();
 
     let args = Args::parse();
 
@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     info!(
         "Running webserver version: {}",
-        common::get_git_hash_version()
+        common_wasm::get_git_hash_version()
     );
     let ip: std::net::IpAddr = match args.production {
         true => {

@@ -47,7 +47,7 @@ const GOOGLE_DNS_IPV6: &'static str = "2001:4860:4860::8888";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    utils::init::netdebug_init();
+    common::init::netdebug_init();
     let args = Args::parse();
 
     let gateway_mac = mac_address::MacAddress::from_str(&args.gateway_mac)

@@ -20,7 +20,7 @@ struct Args {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    utils::init::netdebug_init();
+    common::init::netdebug_init();
     let args = Args::parse();
 
     let connection = connection_from_log(&args.analyze_log)?;
