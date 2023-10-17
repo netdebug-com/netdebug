@@ -76,9 +76,9 @@ pub async fn handle_websocket(
     );
     let (mut ws_tx, ws_rx) = websocket.split();
 
-    let (connection_tracker, send_idle_probes) = {
+    let connection_tracker = {
         let ctx = context.read().await;
-        (ctx.connection_tracker.clone(), ctx.send_idle_probes)
+        ctx.connection_tracker.clone()
     };
 
     // wrap the ws_tx with an unbounded mpsc channel because we can't clone it...
@@ -127,7 +127,6 @@ pub async fn handle_websocket(
             &connection_key,
             &connection_tracker,
             &addr_str,
-            &send_idle_probes,
             max_rounds,
         )
         .await;
@@ -173,7 +172,6 @@ async fn run_probe_round(
     connection_key: &Option<ConnectionKey>,
     connection_tracker: &mpsc::UnboundedSender<ConnectionTrackerMsg>,
     addr_str: &String,
-    send_idle_probes: &bool,
     max_rounds: u32,
 ) {
     use common_wasm::Message::*;
@@ -210,7 +208,7 @@ async fn run_probe_round(
         connection_key,
         probe_round,
         rtt_estimate,
-        !send_idle_probes,
+        true,
     )
     .await
     {
@@ -229,47 +227,6 @@ async fn run_probe_round(
             });
         }
         None => warn!("Got 'None' back from report_tx for {}", addr_str),
-    }
-    if *send_idle_probes {
-        // next, set for idle probes to get the endhost pings
-        connection_tracker
-            .send(ConnectionTrackerMsg::ProbeOnIdle {
-                key: connection_key.clone().unwrap(),
-            })
-            .unwrap_or_else(|e| {
-                warn!("connection_tracker::send() returned {}", e);
-                return;
-            });
-        // TODO: do a smarter RTT estimate
-        tokio::time::sleep(Duration::from_millis(rtt_estimate.round() as u64)).await;
-        // second report we get, do clear state
-        // TODO refactor duplicate code! signal idle report?
-        match get_probe_report(
-            connection_tracker,
-            connection_key,
-            probe_round,
-            rtt_estimate,
-            true,
-        )
-        .await
-        {
-            // TODO: also log the report centrally - useful data!
-            // if we got the report, send it to the remote WASM client
-            Some(report) => {
-                // if we do lots of idle probes, consider a separate probe report summary
-                tx.send(common_wasm::Message::ProbeReport {
-                    report,
-                    probe_round,
-                })
-                .unwrap_or_else(|e| {
-                    warn!(
-                        "Error while sending ProbeReport to client: {} :: {}",
-                        addr_str, e
-                    );
-                });
-            }
-            None => warn!("Got 'None' back from report_tx for {}", addr_str),
-        }
     }
 }
 
