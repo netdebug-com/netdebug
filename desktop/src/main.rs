@@ -34,10 +34,6 @@ pub struct Args {
     #[arg(long, default_value = None)]
     pub pcap_device: Option<String>,
 
-    /// Where to write connection log files?  Will create if doesn't exist
-    #[arg(long, default_value = "logs")]
-    pub log_dir: String,
-
     /// How big to make the LRU Cache on each ConnectionTracker
     #[arg(long, default_value_t = 4096)]
     pub max_connections_per_tracker: usize,
@@ -101,7 +97,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             None
         };
         let mut connection_tracker = ConnectionTracker::new(
-            args.log_dir,
             storage_service_msg_tx,
             args.max_connections_per_tracker,
             local_addrs,

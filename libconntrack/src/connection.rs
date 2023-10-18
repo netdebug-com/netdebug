@@ -207,7 +207,6 @@ where
     local_addrs: HashSet<IpAddr>,
     raw_sock: R,
     storage_service_msg_tx: Option<mpsc::Sender<ConnectionStorageEntry>>,
-    log_dir: String,
     dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
     tx: UnboundedSender<ConnectionTrackerMsg>, // so we can tell others how to send msgs to us
     rx: UnboundedReceiver<ConnectionTrackerMsg>, // to read messages sent to us
@@ -220,7 +219,6 @@ where
     R: RawSocketWriter,
 {
     pub fn new(
-        log_dir: String,
         storage_service_msg_tx: Option<mpsc::Sender<ConnectionStorageEntry>>,
         max_connections_per_tracker: usize,
         local_addrs: HashSet<IpAddr>,
@@ -242,7 +240,6 @@ where
             local_addrs,
             raw_sock,
             storage_service_msg_tx,
-            log_dir,
             dns_tx: None,
             tx,
             rx,
@@ -376,7 +373,6 @@ where
             local_rst: false,
             probe_report_summary: ProbeReportSummary::new(),
             user_annotation: None,
-            log_dir: self.log_dir.clone(),
             user_agent: None,
             associated_apps: None,
             start_tracking_time: now,
@@ -606,7 +602,6 @@ pub struct Connection {
     pub local_rst: bool,
     pub probe_report_summary: ProbeReportSummary,
     pub user_annotation: Option<String>, // an human supplied comment on this connection
-    pub log_dir: String, // need to cache it here as we need it during Destructor; fugly
     pub user_agent: Option<String>, // when created via a web request, store the user-agent header
     pub associated_apps: Option<HashMap<u32, Option<String>>>, // PID --> ProcessName, if we know it
     pub remote_hostname: Option<String>, // the FQDN of the remote host, if we know it
@@ -640,7 +635,7 @@ impl Connection {
                 if src_is_local {
                     self.update_tcp_local(&packet, tcp, raw_sock)
                 } else {
-                    self.update_tcp_remote(&packet, tcp, raw_sock)
+                    self.update_tcp_remote(&packet, tcp)
                 }
             }
             Some(TransportHeader::Icmpv4(icmp4)) => {
@@ -810,11 +805,10 @@ impl Connection {
         action
     }
 
-    fn update_tcp_remote<R: RawSocketWriter>(
+    fn update_tcp_remote(
         &mut self,
         packet: &OwnedParsedPacket,
         tcp: &TcpHeader,
-        raw_sock: &mut R,
     ) -> ConnectionAction {
         let mut action = ConnectionAction::Noop;
         if tcp.syn {
@@ -916,15 +910,6 @@ impl Connection {
             // what ever the case, update the ack for next time
             // NOTE: this could be a NOOP in the dup ack case
             self.remote_ack = Some(Wrapping(tcp.acknowledgment_number));
-            if self.idle_check() {
-                // launch queued idle probes
-                self.send_probes_on_idle = false;
-                // unwrap is right as we should never send idle probes when self.local_data = None
-                tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock, false)
-                    .unwrap_or_else(|e| {
-                        warn!("tcp_inband_probe() returned :: {}", e);
-                    });
-            }
         }
         if tcp.fin {
             // FIN's "use" a sequence number as if they sent a byte of data
@@ -1285,20 +1270,6 @@ impl Connection {
         }
     }
 
-    /**
-     * Is the connection currently idle?
-     *
-     * Yes if:
-     * 1) the application has said it's going to pause sending new data (e.g., send_probes_on_idle is set)
-     * 2) If the remote has ACK'd everything we've sent so far
-     */
-
-    fn idle_check(&self) -> bool {
-        // TODO: if we decide to use idle probes, may need to check the incoming direction as well, e.g.,
-        // track and add self.local_ack == self.remote_seq
-        self.send_probes_on_idle && self.remote_ack == self.local_seq
-    }
-
     fn in_active_probe_session(&self) -> bool {
         self.probe_round.is_some()
     }
@@ -1556,7 +1527,6 @@ pub mod test {
 
     #[tokio::test]
     async fn connection_tracker_one_flow_outgoing() {
-        let log_dir = ".".to_string();
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
@@ -1564,7 +1534,6 @@ pub mod test {
         let localhost_ip = IpAddr::from_str("127.0.0.1").unwrap();
         local_addrs.insert(localhost_ip);
         let mut connection_tracker = ConnectionTracker::new(
-            log_dir,
             storage_service_client,
             max_connections_per_tracker,
             local_addrs,
@@ -1621,7 +1590,6 @@ pub mod test {
      */
     async fn connection_tracker_one_flow_out_and_in() {
         pretty_env_logger::init();
-        let log_dir = ".".to_string();
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
@@ -1629,7 +1597,6 @@ pub mod test {
         let local_ip = IpAddr::from_str("172.31.2.61").unwrap();
         local_addrs.insert(local_ip);
         let mut connection_tracker = ConnectionTracker::new(
-            log_dir,
             storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
@@ -1689,14 +1656,12 @@ pub mod test {
      */
     async fn connection_tracker_probe_and_reply() {
         let raw_sock = MockRawSocketWriter::new();
-        let log_dir = ".".to_string();
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let mut local_addrs = HashSet::new();
         let local_ip = IpAddr::from_str("172.31.2.61").unwrap();
         local_addrs.insert(local_ip);
         let mut connection_tracker = ConnectionTracker::new(
-            log_dir,
             storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
@@ -1779,13 +1744,11 @@ pub mod test {
      */
     #[tokio::test]
     async fn three_way_fin_teardown() {
-        let log_dir = ".".to_string();
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.37").unwrap()]);
         let mut connection_tracker = ConnectionTracker::new(
-            log_dir,
             storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
@@ -1811,13 +1774,11 @@ pub mod test {
      */
     #[tokio::test]
     async fn full_probe_report() {
-        let log_dir = ".".to_string();
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let local_addrs = HashSet::from([IpAddr::from_str("172.31.10.232").unwrap()]);
         let mut connection_tracker = ConnectionTracker::new(
-            log_dir,
             storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
@@ -1963,12 +1924,10 @@ pub mod test {
         ];
         let remote_rst = OwnedParsedPacket::try_from_fake_time(remote_rst.to_vec()).unwrap();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.103").unwrap()]);
-        let log_dir = ".".to_string();
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let mut connection_tracker = ConnectionTracker::new(
-            log_dir,
             storage_service_client,
             max_connections_per_tracker,
             local_addrs,
@@ -1989,12 +1948,10 @@ pub mod test {
         let mut dns_tracker = DnsTracker::new(20);
         let local_syn = OwnedParsedPacket::try_from_fake_time(TEST_1_LOCAL_SYN.to_vec()).unwrap();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.37").unwrap()]);
-        let log_dir = ".".to_string();
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let mut connection_tracker = ConnectionTracker::new(
-            log_dir,
             storage_service_client,
             max_connections_per_tracker,
             local_addrs,
@@ -2069,12 +2026,10 @@ pub mod test {
             _ => panic!("Should be TCP"),
         }
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.1").unwrap()]);
-        let log_dir = ".".to_string();
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let mut connection_tracker = ConnectionTracker::new(
-            log_dir,
             storage_service_client,
             max_connections_per_tracker,
             local_addrs,
