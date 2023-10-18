@@ -729,19 +729,35 @@ impl Connection {
         let payload_len = match &packet.ip {
             None => 0,
             Some(IpHeader::Version4(ip4, _)) => {
-                ip4.total_len() - ip4.header_len() as u16 - tcp.header_len()
+                match ip4
+                    .total_len()
+                    .checked_sub(ip4.header_len() as u16 + tcp.header_len())
+                {
+                    Some(x) => x,
+                    None => {
+                        warn!(
+                            "Malformed TCP packet with ip4.payload ({}) < ip4.header_len({}) + tcp.header_len ({}) :: {:?}",
+                            ip4.total_len(),
+                            ip4.header_len(),
+                            tcp.header_len(),
+                            &packet
+                    );
+                        0
+                    }
+                }
             }
             Some(IpHeader::Version6(ip6, _)) => {
-                if ip6.payload_length >= tcp.header_len() {
-                    ip6.payload_length - tcp.header_len() // regular packet
-                } else {
-                    warn!(
-                        "Malformed TCP packet with ip6.payload ({}) < tcp.header_len ({}) :: {:?}",
-                        ip6.payload_length,
-                        tcp.header_len(),
-                        &packet
-                    );
-                    0
+                match ip6.payload_length.checked_sub(tcp.header_len()) {
+                    Some(x) => x,
+                    None => {
+                        warn!(
+                            "Malformed TCP packet with ip6.payload ({}) < tcp.header_len ({}) :: {:?}",
+                            ip6.payload_length,
+                            tcp.header_len(),
+                            &packet
+                        );
+                        0
+                    }
                 }
             }
         };
