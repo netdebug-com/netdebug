@@ -811,12 +811,10 @@ mod test {
         let (dns_tx, _) = DnsTracker::spawn(100).await;
         let local_addrs =
             HashSet::from([IpAddr::from_str("2600:1700:5b20:4e10:adc4:bd8f:d640:2d48").unwrap()]);
-        let log_dir = ".".to_string();
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
         let mut connection_tracker = ConnectionTracker::new(
-            log_dir,
             storage_service_client,
             max_connections_per_tracker,
             local_addrs,

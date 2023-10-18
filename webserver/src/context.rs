@@ -68,16 +68,11 @@ impl WebServerContext {
 
         // TODO Spawn lots for multi-processing
         if !args.web_server_only {
-            let (storage_server_url, log_dir, max_connections_per_tracker, device) = (
+            let (storage_server_url, max_connections_per_tracker, device) = (
                 args.storage_server_url.clone(),
-                args.log_dir.clone(),
                 context.max_connections_per_tracker,
                 context.pcap_device.clone(),
             );
-            if let Err(e) = check_log_dir(&args.log_dir) {
-                log::error!("Failed to create log_dir {} :: {}", args.log_dir, e);
-                std::process::exit(1); // fatal error
-            }
             // Spawn a ConnectionTracker task
             let storage_service_future = if let Some(url) = storage_server_url {
                 Some(ConnectionStorageHandler::spawn_from_url(url, 1000))
@@ -93,7 +88,6 @@ impl WebServerContext {
                 };
                 let raw_sock = bind_writable_pcap(device).unwrap();
                 let mut connection_tracker = ConnectionTracker::new(
-                    log_dir,
                     storage_service_msg_tx,
                     max_connections_per_tracker,
                     local_addrs,
@@ -105,19 +99,6 @@ impl WebServerContext {
         }
 
         Ok(context)
-    }
-}
-
-/**
- * Try to create if it doesn't exist
- */
-
-fn check_log_dir(log_dir: &str) -> Result<(), std::io::Error> {
-    let path = std::path::Path::new(log_dir);
-    if !path.is_dir() {
-        std::fs::create_dir(log_dir)
-    } else {
-        Ok(())
     }
 }
 
@@ -148,10 +129,6 @@ pub struct Args {
     /// Web-server only - no libpcap probing
     #[arg(long, default_value_t = false)]
     pub web_server_only: bool,
-
-    /// Where to write connection log files?  Will create if doesn't exist
-    #[arg(long, default_value = "logs")]
-    pub log_dir: String,
 
     /// How big to make the LRU Cache on each ConnectionTracker
     #[arg(long, default_value_t = 4096)]
