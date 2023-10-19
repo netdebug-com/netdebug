@@ -3,8 +3,36 @@ use std::error::Error;
 use common_wasm::PROBE_MAX_TTL;
 use etherparse::{PacketHeaders, TcpHeader, TransportHeader};
 use log::{debug, warn};
+use tokio::sync::mpsc::{channel, Sender};
 
-use crate::{owned_packet::OwnedParsedPacket, pcap::RawSocketWriter};
+use crate::{owned_packet::OwnedParsedPacket, pcap::RawSocketWriter, utils::PerfMsgCheck};
+
+pub enum ProbeMessage {
+    SendProbe { packet: OwnedParsedPacket },
+}
+
+pub async fn spawn_raw_prober<R>(
+    mut raw_sock: R,
+    max_queued: usize,
+) -> Sender<PerfMsgCheck<ProbeMessage>>
+where
+    R: RawSocketWriter + 'static,
+{
+    let (tx, mut rx) = channel::<PerfMsgCheck<ProbeMessage>>(max_queued);
+    tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            let msg = msg.perf_check_get("spawn_raw_prober");
+            match msg {
+                ProbeMessage::SendProbe { packet } => {
+                    if let Err(e) = tcp_inband_probe(&packet, &mut raw_sock) {
+                        warn!("Problem running tcp_inband_probe: {}", e);
+                    }
+                }
+            }
+        }
+    });
+    tx
+}
 
 /**
  * Create a bunch of packets with the same local/remote five tuple
@@ -17,7 +45,6 @@ use crate::{owned_packet::OwnedParsedPacket, pcap::RawSocketWriter};
 pub fn tcp_inband_probe(
     packet: &OwnedParsedPacket,
     raw_sock: &mut dyn RawSocketWriter, // used with testing
-    _bsd_hack: bool,
 ) -> Result<(), Box<dyn Error>> {
     let l2 = packet.link.as_ref().unwrap();
     // build up probes
@@ -88,7 +115,7 @@ pub mod test {
     use etherparse::PacketBuilder;
 
     use crate::owned_packet::OwnedParsedPacket;
-    use crate::pcap::MockRawSocketWriter;
+    use crate::pcap::MockRawSocketProber;
 
     pub fn test_tcp_packet(src_ip: IpAddr, dst_ip: IpAddr) -> Box<OwnedParsedPacket> {
         test_tcp_packet_ports(src_ip, dst_ip, 21, 1234)
@@ -134,14 +161,14 @@ pub mod test {
 
     #[tokio::test]
     async fn test_inband_tcp_probes() {
-        let mut mock_raw_sock = MockRawSocketWriter::new();
+        let mut mock_raw_sock = MockRawSocketProber::new();
         assert_eq!(mock_raw_sock.captured.len(), 0);
         let packet = test_tcp_packet(
             IpAddr::from_str("192.168.1.1").unwrap(),
             IpAddr::from_str("192.168.1.2").unwrap(),
         );
 
-        tcp_inband_probe(&packet, &mut mock_raw_sock, false).unwrap();
+        tcp_inband_probe(&packet, &mut mock_raw_sock).unwrap();
 
         assert_eq!(mock_raw_sock.captured.len(), PROBE_MAX_TTL as usize);
 

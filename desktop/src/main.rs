@@ -6,6 +6,7 @@ use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg},
     connection_storage_handler::ConnectionStorageHandler,
     dns_tracker::{DnsTracker, DnsTrackerMessage},
+    in_band_probe::spawn_raw_prober,
     process_tracker::{ProcessTracker, ProcessTrackerMessage},
     utils::PerfMsgCheck,
 };
@@ -43,6 +44,8 @@ pub struct Args {
     #[arg(long, default_value=None)]
     pub storage_server_url: Option<String>,
 }
+
+const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 4096;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -90,6 +93,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let _connection_tracker_task = tokio::spawn(async move {
         let raw_sock =
             libconntrack::pcap::bind_writable_pcap_by_name(devices[0].name.clone()).unwrap();
+        let prober_tx = spawn_raw_prober(raw_sock, MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE).await;
         let args = args_clone;
         // Spawn a ConnectionTracker task
         let storage_service_msg_tx = if let Some(url) = args.storage_server_url {
@@ -101,7 +105,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             storage_service_msg_tx,
             args.max_connections_per_tracker,
             local_addrs,
-            raw_sock,
+            prober_tx,
         );
         connection_tracker.set_tx_rx(connection_manager_tx, rx);
         connection_tracker.set_dns_tracker(dns_tx_clone);
