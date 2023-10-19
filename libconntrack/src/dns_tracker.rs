@@ -384,9 +384,9 @@ impl<'a> DnsTracker<'a> {
         };
         let request = make_dns_ptr_lookup_request(ip, None).unwrap();
         let bind_addr = if dns_server.is_ipv4() {
-            "0.0.0.0:53"
+            "0.0.0.0:0"
         } else {
-            "[::]:53"
+            "[::]:0"
         };
         match tokio::net::UdpSocket::bind(bind_addr).await {
             Ok(udp) => {
