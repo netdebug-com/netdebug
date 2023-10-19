@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
     num::Wrapping,
+    time::Instant,
 };
 
 use chrono::{DateTime, Duration, Utc};
@@ -227,6 +228,7 @@ pub struct ConnectionTracker<'a> {
     // aggregate counters of everything that's gone through this connection manager
     tx_bytes: AggregateCounter,
     rx_bytes: AggregateCounter,
+    dequeue_delay_stats_us: AggregateCounter,
 }
 impl<'a> ConnectionTracker<'a> {
     pub fn new(
@@ -241,6 +243,16 @@ impl<'a> ConnectionTracker<'a> {
         // for now, track these big counters by minute and second
         let tx_bytes = ConnectionTracker::create_aggregate_counter("tx_bytes");
         let rx_bytes = ConnectionTracker::create_aggregate_counter("rx_bytes");
+
+        let mut dequeue_delay_stats_us = AggregateCounter::new(
+            AggregateCounterKind::ConnectionTracker,
+            "dequeue_delay stats".to_string(),
+        );
+        dequeue_delay_stats_us.add_time_series(
+            "(us)".to_string(),
+            std::time::Duration::from_millis(1),
+            5000,
+        );
         ConnectionTracker {
             connections: EvictingHashMap::new(
                 max_connections_per_tracker,
@@ -257,6 +269,7 @@ impl<'a> ConnectionTracker<'a> {
             rx,
             tx_bytes,
             rx_bytes,
+            dequeue_delay_stats_us,
         }
     }
 
@@ -265,9 +278,22 @@ impl<'a> ConnectionTracker<'a> {
     }
 
     pub async fn rx_loop(&mut self) {
+        let mut last_stats_update = std::time::Instant::now();
         while let Some(msg) = self.rx.recv().await {
             use ConnectionTrackerMsg::*;
-            let msg = msg.perf_check_get("ConnectionTracker::rx_loop");
+            let msg = msg.perf_check_get_with_stats(
+                "ConnectionTracker::rx_loop",
+                &mut self.dequeue_delay_stats_us,
+            );
+            // TODO: fb303-style stats!!
+            let now = Instant::now();
+            if (now - last_stats_update) > std::time::Duration::from_secs(5) {
+                last_stats_update = now;
+                info!(
+                    "ConnectionTracker dequeue delay stats: {}",
+                    self.dequeue_delay_stats_us
+                );
+            }
             match msg {
                 Pkt(pkt) => self.add(pkt),
                 ProbeReport {
