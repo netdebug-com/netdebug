@@ -276,15 +276,15 @@ where
                     probe_round,
                     application_rtt,
                 } => {
-                    self.generate_report(key, probe_round, application_rtt, clear_state, tx)
+                    self.generate_report(&key, probe_round, application_rtt, clear_state, tx)
                         .await
                 }
                 SetUserAnnotation { annotation, key } => {
-                    self.set_user_annotation(key, annotation).await;
+                    self.set_user_annotation(&key, annotation).await;
                 }
-                GetInsights { key, tx } => self.get_insights(key, tx).await,
+                GetInsights { key, tx } => self.get_insights(&key, tx).await,
                 SetUserAgent { user_agent, key } => {
-                    self.set_user_agent(key, user_agent).await;
+                    self.set_user_agent(&key, user_agent).await;
                 }
                 GetConnectionKeys { tx } => {
                     // so simple, no need for a dedicated function
@@ -303,7 +303,7 @@ where
                     key,
                     remote_hostname,
                 } => {
-                    self.set_connection_remote_hostname_dns(key, remote_hostname);
+                    self.set_connection_remote_hostname_dns(&key, remote_hostname);
                 }
                 GetAggregateCountersConnectionTracker { tx } => {
                     self.get_aggregate_connection_tracker_counters(tx)
@@ -400,7 +400,7 @@ where
         };
         debug!("Tracking new connection: {}", &key);
 
-        self.connections.insert(key.clone(), connection);
+        self.connections.insert(key, connection);
     }
 
     /**
@@ -411,13 +411,13 @@ where
 
     async fn generate_report(
         &mut self,
-        key: ConnectionKey,
+        key: &ConnectionKey,
         probe_round: u32,
         application_rtt: Option<f64>,
         clear_state: bool,
         tx: tokio::sync::mpsc::Sender<ProbeRoundReport>,
     ) {
-        if let Some(connection) = self.connections.get_mut(&key) {
+        if let Some(connection) = self.connections.get_mut(key) {
             let report =
                 connection.generate_probe_report(probe_round, application_rtt, clear_state);
             if let Err(e) = tx.send(report).await {
@@ -429,8 +429,8 @@ where
         }
     }
 
-    async fn set_user_annotation(&mut self, key: ConnectionKey, annotation: String) {
-        if let Some(connection) = self.connections.get_mut(&key) {
+    async fn set_user_annotation(&mut self, key: &ConnectionKey, annotation: String) {
+        if let Some(connection) = self.connections.get_mut(key) {
             connection.user_annotation = Some(annotation);
         } else {
             warn!(
@@ -440,8 +440,8 @@ where
         }
     }
 
-    async fn set_user_agent(&mut self, key: ConnectionKey, user_agent: String) {
-        if let Some(connection) = self.connections.get_mut(&key) {
+    async fn set_user_agent(&mut self, key: &ConnectionKey, user_agent: String) {
+        if let Some(connection) = self.connections.get_mut(key) {
             connection.user_agent = Some(user_agent);
         } else {
             warn!(
@@ -453,10 +453,10 @@ where
 
     async fn get_insights(
         &mut self,
-        key: ConnectionKey,
+        key: &ConnectionKey,
         tx: tokio::sync::mpsc::Sender<Vec<AnalysisInsights>>,
     ) {
-        if let Some(connection) = self.connections.get_mut(&key) {
+        if let Some(connection) = self.connections.get_mut(key) {
             let insights = analyze(connection);
             if let Err(e) = tx.send(insights).await {
                 warn!("get_insights: {} :: {}", key, e);
@@ -482,10 +482,10 @@ where
 
     fn set_connection_remote_hostname_dns(
         &mut self,
-        key: ConnectionKey,
+        key: &ConnectionKey,
         remote_hostname: Option<String>,
     ) {
-        if let Some(connection) = self.connections.get_mut(&key) {
+        if let Some(connection) = self.connections.get_mut(key) {
             connection.remote_hostname = remote_hostname;
         } else {
             // This can happen if the connection is torn down faster than we can get the DNS
