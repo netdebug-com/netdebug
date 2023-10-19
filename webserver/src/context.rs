@@ -5,14 +5,13 @@ use log::info;
 use pwhash::{sha512_crypt, HashSetup};
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc::UnboundedSender, RwLock};
+use tokio::sync::RwLock;
 
 use libconntrack::{
-    connection::{ConnectionTracker, ConnectionTrackerMsg},
+    connection::{ConnectionTracker, ConnectionTrackerSender},
     connection_storage_handler::ConnectionStorageHandler,
     in_band_probe::spawn_raw_prober,
     pcap::{bind_writable_pcap, lookup_pcap_device_by_name},
-    utils::PerfMsgCheck,
 };
 
 // All of the web server state that's maintained across
@@ -30,10 +29,10 @@ pub struct WebServerContext {
     pub max_connections_per_tracker: usize, // how big to make the LruCache
     // communications channel to the connection_tracker
     // TODO: make a pool for multi-threading
-    pub connection_tracker: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    pub connection_tracker: ConnectionTrackerSender,
 }
 
-const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 4096;
+const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 65536;
 
 impl WebServerContext {
     pub fn new(args: &Args) -> Result<WebServerContext, Box<dyn Error>> {
@@ -58,7 +57,7 @@ impl WebServerContext {
 
         // create a connection tracker
         //
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, rx) = tokio::sync::mpsc::channel(MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
         let context = WebServerContext {
             user_db: UserDb::new(),
             html_root: args.html_root.clone(),
@@ -100,6 +99,7 @@ impl WebServerContext {
                     max_connections_per_tracker,
                     local_addrs,
                     prober_tx,
+                    MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
                 );
                 connection_tracker.set_tx_rx(tx, rx);
                 let _ret: () = connection_tracker.rx_loop().await;
@@ -228,7 +228,7 @@ pub mod test {
         let test_pass = TEST_PASSWD;
         let test_hash = UserDb::new_password(&test_pass.to_string()).unwrap();
         // create a connection tracker to nothing for the test context
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, _rx) = tokio::sync::mpsc::channel(128);
         Arc::new(RwLock::new(WebServerContext {
             user_db: UserDb::testing_demo(test_hash),
             html_root: "html".to_string(),

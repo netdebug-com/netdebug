@@ -45,6 +45,7 @@ struct Args {
 }
 
 const GOOGLE_DNS_IPV6: &'static str = "2001:4860:4860::8888";
+const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 4096;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -93,8 +94,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if_name: dev.name.clone(),
     };
 
-    let (pkt_tx, pkt_rx) =
-        tokio::sync::mpsc::unbounded_channel::<PerfMsgCheck<ConnectionTrackerMsg>>();
+    let (pkt_tx, pkt_rx) = tokio::sync::mpsc::channel::<PerfMsgCheck<ConnectionTrackerMsg>>(
+        MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
+    );
     let _handle = run_blocking_pcap_loop_in_thread(
         dev.name.clone(),
         Some(args.pcap_filter.clone()),
