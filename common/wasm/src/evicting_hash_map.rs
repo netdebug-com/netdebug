@@ -42,6 +42,14 @@ where
         self.map.insert(k, v)
     }
 
+    pub fn front(&self) -> Option<(&K, &V)> {
+        self.map.front()
+    }
+
+    pub fn pop_front(&mut self) -> Option<(K, V)> {
+        self.map.pop_front()
+    }
+
     /// Returns the value corresponding to the key in the map.
     /// If value is found, it is moved to the most-recent position of the LRU
     pub fn get_mut<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut V>

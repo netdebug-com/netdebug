@@ -540,11 +540,12 @@ fn analyze_application_latency(
     insights
 }
 
-pub fn connection_from_log(file: &str) -> Result<Connection, Box<dyn Error>> {
-    let log = std::fs::read_to_string(file)?;
+pub fn connection_from_log(_file: &str) -> Result<Connection, Box<dyn Error>> {
+    //let log = std::fs::read_to_string(file)?;
 
-    let connection: Connection = serde_json::from_str(&log)?;
-    Ok(connection)
+    //let connection: Connection = serde_json::from_str(&log)?;
+    //Ok(connection)
+    unimplemented!();
 }
 
 #[cfg(test)]
