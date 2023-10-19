@@ -955,7 +955,10 @@ impl Connection {
     /// NOTE: rust allows us to compare two Option<u32>'s directly,
     /// but the way None compares to Some(u32) breaks my brain so this is more
     /// typing but IMHO clearer
-    fn is_three_way_close_done(&self) -> bool {
+    fn is_four_way_close_done_or_rst(&self) -> bool {
+        if self.local_rst || self.remote_rst {
+            return true;
+        }
         // has everyone sent their FIN's? (e.g. are we at least at step 3?)
         if self.local_fin_seq.is_some()
             && self.remote_fin_seq.is_some()
@@ -1455,7 +1458,7 @@ impl Connection {
             start_tracking_time: self.start_tracking_time.clone(),
             last_packet_time: self.last_packet_time,
             close_has_started: self.close_has_started(),
-            three_way_close_done: self.is_three_way_close_done(),
+            four_way_close_done: self.is_four_way_close_done_or_rst(),
         }
     }
 }
@@ -1780,7 +1783,7 @@ pub mod test {
             .connections
             .get_no_lru(&conn_key.unwrap())
             .unwrap();
-        assert!(conn.is_three_way_close_done());
+        assert!(conn.is_four_way_close_done_or_rst());
         assert!(conn.close_has_started());
     }
 
@@ -1793,12 +1796,14 @@ pub mod test {
         close_has_started_test_helper(
             &HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]),
             "tests/conn-syn-and-single-fin.pcap",
+            false,
         );
         // now switch the direction of the connection to make sure it also
         // works for a FIN from the remote side.
         close_has_started_test_helper(
             &HashSet::from([IpAddr::from_str("34.121.150.27").unwrap()]),
             "tests/conn-syn-and-single-fin.pcap",
+            false,
         );
     }
 
@@ -1811,16 +1816,22 @@ pub mod test {
         close_has_started_test_helper(
             &HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]),
             "tests/conn-syn-and-single-rst.pcap",
+            true,
         );
         // now switch the direction of the connection to make sure it also
         // works for a FIN from the remote side.
         close_has_started_test_helper(
             &HashSet::from([IpAddr::from_str("34.121.150.27").unwrap()]),
             "tests/conn-syn-and-single-rst.pcap",
+            true,
         );
     }
 
-    fn close_has_started_test_helper(local_addrs: &HashSet<IpAddr>, pcap_file: &str) {
+    fn close_has_started_test_helper(
+        local_addrs: &HashSet<IpAddr>,
+        pcap_file: &str,
+        expected_four_way_close_done: bool,
+    ) {
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let raw_sock = MockRawSocketWriter::new();
@@ -1845,7 +1856,10 @@ pub mod test {
             .connections
             .get_no_lru(&conn_key.unwrap())
             .unwrap();
-        assert!(!conn.is_three_way_close_done());
+        assert_eq!(
+            conn.is_four_way_close_done_or_rst(),
+            expected_four_way_close_done
+        );
         assert!(conn.close_has_started());
     }
 
