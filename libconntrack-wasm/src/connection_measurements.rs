@@ -31,7 +31,7 @@ pub struct ConnectionMeasurements {
     pub close_has_started: bool,
     /// Whether this connection has completed the 4-way TCP teardown (2 FINs that were
     /// ACK'ed)
-    pub three_way_close_done: bool,
+    pub four_way_close_done: bool,
     // TODO: add local_syn, remote_syn IP and TCP options
     pub start_tracking_time: DateTime<Utc>, // time tracker: first saw a packet
     pub last_packet_time: DateTime<Utc>,    // time tracker: last saw a packet
