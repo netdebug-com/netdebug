@@ -1,13 +1,17 @@
+use pcap::Error as PcapError;
 use std::error::Error;
 use std::net::IpAddr;
 use std::str::FromStr;
 
-use crate::{connection::ConnectionTrackerMsg, utils::PerfMsgCheck};
+use crate::{
+    connection::ConnectionTrackerMsg, in_band_probe::ProbeMessage, perf_check, utils::PerfMsgCheck,
+};
 #[cfg(not(windows))]
 use futures_util::StreamExt;
 use itertools::Itertools;
 use log::{debug, info, warn};
 use pcap::Capture;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::owned_packet::OwnedParsedPacket;
 struct PacketParserCodec {}
@@ -256,7 +260,7 @@ pub fn lookup_egress_device() -> Result<pcap::Device, Box<dyn Error>> {
     }
 }
 
-pub fn lookup_pcap_device_by_name(name: &String) -> Result<pcap::Device, Box<dyn Error>> {
+pub fn lookup_pcap_device_by_name(name: &String) -> Result<pcap::Device, PcapError> {
     for d in &pcap::Device::list()? {
         if d.name == *name {
             return Ok(d.clone());
@@ -266,10 +270,10 @@ pub fn lookup_pcap_device_by_name(name: &String) -> Result<pcap::Device, Box<dyn
         .iter()
         .map(|d| d.name.clone())
         .join(" , ");
-    Err(Box::new(pcap::Error::PcapError(format!(
+    Err(pcap::Error::PcapError(format!(
         "Failed to find any pcap device with name '{}' out of {}",
         name, all_interfaces
-    ))))
+    )))
 }
 
 /**
@@ -294,26 +298,38 @@ impl PcapRawSocketWriter {
 
 impl RawSocketWriter for PcapRawSocketWriter {
     fn sendpacket(&mut self, buf: &[u8]) -> Result<(), pcap::Error> {
-        self.capture.sendpacket(buf)
+        let start = std::time::Instant::now();
+        let result = self.capture.sendpacket(buf);
+        perf_check!(
+            "Pcap::sendpacket",
+            start,
+            std::time::Duration::from_millis(30)
+        );
+        result
     }
 }
 
 /**
  * Used for testing - just capture and buffer anything written to it
  */
-pub struct MockRawSocketWriter {
+pub struct MockRawSocketProber {
+    pub tx: Sender<PerfMsgCheck<ProbeMessage>>,
+    pub rx: Receiver<PerfMsgCheck<ProbeMessage>>,
     pub captured: Vec<Vec<u8>>,
 }
 
-impl MockRawSocketWriter {
-    pub fn new() -> MockRawSocketWriter {
-        MockRawSocketWriter {
+impl MockRawSocketProber {
+    pub fn new() -> MockRawSocketProber {
+        let (tx, rx) = channel(1024);
+        MockRawSocketProber {
+            tx,
+            rx,
             captured: Vec::new(),
         }
     }
 }
 
-impl RawSocketWriter for MockRawSocketWriter {
+impl RawSocketWriter for MockRawSocketProber {
     fn sendpacket(&mut self, buf: &[u8]) -> Result<(), pcap::Error> {
         self.captured.push(buf.to_vec());
         Ok(())
@@ -327,14 +343,14 @@ impl RawSocketWriter for MockRawSocketWriter {
  * that same instance does NOT actually see the outgoing packet.  We get around this by
  * binding a different instance for reading vs. writing packets.
  */
-pub fn bind_writable_pcap(device: pcap::Device) -> Result<impl RawSocketWriter, Box<dyn Error>> {
+pub fn bind_writable_pcap(device: pcap::Device) -> Result<impl RawSocketWriter, PcapError> {
     let cap = Capture::from_device(device)?.open()?;
     Ok(PcapRawSocketWriter::new(cap))
 }
 
 pub fn bind_writable_pcap_by_name(
     pcap_device_name: String,
-) -> Result<impl RawSocketWriter, Box<dyn Error>> {
+) -> Result<impl RawSocketWriter, PcapError> {
     let device = lookup_pcap_device_by_name(&pcap_device_name)?;
     bind_writable_pcap(device)
 }

@@ -10,6 +10,7 @@ use tokio::sync::{mpsc::UnboundedSender, RwLock};
 use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg},
     connection_storage_handler::ConnectionStorageHandler,
+    in_band_probe::spawn_raw_prober,
     pcap::{bind_writable_pcap, lookup_pcap_device_by_name},
     utils::PerfMsgCheck,
 };
@@ -31,6 +32,8 @@ pub struct WebServerContext {
     // TODO: make a pool for multi-threading
     pub connection_tracker: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
 }
+
+const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 4096;
 
 impl WebServerContext {
     pub fn new(args: &Args) -> Result<WebServerContext, Box<dyn Error>> {
@@ -87,12 +90,16 @@ impl WebServerContext {
                 } else {
                     None
                 };
-                let raw_sock = bind_writable_pcap(device).unwrap();
+                let prober_tx = spawn_raw_prober(
+                    bind_writable_pcap(device).unwrap(),
+                    MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
+                )
+                .await;
                 let mut connection_tracker = ConnectionTracker::new(
                     storage_service_msg_tx,
                     max_connections_per_tracker,
                     local_addrs,
-                    raw_sock,
+                    prober_tx,
                 );
                 connection_tracker.set_tx_rx(tx, rx);
                 let _ret: () = connection_tracker.rx_loop().await;

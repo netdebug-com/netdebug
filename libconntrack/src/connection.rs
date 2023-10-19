@@ -21,7 +21,7 @@ use log::{debug, info, warn};
 use netstat2::ProtocolSocketInfo;
 use pb_conntrack_types::ConnectionStorageEntry;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
 
 #[cfg(test)]
 use std::{println as debug, println as info, println as warn}; // Workaround to use prinltn! for logs.
@@ -31,9 +31,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     analyze::analyze,
     dns_tracker::{DnsTrackerMessage, UDP_DNS_PORT},
-    in_band_probe::tcp_inband_probe,
+    in_band_probe::ProbeMessage,
     owned_packet::OwnedParsedPacket,
-    pcap::RawSocketWriter,
     process_tracker::ProcessTrackerEntry,
     utils::{
         self, calc_rtt_ms, etherparse_ipheaders2ipaddr, packet_is_tcp_rst, timestamp_to_ms,
@@ -214,13 +213,10 @@ fn send_connection_storage_msg(
  * then we would spin up new ConnectionTracker instances.
  */
 
-pub struct ConnectionTracker<'a, R>
-where
-    R: RawSocketWriter,
-{
+pub struct ConnectionTracker<'a> {
     connections: EvictingHashMap<'a, ConnectionKey, Connection>,
     local_addrs: HashSet<IpAddr>,
-    raw_sock: R,
+    prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
     storage_service_msg_tx: Option<mpsc::Sender<ConnectionStorageEntry>>,
     dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
     tx: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>, // so we can tell others how to send msgs to us
@@ -229,21 +225,18 @@ where
     tx_bytes: AggregateCounter,
     rx_bytes: AggregateCounter,
 }
-impl<'a, R> ConnectionTracker<'a, R>
-where
-    R: RawSocketWriter,
-{
+impl<'a> ConnectionTracker<'a> {
     pub fn new(
         storage_service_msg_tx: Option<mpsc::Sender<ConnectionStorageEntry>>,
         max_connections_per_tracker: usize,
         local_addrs: HashSet<IpAddr>,
-        raw_sock: R,
-    ) -> ConnectionTracker<'a, R> {
+        prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
+    ) -> ConnectionTracker<'a> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let storage_service_msg_tx_clone = storage_service_msg_tx.clone();
         // for now, track these big counters by minute and second
-        let tx_bytes = ConnectionTracker::<R>::create_aggregate_counter("tx_bytes");
-        let rx_bytes = ConnectionTracker::<R>::create_aggregate_counter("rx_bytes");
+        let tx_bytes = ConnectionTracker::create_aggregate_counter("tx_bytes");
+        let rx_bytes = ConnectionTracker::create_aggregate_counter("rx_bytes");
         ConnectionTracker {
             connections: EvictingHashMap::new(
                 max_connections_per_tracker,
@@ -253,7 +246,7 @@ where
                 },
             ),
             local_addrs,
-            raw_sock,
+            prober_tx,
             storage_service_msg_tx,
             dns_tx: None,
             tx,
@@ -338,7 +331,13 @@ where
                     self.connections.get_mut(&key).unwrap()
                 }
             };
-            connection.update(packet, &mut self.raw_sock, &key, src_is_local, &self.dns_tx);
+            connection.update(
+                packet,
+                &mut self.prober_tx,
+                &key,
+                src_is_local,
+                &self.dns_tx,
+            );
             if needs_dns_lookup {
                 // only new connections that we don't immediately tear down need DNS lookups
                 if let Some(dns_tx) = self.dns_tx.as_mut() {
@@ -625,16 +624,14 @@ pub struct Connection {
     pub rx_packet_rate: RateEstimator,
 }
 impl Connection {
-    fn update<R>(
+    fn update(
         &mut self,
         packet: Box<OwnedParsedPacket>,
-        raw_sock: &mut R,
+        prober_tx: &mut Sender<PerfMsgCheck<ProbeMessage>>,
         key: &ConnectionKey,
         src_is_local: bool,
         dns_tx: &Option<mpsc::UnboundedSender<DnsTrackerMessage>>,
-    ) where
-        R: RawSocketWriter,
-    {
+    ) {
         self.last_packet_time = Utc::now();
         if src_is_local {
             self.tx_byte_rate.new_sample(packet.len as usize);
@@ -646,7 +643,7 @@ impl Connection {
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
                 if src_is_local {
-                    self.update_tcp_local(&packet, tcp, raw_sock);
+                    self.update_tcp_local(&packet, tcp, prober_tx);
                 } else {
                     self.update_tcp_remote(&packet, tcp);
                 }
@@ -720,10 +717,12 @@ impl Connection {
         None
     }
 
-    fn update_tcp_local<R>(&mut self, packet: &OwnedParsedPacket, tcp: &TcpHeader, raw_sock: &mut R)
-    where
-        R: RawSocketWriter,
-    {
+    fn update_tcp_local(
+        &mut self,
+        packet: &OwnedParsedPacket,
+        tcp: &TcpHeader,
+        prober_tx: &mut Sender<PerfMsgCheck<ProbeMessage>>,
+    ) {
         // NOTE: we can't just use packet.payload.len() b/c we might have a partial capture
         let payload_len = match &packet.ip {
             None => 0,
@@ -788,7 +787,12 @@ impl Connection {
                 // reset the probe state
                 self.probe_round =
                     Some(ProbeRound::new(self.probe_report_summary.raw_reports.len()));
-                tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock, false).unwrap();
+                // tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock ).unwrap();
+                if let Err(e) = prober_tx.try_send(PerfMsgCheck::new(ProbeMessage::SendProbe {
+                    packet: packet.clone(),
+                })) {
+                    warn!("Problem sending to prober queue: {}", e);
+                }
             }
         }
         if let Some(active_probe_round) = self.probe_round.as_mut() {
@@ -1478,7 +1482,7 @@ pub mod test {
     use crate::dns_tracker::DnsTracker;
     use crate::in_band_probe::test::test_tcp_packet_ports;
     use crate::owned_packet::OwnedParsedPacket;
-    use crate::pcap::MockRawSocketWriter;
+    use crate::pcap::MockRawSocketProber;
     /**
      *  ConnectionKey should be a direction agnostic key for mapping packets
      * to a flow identifier.  but, the logic around "is the src of the packet"
@@ -1546,7 +1550,7 @@ pub mod test {
     async fn connection_tracker_one_flow_outgoing() {
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
-        let raw_sock = MockRawSocketWriter::new();
+        let mock_prober = MockRawSocketProber::new();
         let mut local_addrs = HashSet::new();
         let localhost_ip = IpAddr::from_str("127.0.0.1").unwrap();
         local_addrs.insert(localhost_ip);
@@ -1554,7 +1558,7 @@ pub mod test {
             storage_service_client,
             max_connections_per_tracker,
             local_addrs,
-            raw_sock,
+            mock_prober.tx.clone(),
         );
 
         let mut capture =
@@ -1609,7 +1613,7 @@ pub mod test {
         pretty_env_logger::init();
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
-        let raw_sock = MockRawSocketWriter::new();
+        let mock_prober = MockRawSocketProber::new();
         let mut local_addrs = HashSet::new();
         let local_ip = IpAddr::from_str("172.31.2.61").unwrap();
         local_addrs.insert(local_ip);
@@ -1617,7 +1621,7 @@ pub mod test {
             storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
-            raw_sock,
+            mock_prober.tx.clone(),
         );
 
         let mut connection_key: Option<ConnectionKey> = None;
@@ -1672,7 +1676,7 @@ pub mod test {
      * we can match them up to calculate RTTs, etc.
      */
     async fn connection_tracker_probe_and_reply() {
-        let raw_sock = MockRawSocketWriter::new();
+        let mock_prober = MockRawSocketProber::new();
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let mut local_addrs = HashSet::new();
@@ -1682,7 +1686,7 @@ pub mod test {
             storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
-            raw_sock,
+            mock_prober.tx.clone(),
         );
 
         let probe = OwnedParsedPacket::try_from_fake_time(TEST_PROBE.to_vec()).unwrap();
@@ -1763,13 +1767,13 @@ pub mod test {
     async fn three_way_fin_teardown() {
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
-        let raw_sock = MockRawSocketWriter::new();
+        let mock_prober = MockRawSocketProber::new();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.37").unwrap()]);
         let mut connection_tracker = ConnectionTracker::new(
             storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
-            raw_sock,
+            mock_prober.tx.clone(),
         );
 
         let mut capture =
@@ -1838,12 +1842,12 @@ pub mod test {
     ) {
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
-        let raw_sock = MockRawSocketWriter::new();
+        let mock_prober = MockRawSocketProber::new();
         let mut connection_tracker = ConnectionTracker::new(
             storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
-            raw_sock,
+            mock_prober.tx.clone(),
         );
 
         let mut capture = pcap::Capture::from_file(test_dir(pcap_file)).unwrap();
@@ -1877,13 +1881,13 @@ pub mod test {
     async fn full_probe_report() {
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
-        let raw_sock = MockRawSocketWriter::new();
+        let mock_prober = MockRawSocketProber::new();
         let local_addrs = HashSet::from([IpAddr::from_str("172.31.10.232").unwrap()]);
         let mut connection_tracker = ConnectionTracker::new(
             storage_service_client,
             max_connections_per_tracker,
             local_addrs.clone(),
-            raw_sock,
+            mock_prober.tx.clone(),
         );
 
         let mut connection_key: Option<ConnectionKey> = None;
@@ -2027,12 +2031,12 @@ pub mod test {
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.103").unwrap()]);
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
-        let raw_sock = MockRawSocketWriter::new();
+        let raw_sock = MockRawSocketProber::new();
         let mut connection_tracker = ConnectionTracker::new(
             storage_service_client,
             max_connections_per_tracker,
             local_addrs,
-            raw_sock,
+            raw_sock.tx.clone(),
         );
         connection_tracker.add(remote_rst);
         assert_eq!(connection_tracker.connections.len(), 0);
@@ -2051,12 +2055,12 @@ pub mod test {
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.37").unwrap()]);
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
-        let raw_sock = MockRawSocketWriter::new();
+        let mock_prober = MockRawSocketProber::new();
         let mut connection_tracker = ConnectionTracker::new(
             storage_service_client,
             max_connections_per_tracker,
             local_addrs,
-            raw_sock,
+            mock_prober.tx.clone(),
         );
         let remote_ip = IpAddr::from_str("52.53.155.175").unwrap();
         let test_hostname = "test-hostname.example.com".to_string();
@@ -2131,12 +2135,12 @@ pub mod test {
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.1").unwrap()]);
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
-        let raw_sock = MockRawSocketWriter::new();
+        let mock_prober = MockRawSocketProber::new();
         let mut connection_tracker = ConnectionTracker::new(
             storage_service_client,
             max_connections_per_tracker,
             local_addrs,
-            raw_sock,
+            mock_prober.tx.clone(),
         );
         connection_tracker.add(wrapping_pkt);
         assert_eq!(connection_tracker.connections.len(), 1);
@@ -2147,14 +2151,14 @@ pub mod test {
     #[tokio::test]
     async fn test_time_wait_eviction() {
         let max_connections_per_tracker = 32;
-        let raw_sock = MockRawSocketWriter::new();
+        let mock_prober = MockRawSocketProber::new();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
         let (evict_tx, mut evict_rx) = mpsc::channel(10);
         let mut connection_tracker = ConnectionTracker::new(
             Some(evict_tx),
             max_connections_per_tracker,
             local_addrs.clone(),
-            raw_sock,
+            mock_prober.tx.clone(),
         );
 
         let mut capture =
@@ -2228,14 +2232,14 @@ pub mod test {
     #[tokio::test]
     async fn test_send_only_conns_with_probe_to_storage() {
         let max_connections_per_tracker = 32;
-        let raw_sock = MockRawSocketWriter::new();
+        let mock_prober = MockRawSocketProber::new();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
         let (evict_tx, mut evict_rx) = mpsc::channel(10);
         let mut connection_tracker = ConnectionTracker::new(
             Some(evict_tx),
             max_connections_per_tracker,
             local_addrs.clone(),
-            raw_sock,
+            mock_prober.tx.clone(),
         );
 
         // Read the first 3 packets from the trace. I.e., just the handshake but no data.

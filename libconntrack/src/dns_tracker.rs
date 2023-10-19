@@ -656,7 +656,7 @@ mod test {
     use crate::{
         connection::{test::test_dir, ConnectionTracker},
         owned_packet::OwnedParsedPacket,
-        pcap::MockRawSocketWriter,
+        pcap::MockRawSocketProber,
     };
 
     use super::*;
@@ -816,12 +816,12 @@ mod test {
             HashSet::from([IpAddr::from_str("2600:1700:5b20:4e10:adc4:bd8f:d640:2d48").unwrap()]);
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
-        let raw_sock = MockRawSocketWriter::new();
+        let mock_prober = MockRawSocketProber::new();
         let mut connection_tracker = ConnectionTracker::new(
             storage_service_client,
             max_connections_per_tracker,
             local_addrs,
-            raw_sock,
+            mock_prober.tx.clone(),
         );
         connection_tracker.set_dns_tracker(dns_tx.clone());
         dns_tx
