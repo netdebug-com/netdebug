@@ -37,6 +37,14 @@ use crate::{
     process_tracker::ProcessTrackerEntry,
     utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, packet_is_tcp_rst, timestamp_to_ms},
 };
+
+/// When evicting stale/old connection entries: evict at most this many
+/// connections at once
+const MAX_ENTRIES_TO_EVICT: usize = 10;
+/// If a connection has not seen any packets in this many milliseconds, the connection is
+/// evicted. This is done regardless of the connection is open or closed.
+const TIME_WAIT_MS: u64 = 60_000;
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ConnectionKey {
     pub local_ip: IpAddr,
@@ -322,36 +330,40 @@ where
                     self.connections.get_mut(&key).unwrap()
                 }
             };
-            let action =
-                connection.update(packet, &mut self.raw_sock, &key, src_is_local, &self.dns_tx);
-            use ConnectionAction::*;
-            match action {
-                Noop => {
-                    if needs_dns_lookup {
-                        // only new connections that we don't immediately tear down need DNS lookups
-                        if let Some(dns_tx) = self.dns_tx.as_mut() {
-                            // ask the DNS tracker to tell us the remote DNS name
-                            if let Err(e) = dns_tx.send(DnsTrackerMessage::Lookup {
-                                ip: key.remote_ip,
-                                key: key.clone(),
-                                tx: self.tx.clone(),
-                            }) {
-                                warn!("Failed to send a Lookup message to the DNS Tracker: {}", e);
-                            }
-                        }
-                    }
-                }
-                Close => {
-                    debug!("Deleting from connection tracker: {}", key);
-                    let conn = self.connections.remove(&key);
-                    if let Some(conn) = conn {
-                        send_connection_storage_msg(&self.storage_service_msg_tx, conn);
+            connection.update(packet, &mut self.raw_sock, &key, src_is_local, &self.dns_tx);
+            if needs_dns_lookup {
+                // only new connections that we don't immediately tear down need DNS lookups
+                if let Some(dns_tx) = self.dns_tx.as_mut() {
+                    // ask the DNS tracker to tell us the remote DNS name
+                    if let Err(e) = dns_tx.send(DnsTrackerMessage::Lookup {
+                        ip: key.remote_ip,
+                        key: key.clone(),
+                        tx: self.tx.clone(),
+                    }) {
+                        warn!("Failed to send a Lookup message to the DNS Tracker: {}", e);
                     }
                 }
             }
+            self.evict_old_connections();
         }
         // if we got here, the packet didn't have enough info to be called a 'connection'
         // just return and move on for now
+    }
+
+    /// Check the connections that haven't seen any updates the longest, and evict all that
+    /// have been in-active for more than `TIME_WAIT_SECONDS`. Evict at most `MAX_ENTRIES_TO_EVICT`
+    fn evict_old_connections(&mut self) {
+        let mut eviction_cnt = 0;
+        while let Some((_key, conn)) = self.connections.front() {
+            let elapsed_ms = conn.last_packet_instant.elapsed().as_millis();
+            if eviction_cnt < MAX_ENTRIES_TO_EVICT && elapsed_ms > TIME_WAIT_MS as u128 {
+                let (_key, conn) = self.connections.pop_front().unwrap();
+                send_connection_storage_msg(&self.storage_service_msg_tx, conn);
+                eviction_cnt += 1;
+            } else {
+                break;
+            }
+        }
     }
 
     fn new_connection(&mut self, key: ConnectionKey) {
@@ -365,8 +377,6 @@ where
             remote_ack: None,
             local_data: None,
             probe_round: None,
-            send_probes_on_idle: false,
-            close_time: None,
             local_fin_seq: None,
             remote_fin_seq: None,
             remote_rst: false,
@@ -377,6 +387,7 @@ where
             associated_apps: None,
             start_tracking_time: now,
             last_packet_time: now,
+            last_packet_instant: tokio::time::Instant::now(),
             remote_hostname: None,
             tx_byte_rate: RateEstimator::new(),
             rx_byte_rate: RateEstimator::new(),
@@ -540,12 +551,6 @@ where
     }
 }
 
-// after a Connection::update(), does the connection tracker need to change its state?
-enum ConnectionAction {
-    Noop,
-    Close,
-}
-
 /**
  * TODO: move Probe stuff to a separate file.
  *
@@ -582,11 +587,14 @@ impl ProbeRound {
  * NOTE: everything in this struct will get serialized to a logfile on the connection's close
  * for analysis, so be thoughtful what you add here.
  */
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Connection {
     pub connection_key: ConnectionKey,
     pub start_tracking_time: DateTime<Utc>,
+    // Human readable time of the last packet for logging
     pub last_packet_time: DateTime<Utc>,
+    // The time of the last packet used for evictions and statekeeping
+    pub last_packet_instant: tokio::time::Instant,
     pub local_syn: Option<OwnedParsedPacket>,
     pub remote_syn: Option<OwnedParsedPacket>,
     pub local_seq: Option<Wrapping<u32>>, // the most recent seq seen from local INCLUDING the TCP payload
@@ -594,8 +602,6 @@ pub struct Connection {
     pub remote_ack: Option<Wrapping<u32>>,
     pub local_data: Option<OwnedParsedPacket>, // data sent for retransmits
     pub probe_round: Option<ProbeRound>,
-    pub send_probes_on_idle: bool, // should we send probes when the connection is idle?
-    pub close_time: Option<String>, // Grr! none of the time instants/DataTIme's implement Serialize!!
     pub local_fin_seq: Option<Wrapping<u32>>, // used for tracking connection close
     pub remote_fin_seq: Option<Wrapping<u32>>,
     pub remote_rst: bool,
@@ -618,8 +624,7 @@ impl Connection {
         key: &ConnectionKey,
         src_is_local: bool,
         dns_tx: &Option<mpsc::UnboundedSender<DnsTrackerMessage>>,
-    ) -> ConnectionAction
-    where
+    ) where
         R: RawSocketWriter,
     {
         self.last_packet_time = Utc::now();
@@ -633,9 +638,9 @@ impl Connection {
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
                 if src_is_local {
-                    self.update_tcp_local(&packet, tcp, raw_sock)
+                    self.update_tcp_local(&packet, tcp, raw_sock);
                 } else {
-                    self.update_tcp_remote(&packet, tcp)
+                    self.update_tcp_remote(&packet, tcp);
                 }
             }
             Some(TransportHeader::Icmpv4(icmp4)) => {
@@ -644,9 +649,8 @@ impl Connection {
                         "Ignoring weird ICMP4 from our selves but for this connection: {} : {:?}",
                         key, packet
                     );
-                    ConnectionAction::Noop
                 } else {
-                    self.update_icmp4_remote(&packet, icmp4)
+                    self.update_icmp4_remote(&packet, icmp4);
                 }
             }
             Some(TransportHeader::Icmpv6(icmp6)) => {
@@ -655,21 +659,19 @@ impl Connection {
                         "Ignoring ICMP6 from our selves but for this connection: {} : {:?}",
                         key, packet
                     );
-                    ConnectionAction::Noop
                 } else {
-                    self.update_icmp6_remote(&packet, icmp6)
+                    self.update_icmp6_remote(&packet, icmp6);
                 }
             }
             Some(TransportHeader::Udp(udp)) => {
                 // logic is for both src_is_local and not, for now
-                self.update_udp(&key, &packet, udp, dns_tx, src_is_local)
+                self.update_udp(&key, &packet, udp, dns_tx, src_is_local);
             }
             None => {
                 warn!(
                     "Ignoring unknown transport in IP protocol in packet {:?}",
                     packet
                 );
-                ConnectionAction::Noop
             }
         }
     }
@@ -710,16 +712,10 @@ impl Connection {
         None
     }
 
-    fn update_tcp_local<R>(
-        &mut self,
-        packet: &OwnedParsedPacket,
-        tcp: &TcpHeader,
-        raw_sock: &mut R,
-    ) -> ConnectionAction
+    fn update_tcp_local<R>(&mut self, packet: &OwnedParsedPacket, tcp: &TcpHeader, raw_sock: &mut R)
     where
         R: RawSocketWriter,
     {
-        let mut action = ConnectionAction::Noop;
         // NOTE: we can't just use packet.payload.len() b/c we might have a partial capture
         let payload_len = match &packet.ip {
             None => 0,
@@ -767,7 +763,6 @@ impl Connection {
 
         if tcp.rst {
             self.local_rst = true;
-            action = ConnectionAction::Close;
         }
 
         // record how far the local side has acknowledged
@@ -781,7 +776,7 @@ impl Connection {
             self.local_data = Some(packet.clone());
             // this is the first time in the connection lifetime we sent some payload
             // spawn an inband probe
-            if first_time {
+            if first_time && !self.close_has_started() {
                 // reset the probe state
                 self.probe_round =
                     Some(ProbeRound::new(self.probe_report_summary.raw_reports.len()));
@@ -814,19 +809,11 @@ impl Connection {
                 // else it's just a duplicate packet
             }
             self.local_fin_seq = Some(Wrapping(tcp.sequence_number));
-        } else {
-            action = self.check_three_way_close_done();
         }
         // TODO: look for outgoing selective acks (indicates packet loss)
-        action
     }
 
-    fn update_tcp_remote(
-        &mut self,
-        packet: &OwnedParsedPacket,
-        tcp: &TcpHeader,
-    ) -> ConnectionAction {
-        let mut action = ConnectionAction::Noop;
+    fn update_tcp_remote(&mut self, packet: &OwnedParsedPacket, tcp: &TcpHeader) {
         if tcp.syn {
             if self.remote_syn.is_some() {
                 warn!(
@@ -939,27 +926,32 @@ impl Connection {
                 // else it's just a duplicate packet
             }
             self.remote_fin_seq = Some(Wrapping(tcp.sequence_number));
-        } else {
-            action = self.check_three_way_close_done();
         }
         if tcp.rst {
             self.remote_rst = true;
-            action = ConnectionAction::Close;
         }
         // TODO: look for incoming selective acks (indicates packet loss)
-        action
     }
 
-    // is this the final ACK of the threeway close?
-    // Three-way close is:
-    // 1) Alice send FIN for Alice_seq+1
-    // 2) Bob sends FIN for Bob_seq+1 and ACK for Alice_seq+1
-    // 3) Alice sends ACK (no FIN) for Bob_seq+1
-    //
-    // NOTE: rust allows us to compare two Option<u32>'s directly,
-    // but the way None compares to Some(u32) breaks my brain so this is more
-    // typing but IMHO clearer
-    fn check_three_way_close_done(&self) -> ConnectionAction {
+    // Check if the connection has started to be closed. I.e., we've received either a syn or a fin
+    // from either side.
+    pub fn close_has_started(&self) -> bool {
+        self.local_rst
+            || self.remote_rst
+            || self.local_fin_seq.is_some()
+            || self.remote_fin_seq.is_some()
+    }
+
+    /// is this the final ACK of the threeway close?
+    /// Three-way close is:
+    /// 1) Alice send FIN for Alice_seq+1
+    /// 2) Bob sends FIN for Bob_seq+1 and ACK for Alice_seq+1
+    /// 3) Alice sends ACK (no FIN) for Bob_seq+1
+    ///
+    /// NOTE: rust allows us to compare two Option<u32>'s directly,
+    /// but the way None compares to Some(u32) breaks my brain so this is more
+    /// typing but IMHO clearer
+    fn _is_three_way_close_done(&self) -> bool {
         // has everyone sent their FIN's? (e.g. are we at least at step 3?)
         if self.local_fin_seq.is_some()
             && self.remote_fin_seq.is_some()
@@ -969,23 +961,23 @@ impl Connection {
             // if we are at step 3, has everyone ACK'd everyone's FIN's?
             if self.remote_ack > self.local_fin_seq && self.local_ack > self.remote_fin_seq {
                 // mark the connection closed
-                return ConnectionAction::Close;
+                return true;
             }
         }
-        ConnectionAction::Noop
+        false
     }
 
     fn update_icmp6_remote(
         &mut self,
         packet: &OwnedParsedPacket,
         icmp6: &etherparse::Icmpv6Header,
-    ) -> ConnectionAction {
+    ) {
         match icmp6.icmp_type {
             etherparse::Icmpv6Type::Unknown { .. }
             | etherparse::Icmpv6Type::ParameterProblem(_)
             | etherparse::Icmpv6Type::EchoRequest(_)
             | etherparse::Icmpv6Type::EchoReply(_)
-            | etherparse::Icmpv6Type::PacketTooBig { .. } => ConnectionAction::Noop,
+            | etherparse::Icmpv6Type::PacketTooBig { .. } => (),
             etherparse::Icmpv6Type::DestinationUnreachable(_)
             | etherparse::Icmpv6Type::TimeExceeded(_) => self.store_icmp_reply(packet),
         }
@@ -995,7 +987,7 @@ impl Connection {
         &mut self,
         packet: &OwnedParsedPacket,
         icmp4: &etherparse::Icmpv4Header,
-    ) -> ConnectionAction {
+    ) {
         match icmp4.icmp_type {
             etherparse::Icmpv4Type::Unknown {
                 type_u8: _,
@@ -1005,7 +997,7 @@ impl Connection {
             | etherparse::Icmpv4Type::EchoRequest(_)
             | etherparse::Icmpv4Type::EchoReply(_)
             | etherparse::Icmpv4Type::TimestampRequest(_)
-            | etherparse::Icmpv4Type::TimestampReply(_) => ConnectionAction::Noop,
+            | etherparse::Icmpv4Type::TimestampReply(_) => (),
             etherparse::Icmpv4Type::DestinationUnreachable(_)
             | etherparse::Icmpv4Type::Redirect(_)
             | etherparse::Icmpv4Type::TimeExceeded(_)
@@ -1013,7 +1005,7 @@ impl Connection {
         }
     }
 
-    fn store_icmp_reply(&mut self, packet: &OwnedParsedPacket) -> ConnectionAction {
+    fn store_icmp_reply(&mut self, packet: &OwnedParsedPacket) {
         // TODO figure out how to cache this from the connection_key() computation
         // if it's a perf problem - ignore for now
         // but right now we're creating this embedded packet twice!
@@ -1038,14 +1030,12 @@ impl Connection {
                         }
                     }
                 }
-                ConnectionAction::Noop
             }
             Err(e) => {
                 warn!(
                     "Failed to parsed update_icmp4_remote() {} for {:?}",
                     e, packet
                 );
-                ConnectionAction::Noop
             }
         }
     }
@@ -1329,7 +1319,7 @@ impl Connection {
         udp: &UdpHeader,
         dns_tx: &Option<mpsc::UnboundedSender<DnsTrackerMessage>>,
         src_is_local: bool,
-    ) -> ConnectionAction {
+    ) {
         if (src_is_local && udp.destination_port == UDP_DNS_PORT)
             || (!src_is_local && udp.source_port == UDP_DNS_PORT)
         {
@@ -1343,14 +1333,12 @@ impl Connection {
                 }) {
                     warn!("Error sending to DNS Tracker: {}", e);
                 }
-                return ConnectionAction::Close; // don't track DNS requests here
             }
         } else {
             // Noop - don't do anything special for other UDP connections -yet
             // TODO: handle QUIC connections - there are a lot of them
             debug!("Ignoring untracked UDP connection: {}", key);
         }
-        ConnectionAction::Noop
     }
 
     pub fn to_connection_measurements(
@@ -1774,12 +1762,85 @@ pub mod test {
         let mut capture =
             pcap::Capture::from_file(test_dir("tests/simple_clear_text_with_fins.pcap")).unwrap();
         // take all of the packets in the capture and pipe them into the connection tracker
+        let mut conn_key = None;
         while let Ok(pkt) = capture.next_packet() {
             let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            conn_key = Some(owned_pkt.to_connection_key(&local_addrs).unwrap().0);
             connection_tracker.add(owned_pkt);
         }
-        // after all of this, we should not be tracking any connections
-        assert_eq!(connection_tracker.connections.len(), 0);
+        assert!(conn_key.is_some());
+        assert_eq!(connection_tracker.connections.len(), 1);
+        let conn = connection_tracker
+            .connections
+            .get_no_lru(&conn_key.unwrap())
+            .unwrap();
+        assert!(conn._is_three_way_close_done());
+        assert!(conn.close_has_started());
+    }
+
+    /**
+     * Read a connection with full 3-way handshake, some data packets, and then a single
+     * FIN. Make sure we `close_has_started()` is true
+     */
+    #[tokio::test]
+    async fn connection_close_has_started_on_first_fin() {
+        close_has_started_test_helper(
+            &HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]),
+            "tests/conn-syn-and-single-fin.pcap",
+        );
+        // now switch the direction of the connection to make sure it also
+        // works for a FIN from the remote side.
+        close_has_started_test_helper(
+            &HashSet::from([IpAddr::from_str("34.121.150.27").unwrap()]),
+            "tests/conn-syn-and-single-fin.pcap",
+        );
+    }
+
+    /**
+     * Read a connection with full 3-way handshake, some data packets, and then a single
+     * RST. Make sure we `close_has_started()` is true
+     */
+    #[tokio::test]
+    async fn connection_close_has_started_on_first_rst() {
+        close_has_started_test_helper(
+            &HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]),
+            "tests/conn-syn-and-single-rst.pcap",
+        );
+        // now switch the direction of the connection to make sure it also
+        // works for a FIN from the remote side.
+        close_has_started_test_helper(
+            &HashSet::from([IpAddr::from_str("34.121.150.27").unwrap()]),
+            "tests/conn-syn-and-single-rst.pcap",
+        );
+    }
+
+    fn close_has_started_test_helper(local_addrs: &HashSet<IpAddr>, pcap_file: &str) {
+        let storage_service_client = None;
+        let max_connections_per_tracker = 32;
+        let raw_sock = MockRawSocketWriter::new();
+        let mut connection_tracker = ConnectionTracker::new(
+            storage_service_client,
+            max_connections_per_tracker,
+            local_addrs.clone(),
+            raw_sock,
+        );
+
+        let mut capture = pcap::Capture::from_file(test_dir(pcap_file)).unwrap();
+        // take all of the packets in the capture and pipe them into the connection tracker
+        let mut conn_key = None;
+        while let Ok(pkt) = capture.next_packet() {
+            let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            conn_key = Some(owned_pkt.to_connection_key(&local_addrs).unwrap().0);
+            connection_tracker.add(owned_pkt);
+        }
+        assert!(conn_key.is_some());
+        assert_eq!(connection_tracker.connections.len(), 1);
+        let conn = connection_tracker
+            .connections
+            .get_no_lru(&conn_key.unwrap())
+            .unwrap();
+        assert!(!conn._is_three_way_close_done());
+        assert!(conn.close_has_started());
     }
 
     /**
@@ -2055,5 +2116,84 @@ pub mod test {
         assert_eq!(connection_tracker.connections.len(), 1);
         let conn = connection_tracker.connections.values().next().unwrap();
         assert_eq!(conn.local_seq.unwrap(), Wrapping(payload.len() as u32 - 1));
+    }
+
+    #[tokio::test]
+    async fn test_time_wait_eviction() {
+        let max_connections_per_tracker = 32;
+        let raw_sock = MockRawSocketWriter::new();
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
+        let (evict_tx, mut evict_rx) = mpsc::channel(10);
+        let mut connection_tracker = ConnectionTracker::new(
+            Some(evict_tx),
+            max_connections_per_tracker,
+            local_addrs.clone(),
+            raw_sock,
+        );
+
+        let mut capture =
+            pcap::Capture::from_file(test_dir("tests/normal-conn-syn-and-fin.pcap")).unwrap();
+        let mut packets = Vec::new();
+        while let Ok(pkt) = capture.next_packet() {
+            packets.push(OwnedParsedPacket::try_from(pkt).unwrap());
+        }
+        // The trace has 11 packets total.
+        // packets[7] is the first FIN
+        // packets[9] is the 2nd FIN
+        assert_eq!(packets.len(), 11);
+        assert!(packets[7].clone().transport.unwrap().tcp().unwrap().fin);
+        assert!(packets[9].clone().transport.unwrap().tcp().unwrap().fin);
+
+        // Read the first couple of packets. Ensure connection is created.
+        for i in 0..5 {
+            connection_tracker.add(packets[i].clone());
+        }
+        assert_eq!(connection_tracker.connections.len(), 1);
+
+        // pause() halt updating of the tokio Instant timer.
+        tokio::time::pause();
+        // But if there's no more work todo, the tokio runtime will
+        // auto-advance any pending sleeps / timers, etc. So this sleep
+        // call will not take any real wall-time
+        tokio::time::sleep(tokio::time::Duration::from_millis(TIME_WAIT_MS + 10)).await;
+
+        // Create a packet from a different connection.
+        let mut pkt_unrelated_conn_raw: Vec<u8> = Vec::new();
+        etherparse::PacketBuilder::ethernet2(
+            [1, 2, 3, 4, 5, 6], //source mac
+            [7, 8, 9, 10, 11, 12],
+        ) //destionation mac
+        .ipv4(
+            [192, 168, 1, 238], //source ip
+            [192, 168, 1, 2],   //desitionation ip
+            20,
+        )
+        .tcp(12345, 80, 42, 1024)
+        .write(&mut pkt_unrelated_conn_raw, &[])
+        .unwrap();
+        let pkt_unrelated_conn =
+            OwnedParsedPacket::try_from_fake_time(pkt_unrelated_conn_raw).unwrap();
+        let unrelated_conn_key = pkt_unrelated_conn
+            .clone()
+            .to_connection_key(&local_addrs)
+            .unwrap()
+            .0;
+
+        // and put the packet into connection tracker. The previous connection should
+        // be evicted
+        connection_tracker.add(pkt_unrelated_conn);
+        assert_eq!(connection_tracker.connections.len(), 1);
+        let evicted = evict_rx.try_recv().unwrap();
+        assert_eq!(evicted.local_ip, "192.168.1.238");
+        assert_eq!(evicted.remote_ip, "34.121.150.27");
+        assert_eq!(evicted.remote_port, 443);
+
+        // make sure we have the "unrelated" connection in the tracker
+        assert!(connection_tracker
+            .connections
+            .get_no_lru(&unrelated_conn_key)
+            .is_some());
+
+        tokio::time::resume();
     }
 }
