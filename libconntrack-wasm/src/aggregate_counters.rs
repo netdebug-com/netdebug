@@ -175,6 +175,14 @@ impl BucketedTimeSeries {
         sum as f64 / num_entries as f64
     }
 
+    pub fn get_total_entries(&self) -> u64 {
+        let mut entries = 0;
+        for b in &self.buckets {
+            entries += b.num_entries;
+        }
+        entries
+    }
+
     /****
      * Average over time, for the the length of the bucket's time
      */
@@ -241,6 +249,22 @@ impl AggregateCounter {
     ) {
         let ts = BucketedTimeSeries::new(time_window, num_buckets);
         self.counts.insert(label, ts);
+    }
+}
+
+impl std::fmt::Display for AggregateCounter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} :: ", self.name)?;
+        for (name, ts) in &self.counts {
+            write!(
+                f,
+                "{} :: {} entries {} avg",
+                name,
+                ts.get_total_entries(),
+                ts.get_avg_per_duration()
+            )?;
+        }
+        Ok(())
     }
 }
 
