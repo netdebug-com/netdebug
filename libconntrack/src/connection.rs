@@ -955,7 +955,7 @@ impl Connection {
     /// NOTE: rust allows us to compare two Option<u32>'s directly,
     /// but the way None compares to Some(u32) breaks my brain so this is more
     /// typing but IMHO clearer
-    fn _is_three_way_close_done(&self) -> bool {
+    fn is_three_way_close_done(&self) -> bool {
         // has everyone sent their FIN's? (e.g. are we at least at step 3?)
         if self.local_fin_seq.is_some()
             && self.remote_fin_seq.is_some()
@@ -1454,6 +1454,8 @@ impl Connection {
             associated_apps,
             start_tracking_time: self.start_tracking_time.clone(),
             last_packet_time: self.last_packet_time,
+            close_has_started: self.close_has_started(),
+            three_way_close_done: self.is_three_way_close_done(),
         }
     }
 }
@@ -1778,7 +1780,7 @@ pub mod test {
             .connections
             .get_no_lru(&conn_key.unwrap())
             .unwrap();
-        assert!(conn._is_three_way_close_done());
+        assert!(conn.is_three_way_close_done());
         assert!(conn.close_has_started());
     }
 
@@ -1843,7 +1845,7 @@ pub mod test {
             .connections
             .get_no_lru(&conn_key.unwrap())
             .unwrap();
-        assert!(!conn._is_three_way_close_done());
+        assert!(!conn.is_three_way_close_done());
         assert!(conn.close_has_started());
     }
 
