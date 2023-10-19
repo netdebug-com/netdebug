@@ -21,7 +21,7 @@ use log::{debug, info, warn};
 use netstat2::ProtocolSocketInfo;
 use pb_conntrack_types::ConnectionStorageEntry;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
 
 #[cfg(test)]
 use std::{println as debug, println as info, println as warn}; // Workaround to use prinltn! for logs.
@@ -141,6 +141,9 @@ impl ConnectionKey {
     }
 }
 
+pub type ConnectionTrackerSender = Sender<PerfMsgCheck<ConnectionTrackerMsg>>;
+pub type ConnectionTrackerReceiver = Receiver<PerfMsgCheck<ConnectionTrackerMsg>>;
+
 /**
  * ConnectionTracker uses the Agent model :: https://en.wikipedia.org/wiki/Agent-oriented_programming
  * which simplifies multithreading and state management.
@@ -219,8 +222,8 @@ pub struct ConnectionTracker<'a> {
     prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
     storage_service_msg_tx: Option<mpsc::Sender<ConnectionStorageEntry>>,
     dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
-    tx: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>, // so we can tell others how to send msgs to us
-    rx: UnboundedReceiver<PerfMsgCheck<ConnectionTrackerMsg>>, // to read messages sent to us
+    tx: ConnectionTrackerSender, // so we can tell others how to send msgs to us
+    rx: ConnectionTrackerReceiver, // to read messages sent to us
     // aggregate counters of everything that's gone through this connection manager
     tx_bytes: AggregateCounter,
     rx_bytes: AggregateCounter,
@@ -231,8 +234,9 @@ impl<'a> ConnectionTracker<'a> {
         max_connections_per_tracker: usize,
         local_addrs: HashSet<IpAddr>,
         prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
+        max_queue_size: usize,
     ) -> ConnectionTracker<'a> {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, rx) = tokio::sync::mpsc::channel(max_queue_size);
         let storage_service_msg_tx_clone = storage_service_msg_tx.clone();
         // for now, track these big counters by minute and second
         let tx_bytes = ConnectionTracker::create_aggregate_counter("tx_bytes");
@@ -500,16 +504,12 @@ impl<'a> ConnectionTracker<'a> {
         }
     }
 
-    pub fn set_tx_rx(
-        &mut self,
-        tx: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
-        rx: UnboundedReceiver<PerfMsgCheck<ConnectionTrackerMsg>>,
-    ) {
+    pub fn set_tx_rx(&mut self, tx: ConnectionTrackerSender, rx: ConnectionTrackerReceiver) {
         self.tx = tx;
         self.rx = rx;
     }
 
-    pub fn get_tx(&self) -> UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>> {
+    pub fn get_tx(&self) -> ConnectionTrackerSender {
         self.tx.clone()
     }
 
@@ -1559,6 +1559,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs,
             mock_prober.tx.clone(),
+            128,
         );
 
         let mut capture =
@@ -1622,6 +1623,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs.clone(),
             mock_prober.tx.clone(),
+            128,
         );
 
         let mut connection_key: Option<ConnectionKey> = None;
@@ -1687,6 +1689,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs.clone(),
             mock_prober.tx.clone(),
+            128,
         );
 
         let probe = OwnedParsedPacket::try_from_fake_time(TEST_PROBE.to_vec()).unwrap();
@@ -1774,6 +1777,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs.clone(),
             mock_prober.tx.clone(),
+            128,
         );
 
         let mut capture =
@@ -1848,6 +1852,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs.clone(),
             mock_prober.tx.clone(),
+            128,
         );
 
         let mut capture = pcap::Capture::from_file(test_dir(pcap_file)).unwrap();
@@ -1888,6 +1893,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs.clone(),
             mock_prober.tx.clone(),
+            128,
         );
 
         let mut connection_key: Option<ConnectionKey> = None;
@@ -2037,6 +2043,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs,
             raw_sock.tx.clone(),
+            128,
         );
         connection_tracker.add(remote_rst);
         assert_eq!(connection_tracker.connections.len(), 0);
@@ -2061,6 +2068,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs,
             mock_prober.tx.clone(),
+            128,
         );
         let remote_ip = IpAddr::from_str("52.53.155.175").unwrap();
         let test_hostname = "test-hostname.example.com".to_string();
@@ -2088,7 +2096,7 @@ pub mod test {
         });
         // this call should trigger a call to the dns_tracker and a reply back to the connection tracker
         conn_track_tx
-            .send(PerfMsgCheck::new(ConnectionTrackerMsg::Pkt(local_syn)))
+            .try_send(PerfMsgCheck::new(ConnectionTrackerMsg::Pkt(local_syn)))
             .unwrap();
         // this will get us a list of the active connections
         // there is some possibility for a race condition here as the message to the DnsTracker and back takes
@@ -2096,7 +2104,7 @@ pub mod test {
         tokio::time::sleep(Duration::milliseconds(100).to_std().unwrap()).await;
         let (connections_tx, mut connections_rx) = tokio::sync::mpsc::unbounded_channel();
         conn_track_tx
-            .send(PerfMsgCheck::new(ConnectionTrackerMsg::GetConnections {
+            .try_send(PerfMsgCheck::new(ConnectionTrackerMsg::GetConnections {
                 tx: connections_tx,
             }))
             .unwrap();
@@ -2141,6 +2149,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs,
             mock_prober.tx.clone(),
+            128,
         );
         connection_tracker.add(wrapping_pkt);
         assert_eq!(connection_tracker.connections.len(), 1);
@@ -2159,6 +2168,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs.clone(),
             mock_prober.tx.clone(),
+            128,
         );
 
         let mut capture =
@@ -2240,6 +2250,7 @@ pub mod test {
             max_connections_per_tracker,
             local_addrs.clone(),
             mock_prober.tx.clone(),
+            128,
         );
 
         // Read the first 3 packets from the trace. I.e., just the handshake but no data.

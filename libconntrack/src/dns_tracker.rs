@@ -16,7 +16,7 @@ use chrono::{DateTime, Duration, Utc};
 use libconntrack_wasm::DnsTrackerEntry;
 
 use crate::{
-    connection::{ConnectionKey, ConnectionTrackerMsg},
+    connection::{ConnectionKey, ConnectionTrackerMsg, ConnectionTrackerSender},
     utils::PerfMsgCheck,
 };
 use dns_parser::{self, QueryType};
@@ -64,7 +64,7 @@ pub enum DnsTrackerMessage {
     Lookup {
         ip: IpAddr,
         key: ConnectionKey,
-        tx: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+        tx: ConnectionTrackerSender,
     },
     LookupBatch {
         // Lookup this list of IP addresses
@@ -495,7 +495,7 @@ impl<'a> DnsTracker<'a> {
         &self,
         ip: IpAddr,
         key: ConnectionKey,
-        tx: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+        tx: ConnectionTrackerSender,
     ) {
         let remote_hostname = if let Some(entry) = self.reverse_map.get(&ip) {
             Some(entry.hostname.clone())
@@ -504,7 +504,7 @@ impl<'a> DnsTracker<'a> {
         };
         debug!("Looking up IP: {} - found {:?}", ip, remote_hostname);
         use ConnectionTrackerMsg::*;
-        if let Err(e) = tx.send(PerfMsgCheck::new(SetConnectionRemoteHostnameDns {
+        if let Err(e) = tx.try_send(PerfMsgCheck::new(SetConnectionRemoteHostnameDns {
             key,
             remote_hostname,
         })) {
@@ -822,6 +822,7 @@ mod test {
             max_connections_per_tracker,
             local_addrs,
             mock_prober.tx.clone(),
+            128,
         );
         connection_tracker.set_dns_tracker(dns_tx.clone());
         dns_tx

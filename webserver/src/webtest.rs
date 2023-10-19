@@ -29,7 +29,7 @@ use warp::ws::{self, WebSocket};
 use crate::context::Context;
 use futures_util::{stream::SplitStream, SinkExt, StreamExt};
 use libconntrack::{
-    connection::{ConnectionKey, ConnectionTrackerMsg},
+    connection::{ConnectionKey, ConnectionTrackerMsg, ConnectionTrackerSender},
     utils::PerfMsgCheck,
 };
 use log::{debug, info, warn};
@@ -108,7 +108,7 @@ pub async fn handle_websocket(
     // set the user agent
     if let Some(key) = &connection_key {
         if let Err(e) =
-            connection_tracker.send(PerfMsgCheck::new(ConnectionTrackerMsg::SetUserAgent {
+            connection_tracker.try_send(PerfMsgCheck::new(ConnectionTrackerMsg::SetUserAgent {
                 user_agent,
                 key: key.clone(),
             }))
@@ -144,13 +144,15 @@ pub async fn handle_websocket(
 async fn send_insights(
     connection_key: ConnectionKey,
     tx: UnboundedSender<Message>,
-    connection_tracker: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    connection_tracker: ConnectionTrackerSender,
 ) {
     let (insights_tx, mut insights_rx) = tokio::sync::mpsc::channel::<Vec<AnalysisInsights>>(10);
-    if let Err(e) = connection_tracker.send(PerfMsgCheck::new(ConnectionTrackerMsg::GetInsights {
-        key: connection_key.clone(),
-        tx: insights_tx,
-    })) {
+    if let Err(e) =
+        connection_tracker.try_send(PerfMsgCheck::new(ConnectionTrackerMsg::GetInsights {
+            key: connection_key.clone(),
+            tx: insights_tx,
+        }))
+    {
         warn!(
             "Error sending to connection tracker: {}:: {}",
             connection_key, e
@@ -172,10 +174,10 @@ async fn send_insights(
 
 async fn run_probe_round(
     probe_round: u32,
-    tx: &mpsc::UnboundedSender<Message>,
+    tx: &UnboundedSender<Message>,
     barrier_rx: &mut mpsc::UnboundedReceiver<f64>,
     connection_key: &Option<ConnectionKey>,
-    connection_tracker: &mpsc::UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    connection_tracker: &ConnectionTrackerSender,
     addr_str: &String,
     max_rounds: u32,
 ) {
@@ -236,7 +238,7 @@ async fn run_probe_round(
 }
 
 async fn get_probe_report(
-    connection_tracker: &mpsc::UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    connection_tracker: &ConnectionTrackerSender,
     connection_key: &Option<ConnectionKey>,
     probe_round: u32,
     application_rtt: f64,
@@ -247,7 +249,7 @@ async fn get_probe_report(
         // create an async channel for the connection tracker to send us back the report on
         let (report_tx, mut report_rx) = tokio::sync::mpsc::channel(1);
         if let Err(e) =
-            connection_tracker.send(PerfMsgCheck::new(ConnectionTrackerMsg::ProbeReport {
+            connection_tracker.try_send(PerfMsgCheck::new(ConnectionTrackerMsg::ProbeReport {
                 key,
                 clear_state,
                 tx: report_tx,
@@ -350,7 +352,7 @@ async fn set_user_annotation(
         annotation,
         key: connection_key.clone(),
     };
-    if let Err(e) = connection_tracker.send(PerfMsgCheck::new(connection_msg)) {
+    if let Err(e) = connection_tracker.try_send(PerfMsgCheck::new(connection_msg)) {
         warn!(
             "SetUserAnnotation: for connection {} - got {}",
             connection_key, e

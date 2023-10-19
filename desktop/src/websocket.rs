@@ -9,8 +9,11 @@ use futures_util::{
 };
 use itertools::Itertools;
 use libconntrack::{
-    connection::ConnectionTrackerMsg, dns_tracker::DnsTrackerMessage, perf_check,
-    process_tracker::ProcessTrackerMessage, utils::PerfMsgCheck,
+    connection::{ConnectionTrackerMsg, ConnectionTrackerSender},
+    dns_tracker::DnsTrackerMessage,
+    perf_check,
+    process_tracker::ProcessTrackerMessage,
+    utils::PerfMsgCheck,
 };
 use libconntrack_wasm::ConnectionMeasurements;
 use log::{debug, info, warn};
@@ -57,7 +60,7 @@ pub async fn websocket_sender(
 async fn handle_websocket_rx_messages(
     mut ws_rx: SplitStream<WebSocket>,
     tx: UnboundedSender<ServerToGuiMessages>,
-    connection_tracker: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: UnboundedSender<ProcessTrackerMessage>,
 ) {
@@ -93,7 +96,7 @@ async fn handle_websocket_rx_messages(
 async fn handle_gui_to_server_msg(
     msg: GuiToServerMessages,
     tx: &UnboundedSender<ServerToGuiMessages>,
-    connection_tracker: &UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    connection_tracker: &ConnectionTrackerSender,
     dns_tracker: &UnboundedSender<DnsTrackerMessage>,
     process_tracker: &UnboundedSender<ProcessTrackerMessage>,
 ) {
@@ -115,11 +118,11 @@ async fn handle_gui_to_server_msg(
 
 async fn handle_dump_aggregate_connection_tracker_counters(
     tx: &UnboundedSender<ServerToGuiMessages>,
-    connection_tracker: &UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    connection_tracker: &ConnectionTrackerSender,
 ) {
     let start = std::time::Instant::now();
     let (reply_tx, mut reply_rx) = mpsc::unbounded_channel();
-    if let Err(e) = connection_tracker.send(PerfMsgCheck::new(
+    if let Err(e) = connection_tracker.try_send(PerfMsgCheck::new(
         ConnectionTrackerMsg::GetAggregateCountersConnectionTracker { tx: reply_tx },
     )) {
         warn!(
@@ -146,7 +149,7 @@ async fn handle_dump_aggregate_connection_tracker_counters(
  */
 async fn handle_gui_dump_dns_cache(
     tx: &UnboundedSender<ServerToGuiMessages>,
-    _connection_tracker: &UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    _connection_tracker: &ConnectionTrackerSender,
     dns_tracker: &UnboundedSender<DnsTrackerMessage>,
 ) {
     let (dns_tx, mut dns_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -165,7 +168,7 @@ async fn handle_gui_dump_dns_cache(
 
 async fn handle_gui_dumpflows(
     tx: &UnboundedSender<ServerToGuiMessages>,
-    connection_tracker: &UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    connection_tracker: &ConnectionTrackerSender,
     dns_tracker: &UnboundedSender<DnsTrackerMessage>,
     process_tracker: &UnboundedSender<ProcessTrackerMessage>,
 ) {
@@ -173,9 +176,9 @@ async fn handle_gui_dumpflows(
     // get the cache of current connections
     let (reply_tx, mut reply_rx) = tokio::sync::mpsc::unbounded_channel();
     let request = ConnectionTrackerMsg::GetConnections { tx: reply_tx };
-    connection_tracker
-        .send(PerfMsgCheck::new(request))
-        .expect("connection tracker down?");
+    if let Err(e) = connection_tracker.try_send(PerfMsgCheck::new(request)) {
+        warn!("Connection Tracker queue problem: {}", e);
+    }
     let connections = match reply_rx.recv().await {
         Some(keys) => keys,
         None => {
@@ -233,7 +236,7 @@ async fn handle_gui_dumpflows(
  * Top-level websocket handler
  */
 pub async fn websocket_handler(
-    connection_tracker: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: UnboundedSender<ProcessTrackerMessage>,
     ws: WebSocket,

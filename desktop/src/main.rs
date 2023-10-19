@@ -3,7 +3,7 @@ mod websocket;
 use chrono::Duration;
 use clap::Parser;
 use libconntrack::{
-    connection::{ConnectionTracker, ConnectionTrackerMsg},
+    connection::{ConnectionTracker, ConnectionTrackerMsg, ConnectionTrackerSender},
     connection_storage_handler::ConnectionStorageHandler,
     dns_tracker::{DnsTracker, DnsTrackerMessage},
     in_band_probe::spawn_raw_prober,
@@ -45,7 +45,7 @@ pub struct Args {
     pub storage_server_url: Option<String>,
 }
 
-const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 4096;
+const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 65536;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -54,7 +54,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     // create a channel for the ConnectionTracker
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<PerfMsgCheck<ConnectionTrackerMsg>>();
+    let (tx, rx) = tokio::sync::mpsc::channel::<PerfMsgCheck<ConnectionTrackerMsg>>(
+        MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
+    );
 
     let devices = libconntrack::pcap::find_interesting_pcap_interfaces(&args.pcap_device)?;
     let local_addrs = devices
@@ -106,6 +108,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             args.max_connections_per_tracker,
             local_addrs,
             prober_tx,
+            MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
         );
         connection_tracker.set_tx_rx(connection_manager_tx, rx);
         connection_tracker.set_dns_tracker(dns_tx_clone);
@@ -138,7 +141,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 pub async fn make_desktop_http_routes(
     wasm_root: &String,
     html_root: &String,
-    connection_tracker: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: UnboundedSender<ProcessTrackerMessage>,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
@@ -156,13 +159,11 @@ pub async fn make_desktop_http_routes(
 
 // this function just wraps the connection tracker to make sure the types are understood
 fn with_connection_tracker(
-    connection_tracker: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
-) -> impl warp::Filter<
-    Extract = (UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,),
-    Error = std::convert::Infallible,
-> + Clone {
-    let connection_tacker = connection_tracker.clone();
-    warp::any().map(move || connection_tacker.clone())
+    connection_tracker: ConnectionTrackerSender,
+) -> impl warp::Filter<Extract = (ConnectionTrackerSender,), Error = std::convert::Infallible> + Clone
+{
+    let connection_tracker = connection_tracker.clone();
+    warp::any().map(move || connection_tracker.clone())
 }
 
 fn with_dns_tracker(
@@ -186,7 +187,7 @@ fn with_process_tracker(
 }
 
 fn make_desktop_ws_route(
-    connection_tracker: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: UnboundedSender<ProcessTrackerMessage>,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
@@ -198,7 +199,7 @@ fn make_desktop_ws_route(
         .and_then(websocket_desktop)
 }
 pub async fn websocket_desktop(
-    connection_tracker: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: UnboundedSender<ProcessTrackerMessage>,
     ws: warp::ws::Ws,

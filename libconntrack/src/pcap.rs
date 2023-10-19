@@ -4,7 +4,10 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 use crate::{
-    connection::ConnectionTrackerMsg, in_band_probe::ProbeMessage, perf_check, utils::PerfMsgCheck,
+    connection::{ConnectionTrackerMsg, ConnectionTrackerSender},
+    in_band_probe::ProbeMessage,
+    perf_check,
+    utils::PerfMsgCheck,
 };
 #[cfg(not(windows))]
 use futures_util::StreamExt;
@@ -55,7 +58,7 @@ impl pcap::PacketCodec for PacketParserCodec {
 pub async fn start_pcap_stream(
     device: pcap::Device,
     local_tcp_port: u16,
-    tx: tokio::sync::mpsc::UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    tx: ConnectionTrackerSender,
 ) -> Result<(), Box<dyn Error>> {
     info!("Starting pcap capture on {}", &device.name);
     let mut capture = Capture::from_device(device)?
@@ -77,8 +80,9 @@ pub async fn start_pcap_stream(
                 Ok(pkt) => {
                     let _hash = pkt.sloppy_hash();
                     // TODO: use this hash to map to 256 parallel ConnectionTrackers for parallelism
-                    tx.send(PerfMsgCheck::new(ConnectionTrackerMsg::Pkt(pkt)))
-                        .unwrap();
+                    if let Err(e) = tx.try_send(PerfMsgCheck::new(ConnectionTrackerMsg::Pkt(pkt))) {
+                        warn!("Failed to send to the ConnectionTracker: {}", e);
+                    }
                 }
                 Err(e) => {
                     warn!("start_pcap_stream got error: {} - exiting", e);
@@ -119,7 +123,7 @@ const DEFAULT_STATS_POLLING_FREQUENCY_SECONDS: u64 = 5;
 pub fn blocking_pcap_loop(
     device_name: String,
     filter_rule: Option<String>,
-    tx: tokio::sync::mpsc::UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    tx: ConnectionTrackerSender,
     stats_polling_frequency: Option<chrono::Duration>,
 ) -> Result<(), Box<dyn Error>> {
     let device = lookup_pcap_device_by_name(&device_name)?;
@@ -139,6 +143,12 @@ pub fn blocking_pcap_loop(
         Some(t) => t.num_seconds() as u64,
         None => DEFAULT_STATS_POLLING_FREQUENCY_SECONDS,
     };
+    let throttle_threshold = tx.max_capacity() / 2; // start throttling packet loss when we exceed 50% capacity
+    info!(
+        "Setting packet throttling threashold to {} - 50% of {}",
+        throttle_threshold,
+        tx.max_capacity()
+    );
     loop {
         match capture.next_packet() {
             Ok(pkt) => {
@@ -149,8 +159,18 @@ pub fn blocking_pcap_loop(
                         Box::new(OwnedParsedPacket::new(parsed_pkt, pkt.header.clone()));
                     let _hash = parsed_packet.sloppy_hash();
                     // TODO: use this hash to map to 256 parallel ConnectionTrackers for parallelism
-                    tx.send(PerfMsgCheck::new(ConnectionTrackerMsg::Pkt(parsed_packet)))
-                        .unwrap();
+                    if tx.capacity() < throttle_threshold {
+                        warn!("ConnectionTrackerSender exceeding 50% capacity: throttling pkts: {} > {}", tx.capacity(), throttle_threshold);
+                        continue;
+                    }
+                    if let Err(e) =
+                        tx.try_send(PerfMsgCheck::new(ConnectionTrackerMsg::Pkt(parsed_packet)))
+                    {
+                        warn!(
+                            "Tried to enqueue to the ConnectionTrackerSender and failed: {}",
+                            e
+                        );
+                    }
                 }
                 // periodically check the pcap stats to see if we're losing packets
                 // this is potentially a huge perf impact if we naively do gettimeofday() with each packet rx
@@ -182,7 +202,7 @@ pub fn blocking_pcap_loop(
 pub fn run_blocking_pcap_loop_in_thread(
     device_name: String,
     filter_rule: Option<String>,
-    tx: tokio::sync::mpsc::UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+    tx: ConnectionTrackerSender,
     stats_polling_frequency: Option<chrono::Duration>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
