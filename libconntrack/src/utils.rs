@@ -126,6 +126,40 @@ macro_rules! perf_check {
     };
 }
 
+/**
+ * Used to track enqueue/dequeue times to make sure queue depths don't get too long.
+ * Wraps any Message and forces you to check the performance to get the message
+ */
+
+pub struct PerfMsgCheck<T> {
+    data: T,
+    send_time: std::time::Instant,
+    sla: std::time::Duration,
+}
+
+impl<T> PerfMsgCheck<T> {
+    pub fn new(data: T) -> PerfMsgCheck<T> {
+        PerfMsgCheck {
+            data,
+            send_time: std::time::Instant::now(),
+            sla: std::time::Duration::from_millis(50), // default perf_check time
+        }
+    }
+
+    pub fn with_sla(data: T, sla: std::time::Duration) -> PerfMsgCheck<T> {
+        PerfMsgCheck {
+            data,
+            send_time: std::time::Instant::now(),
+            sla,
+        }
+    }
+
+    pub fn perf_check_get(self, msg: &str) -> T {
+        perf_check!(msg, self.send_time, self.sla);
+        self.data
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

@@ -15,7 +15,10 @@ use tokio::{
 use chrono::{DateTime, Duration, Utc};
 use libconntrack_wasm::DnsTrackerEntry;
 
-use crate::connection::{ConnectionKey, ConnectionTrackerMsg};
+use crate::{
+    connection::{ConnectionKey, ConnectionTrackerMsg},
+    utils::PerfMsgCheck,
+};
 use dns_parser::{self, QueryType};
 
 pub const UDP_DNS_PORT: u16 = 53;
@@ -61,7 +64,7 @@ pub enum DnsTrackerMessage {
     Lookup {
         ip: IpAddr,
         key: ConnectionKey,
-        tx: UnboundedSender<ConnectionTrackerMsg>,
+        tx: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
     },
     LookupBatch {
         // Lookup this list of IP addresses
@@ -492,7 +495,7 @@ impl<'a> DnsTracker<'a> {
         &self,
         ip: IpAddr,
         key: ConnectionKey,
-        tx: UnboundedSender<ConnectionTrackerMsg>,
+        tx: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
     ) {
         let remote_hostname = if let Some(entry) = self.reverse_map.get(&ip) {
             Some(entry.hostname.clone())
@@ -501,10 +504,10 @@ impl<'a> DnsTracker<'a> {
         };
         debug!("Looking up IP: {} - found {:?}", ip, remote_hostname);
         use ConnectionTrackerMsg::*;
-        if let Err(e) = tx.send(SetConnectionRemoteHostnameDns {
+        if let Err(e) = tx.send(PerfMsgCheck::new(SetConnectionRemoteHostnameDns {
             key,
             remote_hostname,
-        }) {
+        })) {
             warn!(
                 "Failed to send DnsLookup reply to connection manager: {}",
                 e

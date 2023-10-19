@@ -35,7 +35,10 @@ use crate::{
     owned_packet::OwnedParsedPacket,
     pcap::RawSocketWriter,
     process_tracker::ProcessTrackerEntry,
-    utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, packet_is_tcp_rst, timestamp_to_ms},
+    utils::{
+        self, calc_rtt_ms, etherparse_ipheaders2ipaddr, packet_is_tcp_rst, timestamp_to_ms,
+        PerfMsgCheck,
+    },
 };
 
 /// When evicting stale/old connection entries: evict at most this many
@@ -220,8 +223,8 @@ where
     raw_sock: R,
     storage_service_msg_tx: Option<mpsc::Sender<ConnectionStorageEntry>>,
     dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
-    tx: UnboundedSender<ConnectionTrackerMsg>, // so we can tell others how to send msgs to us
-    rx: UnboundedReceiver<ConnectionTrackerMsg>, // to read messages sent to us
+    tx: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>, // so we can tell others how to send msgs to us
+    rx: UnboundedReceiver<PerfMsgCheck<ConnectionTrackerMsg>>, // to read messages sent to us
     // aggregate counters of everything that's gone through this connection manager
     tx_bytes: AggregateCounter,
     rx_bytes: AggregateCounter,
@@ -267,6 +270,7 @@ where
     pub async fn rx_loop(&mut self) {
         while let Some(msg) = self.rx.recv().await {
             use ConnectionTrackerMsg::*;
+            let msg = msg.perf_check_get("ConnectionTracker::rx_loop");
             match msg {
                 Pkt(pkt) => self.add(pkt),
                 ProbeReport {
@@ -499,14 +503,14 @@ where
 
     pub fn set_tx_rx(
         &mut self,
-        tx: UnboundedSender<ConnectionTrackerMsg>,
-        rx: UnboundedReceiver<ConnectionTrackerMsg>,
+        tx: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
+        rx: UnboundedReceiver<PerfMsgCheck<ConnectionTrackerMsg>>,
     ) {
         self.tx = tx;
         self.rx = rx;
     }
 
-    pub fn get_tx(&self) -> UnboundedSender<ConnectionTrackerMsg> {
+    pub fn get_tx(&self) -> UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>> {
         self.tx.clone()
     }
 
@@ -2080,7 +2084,7 @@ pub mod test {
         });
         // this call should trigger a call to the dns_tracker and a reply back to the connection tracker
         conn_track_tx
-            .send(ConnectionTrackerMsg::Pkt(local_syn))
+            .send(PerfMsgCheck::new(ConnectionTrackerMsg::Pkt(local_syn)))
             .unwrap();
         // this will get us a list of the active connections
         // there is some possibility for a race condition here as the message to the DnsTracker and back takes
@@ -2088,7 +2092,9 @@ pub mod test {
         tokio::time::sleep(Duration::milliseconds(100).to_std().unwrap()).await;
         let (connections_tx, mut connections_rx) = tokio::sync::mpsc::unbounded_channel();
         conn_track_tx
-            .send(ConnectionTrackerMsg::GetConnections { tx: connections_tx })
+            .send(PerfMsgCheck::new(ConnectionTrackerMsg::GetConnections {
+                tx: connections_tx,
+            }))
             .unwrap();
         // make sure there's one and make sure remote_host is populated as expected
         let mut connections = connections_rx.recv().await.unwrap();
