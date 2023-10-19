@@ -2,6 +2,7 @@ use clap::Parser;
 use lib_probe_o_matic::*;
 use libconntrack::connection::ConnectionTrackerMsg;
 use libconntrack::pcap::{find_interesting_pcap_interfaces, run_blocking_pcap_loop_in_thread};
+use libconntrack::utils::PerfMsgCheck;
 use log::{error, info, warn};
 use std::io;
 use std::net::IpAddr;
@@ -92,7 +93,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if_name: dev.name.clone(),
     };
 
-    let (pkt_tx, pkt_rx) = tokio::sync::mpsc::unbounded_channel::<ConnectionTrackerMsg>();
+    let (pkt_tx, pkt_rx) =
+        tokio::sync::mpsc::unbounded_channel::<PerfMsgCheck<ConnectionTrackerMsg>>();
     let _handle = run_blocking_pcap_loop_in_thread(
         dev.name.clone(),
         Some(args.pcap_filter.clone()),

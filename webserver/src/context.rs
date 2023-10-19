@@ -11,6 +11,7 @@ use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg},
     connection_storage_handler::ConnectionStorageHandler,
     pcap::{bind_writable_pcap, lookup_pcap_device_by_name},
+    utils::PerfMsgCheck,
 };
 
 // All of the web server state that's maintained across
@@ -28,7 +29,7 @@ pub struct WebServerContext {
     pub max_connections_per_tracker: usize, // how big to make the LruCache
     // communications channel to the connection_tracker
     // TODO: make a pool for multi-threading
-    pub connection_tracker: UnboundedSender<ConnectionTrackerMsg>,
+    pub connection_tracker: UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
 }
 
 impl WebServerContext {

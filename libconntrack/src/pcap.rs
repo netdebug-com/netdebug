@@ -2,7 +2,7 @@ use std::error::Error;
 use std::net::IpAddr;
 use std::str::FromStr;
 
-use crate::connection::ConnectionTrackerMsg;
+use crate::{connection::ConnectionTrackerMsg, utils::PerfMsgCheck};
 #[cfg(not(windows))]
 use futures_util::StreamExt;
 use itertools::Itertools;
@@ -51,7 +51,7 @@ impl pcap::PacketCodec for PacketParserCodec {
 pub async fn start_pcap_stream(
     device: pcap::Device,
     local_tcp_port: u16,
-    tx: tokio::sync::mpsc::UnboundedSender<ConnectionTrackerMsg>,
+    tx: tokio::sync::mpsc::UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
 ) -> Result<(), Box<dyn Error>> {
     info!("Starting pcap capture on {}", &device.name);
     let mut capture = Capture::from_device(device)?
@@ -73,7 +73,8 @@ pub async fn start_pcap_stream(
                 Ok(pkt) => {
                     let _hash = pkt.sloppy_hash();
                     // TODO: use this hash to map to 256 parallel ConnectionTrackers for parallelism
-                    tx.send(ConnectionTrackerMsg::Pkt(pkt)).unwrap();
+                    tx.send(PerfMsgCheck::new(ConnectionTrackerMsg::Pkt(pkt)))
+                        .unwrap();
                 }
                 Err(e) => {
                     warn!("start_pcap_stream got error: {} - exiting", e);
@@ -114,7 +115,7 @@ const DEFAULT_STATS_POLLING_FREQUENCY_SECONDS: u64 = 5;
 pub fn blocking_pcap_loop(
     device_name: String,
     filter_rule: Option<String>,
-    tx: tokio::sync::mpsc::UnboundedSender<ConnectionTrackerMsg>,
+    tx: tokio::sync::mpsc::UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
     stats_polling_frequency: Option<chrono::Duration>,
 ) -> Result<(), Box<dyn Error>> {
     let device = lookup_pcap_device_by_name(&device_name)?;
@@ -144,7 +145,8 @@ pub fn blocking_pcap_loop(
                         Box::new(OwnedParsedPacket::new(parsed_pkt, pkt.header.clone()));
                     let _hash = parsed_packet.sloppy_hash();
                     // TODO: use this hash to map to 256 parallel ConnectionTrackers for parallelism
-                    tx.send(ConnectionTrackerMsg::Pkt(parsed_packet)).unwrap();
+                    tx.send(PerfMsgCheck::new(ConnectionTrackerMsg::Pkt(parsed_packet)))
+                        .unwrap();
                 }
                 // periodically check the pcap stats to see if we're losing packets
                 // this is potentially a huge perf impact if we naively do gettimeofday() with each packet rx
@@ -176,7 +178,7 @@ pub fn blocking_pcap_loop(
 pub fn run_blocking_pcap_loop_in_thread(
     device_name: String,
     filter_rule: Option<String>,
-    tx: tokio::sync::mpsc::UnboundedSender<ConnectionTrackerMsg>,
+    tx: tokio::sync::mpsc::UnboundedSender<PerfMsgCheck<ConnectionTrackerMsg>>,
     stats_polling_frequency: Option<chrono::Duration>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {

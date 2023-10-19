@@ -5,6 +5,7 @@ use etherparse::{
 };
 use libconntrack::{
     connection::ConnectionTrackerMsg, owned_packet::OwnedParsedPacket, pcap::RawSocketWriter,
+    utils::PerfMsgCheck,
 };
 use log::{debug, error, info, trace, warn};
 use priority_queue::PriorityQueue;
@@ -341,7 +342,7 @@ impl Display for InProgressProbeState {
 }
 
 pub struct ProbeOMatic {
-    pkt_rx: mpsc::UnboundedReceiver<ConnectionTrackerMsg>,
+    pkt_rx: mpsc::UnboundedReceiver<PerfMsgCheck<ConnectionTrackerMsg>>,
     probe_rx: mpsc::UnboundedReceiver<ProbeOMaticMsg>,
     raw_sock: Box<dyn RawSocketWriter>,
     addr_config: LocalAddressConfig,
@@ -358,7 +359,7 @@ pub struct ProbeOMatic {
 
 impl ProbeOMatic {
     pub fn spawn(
-        pkt_rx: mpsc::UnboundedReceiver<ConnectionTrackerMsg>,
+        pkt_rx: mpsc::UnboundedReceiver<PerfMsgCheck<ConnectionTrackerMsg>>,
         probe_rx: mpsc::UnboundedReceiver<ProbeOMaticMsg>,
         raw_sock: Box<dyn RawSocketWriter>,
         addr_config: LocalAddressConfig,
@@ -390,7 +391,10 @@ impl ProbeOMatic {
                 }
             };
             tokio::select! {
-                Some(conn_msg) = self.pkt_rx.recv() => self.handle_conn_msg(conn_msg),
+                Some(conn_msg) = self.pkt_rx.recv() => {
+                    let conn_msg = conn_msg.perf_check_get("probe-o-matic rx_loop");
+                    self.handle_conn_msg(conn_msg)
+                },
                 Some(probe_msg) = self.probe_rx.recv() => self.handle_probe_msg(probe_msg),
                 _ = sleep_until(next_wakeup) => {
                     trace!("Got woken up from my sleep");
