@@ -12,7 +12,7 @@ use libconntrack::{
     connection::{ConnectionTrackerMsg, ConnectionTrackerSender},
     dns_tracker::DnsTrackerMessage,
     perf_check,
-    process_tracker::ProcessTrackerMessage,
+    process_tracker::{ProcessTrackerMessage, ProcessTrackerSender},
     utils::PerfMsgCheck,
 };
 use libconntrack_wasm::ConnectionMeasurements;
@@ -62,7 +62,7 @@ async fn handle_websocket_rx_messages(
     tx: UnboundedSender<ServerToGuiMessages>,
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
-    process_tracker: UnboundedSender<ProcessTrackerMessage>,
+    process_tracker: ProcessTrackerSender,
 ) {
     while let Some(msg_result) = ws_rx.next().await {
         match msg_result {
@@ -98,7 +98,7 @@ async fn handle_gui_to_server_msg(
     tx: &UnboundedSender<ServerToGuiMessages>,
     connection_tracker: &ConnectionTrackerSender,
     dns_tracker: &UnboundedSender<DnsTrackerMessage>,
-    process_tracker: &UnboundedSender<ProcessTrackerMessage>,
+    process_tracker: &ProcessTrackerSender,
 ) {
     let start = std::time::Instant::now();
     match &msg {
@@ -170,7 +170,7 @@ async fn handle_gui_dumpflows(
     tx: &UnboundedSender<ServerToGuiMessages>,
     connection_tracker: &ConnectionTrackerSender,
     dns_tracker: &UnboundedSender<DnsTrackerMessage>,
-    process_tracker: &UnboundedSender<ProcessTrackerMessage>,
+    process_tracker: &ProcessTrackerSender,
 ) {
     let perf_conn_track = Instant::now();
     // get the cache of current connections
@@ -211,9 +211,11 @@ async fn handle_gui_dumpflows(
     let (perf_process, _) = perf_check!("dumpflows: DNS", perf_dns, Duration::from_millis(50));
     // get the process caches
     let (process_tx, mut process_rx) = tokio::sync::mpsc::unbounded_channel();
-    process_tracker
-        .send(ProcessTrackerMessage::DumpCache { tx: process_tx })
-        .expect("process tracker down?");
+    if let Err(e) = process_tracker.try_send(PerfMsgCheck::new(ProcessTrackerMessage::DumpCache {
+        tx: process_tx,
+    })) {
+        warn!("Error sending to the process_tracker: {}", e);
+    }
     let (tcp_cache, udp_cache) = process_rx.recv().await.unwrap();
 
     let (perf_join, _) = perf_check!(
@@ -238,7 +240,7 @@ async fn handle_gui_dumpflows(
 pub async fn websocket_handler(
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
-    process_tracker: UnboundedSender<ProcessTrackerMessage>,
+    process_tracker: ProcessTrackerSender,
     ws: WebSocket,
 ) {
     info!("Got a websocket connection! ");

@@ -8,13 +8,12 @@ use netstat2::{AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo};
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::{println as debug, println as warn};
-use tokio::{
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-    task::JoinHandle,
-};
+use tokio::sync::mpsc::channel;
+use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 
 use crate::connection::ConnectionKey;
 use crate::perf_check;
+use crate::utils::PerfMsgCheck;
 
 #[derive(Clone, Debug)]
 pub enum ProcessTrackerMessage {
@@ -37,9 +36,11 @@ pub enum ProcessTrackerMessage {
     },
 }
 
+pub type ProcessTrackerSender = tokio::sync::mpsc::Sender<PerfMsgCheck<ProcessTrackerMessage>>;
+pub type ProcessTrackerReceiver = tokio::sync::mpsc::Receiver<PerfMsgCheck<ProcessTrackerMessage>>;
 pub struct ProcessTracker {
-    tx: UnboundedSender<ProcessTrackerMessage>,
-    rx: UnboundedReceiver<ProcessTrackerMessage>,
+    tx: ProcessTrackerSender,
+    rx: ProcessTrackerReceiver,
     tcp_cache: HashMap<ConnectionKey, ProcessTrackerEntry>,
     udp_cache: HashMap<(IpAddr, u16), ProcessTrackerEntry>,
     pid2app_name_cache: HashMap<u32, String>,
@@ -51,8 +52,8 @@ pub struct ProcessTrackerEntry {
 }
 
 impl ProcessTracker {
-    pub fn new() -> ProcessTracker {
-        let (tx, rx) = unbounded_channel::<ProcessTrackerMessage>();
+    pub fn new(max_queue: usize) -> ProcessTracker {
+        let (tx, rx) = channel::<PerfMsgCheck<ProcessTrackerMessage>>(max_queue);
         ProcessTracker {
             tx,
             rx,
@@ -71,7 +72,7 @@ impl ProcessTracker {
     pub async fn spawn(
         mut self,
         update_frequency: Duration,
-    ) -> (UnboundedSender<ProcessTrackerMessage>, JoinHandle<()>) {
+    ) -> (ProcessTrackerSender, JoinHandle<()>) {
         #[cfg(windows)]
         {
             let tx = self.tx.clone();
@@ -90,7 +91,7 @@ impl ProcessTracker {
             loop {
                 // TODO: break on too many errors? Then do what?
                 tokio::time::sleep(update_frequency.to_std().unwrap()).await;
-                if let Err(e) = tx.send(ProcessTrackerMessage::UpdateCache) {
+                if let Err(e) = tx.try_send(PerfMsgCheck::new(ProcessTrackerMessage::UpdateCache)) {
                     warn!("ProcessTracker :: update cache sender failed: {}", e);
                 }
             }
@@ -98,13 +99,24 @@ impl ProcessTracker {
         while let Some(msg) = self.rx.recv().await {
             use ProcessTrackerMessage::*;
             let start = Instant::now();
+            let msg = msg.perf_check_get("ProcessTracker::do_async_loop queue");
             match &msg {
                 LookupOne { key, tx } => self.handle_lookup(key, tx),
                 UpdateCache => self.update_cache(),
                 DumpCache { tx } => {
+                    let start = Instant::now();
                     if let Err(e) = tx.send((self.tcp_cache.clone(), self.udp_cache.clone())) {
                         warn!("ProcessTracker :: dump cache sender failed: {}", e);
                     }
+                    perf_check!(
+                        format!(
+                            "ProcessTracker::DumpCache (tcp={}, udp={})",
+                            self.tcp_cache.len(),
+                            self.udp_cache.len()
+                        ),
+                        start,
+                        std::time::Duration::from_millis(25)
+                    );
                 }
                 UpdatePidMapping { pid2process } => {
                     self.pid2app_name_cache = pid2process.clone();
@@ -160,6 +172,7 @@ impl ProcessTracker {
      * this is why all of the resulting data structures are one to many (e.g., Vec()/HashMap() rather than one to one.
      */
     fn update_cache(&mut self) {
+        let start = Instant::now();
         let af_flags = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
         let proto_flags = ProtocolFlags::TCP | ProtocolFlags::UDP;
         // pull the sockets to process mapping from the OS via this cool (buggy?) netstat2 crate
@@ -213,6 +226,11 @@ impl ProcessTracker {
         // last, move new cache into place
         self.tcp_cache = new_tcp_cache;
         self.udp_cache = new_udp_cache;
+        perf_check!(
+            "ProcessTracker::update_cache",
+            start,
+            std::time::Duration::from_millis(25)
+        );
     }
 }
 
@@ -223,10 +241,7 @@ impl ProcessTracker {
  * task/thread and async post the data back to the main ProcessTracker
  */
 #[cfg(windows)]
-async fn run_pid2process_loop(
-    update_frequency: Duration,
-    tx: UnboundedSender<ProcessTrackerMessage>,
-) {
+async fn run_pid2process_loop(update_frequency: Duration, tx: ProcessTrackerSender) {
     use chrono::Utc;
 
     loop {
@@ -240,7 +255,7 @@ async fn run_pid2process_loop(
         };
 
         use ProcessTrackerMessage::*;
-        if let Err(e) = tx.send(UpdatePidMapping { pid2process }) {
+        if let Err(e) = tx.try_send(PerfMsgCheck::new(UpdatePidMapping { pid2process })) {
             warn!("Failed to send UpdatePidMapping to process tracker: {}", e);
         }
 
@@ -320,7 +335,7 @@ mod test {
         };
         //
 
-        let mut process_tracker = ProcessTracker::new();
+        let mut process_tracker = ProcessTracker::new(128);
         process_tracker.update_cache();
 
         let mut found_it = false;

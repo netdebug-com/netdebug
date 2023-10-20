@@ -141,7 +141,6 @@ pub(crate) fn handle_aggregate_counters(
     console_log!("Got a AggregateCounters reply, sending another");
     // Only send a new request after we've received a reply from the old one (i.e., this function)
     send_aggregate_request(ws, last_request_sent, min_interval, tabs.clone());
-
     // assume the send and recv counters track the same Durations + num_buckets
     for ts_label in counters.send.counts.keys() {
         let duration = counters
