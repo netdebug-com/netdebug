@@ -130,6 +130,7 @@ pub fn blocking_pcap_loop(
     info!("Starting pcap capture on {}", &device.name);
     let mut capture = Capture::from_device(device)?
         .buffer_size(64_000_000) // try to prevent any packet loss
+        .snaplen(196)
         .timeout(1000) // for macos, so it doesn't get stuck
         .open()?;
     // only capture/probe traffic to the webserver
