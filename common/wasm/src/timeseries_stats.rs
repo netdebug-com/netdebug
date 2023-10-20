@@ -88,7 +88,15 @@ impl BucketedTimeSeries {
             last_num_wraps: 0,
         }
     }
-    pub fn update_with_time(&mut self, count: u64, now: Instant) {
+
+    pub fn add_value(&mut self, value: u64, now: Instant) {
+        let idx = self.update_buckets(now);
+        self.buckets[idx].add(value);
+    }
+
+    /// Update and rotate the buckets up to `now`. Return the bucket index that
+    /// `now` points tp
+    pub fn update_buckets(&mut self, now: Instant) -> usize {
         // how much time from system start?
         let offset_time = (now
             - self
@@ -104,7 +112,7 @@ impl BucketedTimeSeries {
         let num_wraps = quantized_time
             .checked_div(self.num_buckets as u128)
             .unwrap() as usize;
-        if (num_wraps - self.last_num_wraps) == 0 {
+        if num_wraps == self.last_num_wraps {
             // implicit: if bucket_index == self.last_bucket_used, then NOOP
             if bucket_index > self.last_used_bucket {
                 // zero everything from just after the last bucket used to the new bucket (inclusive)
@@ -114,8 +122,6 @@ impl BucketedTimeSeries {
             } else if bucket_index < self.last_used_bucket {
                 // recently old data, could happen if the caller was delayed; just allow it without updating
                 // anything else
-                self.buckets[bucket_index].add(count);
-                return;
             }
         } else if (num_wraps - self.last_num_wraps) == 1 {
             // we wrapped one time relative to last update
@@ -143,8 +149,8 @@ impl BucketedTimeSeries {
             }
         }
         self.last_num_wraps = num_wraps;
-        self.buckets[bucket_index].add(count);
         self.last_used_bucket = bucket_index;
+        bucket_index
     }
 
     /**
@@ -205,20 +211,20 @@ mod test {
             BucketedTimeSeries::new_with_create_time(create_time, Duration::from_secs(1), 2);
         assert_eq!(ts.get_sum(), 0);
         // add 1 'right away'
-        ts.update_with_time(1, create_time);
+        ts.add_value(1, create_time);
         assert_eq!(ts.get_sum(), 1);
         assert_eq!(ts.buckets[0].sum, 1);
         // add 2, 1 second after 'right away'
-        ts.update_with_time(2, create_time + Duration::from_secs(1));
+        ts.add_value(2, create_time + Duration::from_secs(1));
         assert_eq!(ts.buckets[1].sum, 2);
         assert_eq!(ts.get_sum(), 3);
         // add 3, 2 second after 'right away'; this should create a new wrap and clear the first bucket
-        ts.update_with_time(3, create_time + Duration::from_secs(2));
+        ts.add_value(3, create_time + Duration::from_secs(2));
         assert_eq!(ts.buckets[0].sum, 3);
         assert_eq!(ts.get_sum(), 5);
         assert_eq!(ts.last_num_wraps, 1);
         // add 4, 7 seconds after 'right away'; this should clear the time series as the new wrap > old wrap +1
-        ts.update_with_time(4, create_time + Duration::from_secs(7));
+        ts.add_value(4, create_time + Duration::from_secs(7));
         assert_eq!(ts.buckets[1].sum, 4);
         assert_eq!(ts.get_sum(), 4);
         assert_eq!(ts.last_num_wraps, 3);
@@ -232,11 +238,11 @@ mod test {
             BucketedTimeSeries::new_with_create_time(create_time, Duration::from_secs(1), 8);
         assert_eq!(ts.get_sum(), 0);
         // add 1 'right away'
-        ts.update_with_time(1, create_time);
+        ts.add_value(1, create_time);
         assert_eq!(ts.get_sum(), 1);
         assert_eq!(ts.buckets[0].sum, 1);
         // add 2, 12 second after 'right away', so it should wrap, clear the full counter and be just '2'
-        ts.update_with_time(2, create_time + Duration::from_secs(12));
+        ts.add_value(2, create_time + Duration::from_secs(12));
         assert_eq!(ts.get_sum(), 2);
     }
 
@@ -256,14 +262,14 @@ mod test {
         let mut ts =
             BucketedTimeSeries::new_with_create_time(create_time, Duration::from_secs(1), 4);
 
-        ts.update_with_time(1, create_time);
-        ts.update_with_time(2, create_time + dt);
-        ts.update_with_time(3, create_time + 2 * dt);
-        ts.update_with_time(4, create_time + 3 * dt);
+        ts.add_value(1, create_time);
+        ts.add_value(2, create_time + dt);
+        ts.add_value(3, create_time + 2 * dt);
+        ts.add_value(4, create_time + 3 * dt);
         assert_eq!(get_bucket_values(&ts), &[1, 2, 3, 4]);
-        ts.update_with_time(5, create_time + 4 * dt);
+        ts.add_value(5, create_time + 4 * dt);
         assert_eq!(get_bucket_values(&ts), &[5, 2, 3, 4]);
-        ts.update_with_time(6, create_time + 5 * dt);
+        ts.add_value(6, create_time + 5 * dt);
         assert_eq!(get_bucket_values(&ts), &[5, 6, 3, 4]);
     }
 
@@ -275,12 +281,12 @@ mod test {
         let mut ts =
             BucketedTimeSeries::new_with_create_time(create_time, Duration::from_secs(1), 4);
 
-        ts.update_with_time(1, create_time);
-        ts.update_with_time(2, create_time + dt);
-        ts.update_with_time(3, create_time + 2 * dt);
-        ts.update_with_time(4, create_time + 3 * dt);
+        ts.add_value(1, create_time);
+        ts.add_value(2, create_time + dt);
+        ts.add_value(3, create_time + 2 * dt);
+        ts.add_value(4, create_time + 3 * dt);
         assert_eq!(get_bucket_values(&ts), &[1, 2, 3, 4]);
-        ts.update_with_time(5, create_time + 5 * dt);
+        ts.add_value(5, create_time + 5 * dt);
         assert_eq!(get_bucket_values(&ts), &[0, 5, 3, 4]);
     }
 
@@ -292,16 +298,16 @@ mod test {
         let mut ts =
             BucketedTimeSeries::new_with_create_time(create_time, Duration::from_secs(1), 4);
 
-        ts.update_with_time(1, create_time);
-        ts.update_with_time(2, create_time + dt);
-        ts.update_with_time(3, create_time + 2 * dt);
-        ts.update_with_time(4, create_time + 3 * dt);
-        ts.update_with_time(5, create_time + 4 * dt);
-        ts.update_with_time(6, create_time + 5 * dt);
-        ts.update_with_time(7, create_time + 6 * dt);
+        ts.add_value(1, create_time);
+        ts.add_value(2, create_time + dt);
+        ts.add_value(3, create_time + 2 * dt);
+        ts.add_value(4, create_time + 3 * dt);
+        ts.add_value(5, create_time + 4 * dt);
+        ts.add_value(6, create_time + 5 * dt);
+        ts.add_value(7, create_time + 6 * dt);
         assert_eq!(get_bucket_values(&ts), &[5, 6, 7, 4]);
 
-        ts.update_with_time(8, create_time + 8 * dt);
+        ts.add_value(8, create_time + 8 * dt);
         assert_eq!(get_bucket_values(&ts), &[8, 6, 7, 0]);
     }
 
@@ -313,11 +319,11 @@ mod test {
         let mut ts =
             BucketedTimeSeries::new_with_create_time(create_time, Duration::from_secs(1), 4);
 
-        ts.update_with_time(1, create_time);
-        ts.update_with_time(2, create_time + dt);
-        ts.update_with_time(3, create_time + 2 * dt);
-        ts.update_with_time(4, create_time + 3 * dt);
-        ts.update_with_time(5, create_time + 7 * dt);
+        ts.add_value(1, create_time);
+        ts.add_value(2, create_time + dt);
+        ts.add_value(3, create_time + 2 * dt);
+        ts.add_value(4, create_time + 3 * dt);
+        ts.add_value(5, create_time + 7 * dt);
         assert_eq!(get_bucket_values(&ts), &[0, 0, 0, 5]);
     }
 
@@ -329,15 +335,15 @@ mod test {
         let mut ts =
             BucketedTimeSeries::new_with_create_time(create_time, Duration::from_secs(1), 4);
 
-        ts.update_with_time(1, create_time);
-        ts.update_with_time(2, create_time + dt);
-        ts.update_with_time(3, create_time + 2 * dt);
-        ts.update_with_time(4, create_time + 3 * dt);
-        ts.update_with_time(5, create_time + 4 * dt);
-        ts.update_with_time(6, create_time + 5 * dt);
+        ts.add_value(1, create_time);
+        ts.add_value(2, create_time + dt);
+        ts.add_value(3, create_time + 2 * dt);
+        ts.add_value(4, create_time + 3 * dt);
+        ts.add_value(5, create_time + 4 * dt);
+        ts.add_value(6, create_time + 5 * dt);
         assert_eq!(get_bucket_values(&ts), &[5, 6, 3, 4]);
 
-        ts.update_with_time(7, create_time + 10 * dt);
+        ts.add_value(7, create_time + 10 * dt);
         assert_eq!(get_bucket_values(&ts), &[0, 0, 7, 0]);
     }
 
@@ -349,16 +355,16 @@ mod test {
         let mut ts =
             BucketedTimeSeries::new_with_create_time(create_time, Duration::from_secs(1), 4);
 
-        ts.update_with_time(1, create_time);
-        ts.update_with_time(2, create_time + dt);
-        ts.update_with_time(3, create_time + 2 * dt);
-        ts.update_with_time(4, create_time + 3 * dt);
-        ts.update_with_time(5, create_time + 4 * dt);
-        ts.update_with_time(6, create_time + 5 * dt);
+        ts.add_value(1, create_time);
+        ts.add_value(2, create_time + dt);
+        ts.add_value(3, create_time + 2 * dt);
+        ts.add_value(4, create_time + 3 * dt);
+        ts.add_value(5, create_time + 4 * dt);
+        ts.add_value(6, create_time + 5 * dt);
         assert_eq!(get_bucket_values(&ts), &[5, 6, 3, 4]);
 
         // wraps twice
-        ts.update_with_time(7, create_time + 13 * dt);
+        ts.add_value(7, create_time + 13 * dt);
         assert_eq!(get_bucket_values(&ts), &[0, 7, 0, 0]);
     }
 }
