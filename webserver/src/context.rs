@@ -32,7 +32,7 @@ pub struct WebServerContext {
     pub connection_tracker: ConnectionTrackerSender,
 }
 
-const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 65536;
+const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
 
 impl WebServerContext {
     pub fn new(args: &Args) -> Result<WebServerContext, Box<dyn Error>> {

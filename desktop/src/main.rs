@@ -45,7 +45,7 @@ pub struct Args {
     pub storage_server_url: Option<String>,
 }
 
-const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 65536;
+const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
