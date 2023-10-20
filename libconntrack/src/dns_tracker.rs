@@ -209,7 +209,9 @@ impl<'a> DnsTracker<'a> {
     ) {
         // track who sent us a DNS reply
         let src_dns_server = key.remote_ip.clone();
-        *self.local_dns_servers.entry(src_dns_server).or_insert(0) += 1;
+        if dns_packet.header.response_code == dns_parser::ResponseCode::NoError {
+            *self.local_dns_servers.entry(src_dns_server).or_insert(0) += 1;
+        }
 
         let key = DnsPendingKey {
             connection_key: key,
