@@ -72,7 +72,7 @@ impl std::fmt::Display for AggregateCounter {
                 f,
                 "{} :: {} entries {} avg",
                 name,
-                ts.get_total_entries(),
+                ts.get_num_entries(),
                 ts.get_avg_per_duration()
             )?;
         }
