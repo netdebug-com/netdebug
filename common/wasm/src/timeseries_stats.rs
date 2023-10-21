@@ -1,29 +1,37 @@
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CounterBucket {
     pub sum: u64,
+    pub max: u64,
     pub num_entries: u64,
 }
 
 impl CounterBucket {
     pub fn new() -> CounterBucket {
-        CounterBucket {
-            sum: 0,
-            num_entries: 0,
-        }
+        CounterBucket::default()
     }
 
     pub fn add(&mut self, value: u64) {
         // try to do some sane things to avoid wrapping counters
         self.sum = self.sum.saturating_add(value);
+        self.max = std::cmp::max(self.max, value);
         self.num_entries = self.num_entries.saturating_add(1);
+    }
+
+    pub fn avg(&self) -> f64 {
+        if self.num_entries == 0 {
+            0.0
+        } else {
+            self.sum as f64 / self.num_entries as f64
+        }
     }
 
     pub fn clear(&mut self) {
         self.sum = 0;
         self.num_entries = 0;
+        self.max = 0;
     }
 }
 pub type BucketIndex = usize;
@@ -31,6 +39,9 @@ pub type BucketIndex = usize;
 /**
  * BucketedTimeSeries.
  * Roughly inspired by https://github.com/facebook/folly/blob/main/folly/stats/BucketedTimeSeries.h
+ *
+ * This allows us to track values across a sliding time window. E.g., number of bytes in the
+ * last minute.
  *
  * Store the data in a circulate buffer of counters (the 'time window') and clear parts
  * of the time window on update.  How much we clear depends on how far apart the new
@@ -43,7 +54,7 @@ pub type BucketIndex = usize;
  *
  */
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BucketedTimeSeries {
     /**
      * Instant can't be serialized and has no default, so we can't just skip it.  But we can
@@ -112,7 +123,9 @@ impl BucketedTimeSeries {
         let num_wraps = quantized_time
             .checked_div(self.num_buckets as u128)
             .unwrap() as usize;
-        if num_wraps == self.last_num_wraps {
+        if num_wraps < self.last_num_wraps {
+            panic!("Time went backward for our monotonic clock!?");
+        } else if num_wraps == self.last_num_wraps {
             // implicit: if bucket_index == self.last_bucket_used, then NOOP
             if bucket_index > self.last_used_bucket {
                 // zero everything from just after the last bucket used to the new bucket (inclusive)
@@ -123,7 +136,7 @@ impl BucketedTimeSeries {
                 // recently old data, could happen if the caller was delayed; just allow it without updating
                 // anything else
             }
-        } else if (num_wraps - self.last_num_wraps) == 1 {
+        } else if num_wraps == self.last_num_wraps + 1 {
             // we wrapped one time relative to last update
             if bucket_index < self.last_used_bucket {
                 // we wrapped, so need to zero everything from where we are to the end,
@@ -140,8 +153,6 @@ impl BucketedTimeSeries {
                     self.buckets[b].clear();
                 }
             }
-        } else if num_wraps < self.last_num_wraps {
-            panic!("Time went backward for our monotonic clock!?");
         } else {
             // wrap > (last_wrap + 1 ), so we need to zero all of our data
             for b in 0..self.num_buckets {
@@ -162,21 +173,35 @@ impl BucketedTimeSeries {
     }
 
     /**
-     * Average the counts across the time window, taking into account the number of
-     * entries in each bucket. Empty buckets count a single zero value, so this is a bit
-     * funky.  Need to think if this is actually useful.
+     * Return the maximum of the values stored.
      */
-    pub fn get_avg_count(&self) -> f64 {
+    pub fn get_max(&self) -> u64 {
+        self.buckets
+            .iter()
+            .fold(0, |acc, cb| std::cmp::max(acc, cb.max))
+    }
+
+    /**
+     * Average across the time window. I.e., `sum / total duration`
+     */
+    pub fn get_avg(&self) -> f64 {
         let mut sum = 0;
         let mut num_entries = 0;
         for b in &self.buckets {
             sum += b.sum;
             num_entries += b.num_entries;
         }
-        sum as f64 / num_entries as f64
+        if num_entries == 0 {
+            0.0
+        } else {
+            sum as f64 / num_entries as f64
+        }
     }
 
-    pub fn get_total_entries(&self) -> u64 {
+    /**
+     * Get the number of entires across the time window
+     */
+    pub fn get_num_entries(&self) -> u64 {
         let mut entries = 0;
         for b in &self.buckets {
             entries += b.num_entries;
@@ -196,6 +221,149 @@ impl BucketedTimeSeries {
             sum / self.last_used_bucket as f64
         } else {
             sum / self.num_buckets as f64
+        }
+    }
+}
+
+/**
+ * Keeps track of multiple BucketedTimeseries to allow tracking of data across multiple time
+ * windows. E.g., number of bytes in the last minute, last 10 minutes, etc.
+ */
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MultilevelTimeseries {
+    /// The time when this MultilevelTimeseries was created. Also used as the epoch
+    /// for the contained BucketedTimeseries
+    created_time: Instant,
+    /// The different time windows we track. E.g., for 1min and 10min, we'd have
+    /// `vec![Duration::from_sec(60), Duration::from_secs(600)`
+    window_sizes: Vec<Duration>,
+    /// The BicketedTiemSeries corresponding to the window sizes,
+    /// `assert_eq!(levels.len(), windos_sizes.len())
+    levels: Vec<BucketedTimeSeries>,
+    /// An additional CounterBucket where we track the count for all time
+    all_time: CounterBucket,
+    /// The most recent datapoint
+    most_recent_time: Instant,
+}
+
+/// Helper function to compute the rate per seconds
+/// of something. Returns 0 if the duration is 0
+#[inline]
+fn compute_rate(sum: u64, dt: Duration) -> f64 {
+    let dt_sec = dt.as_secs_f64();
+    if dt_sec > 0.0 {
+        sum as f64 / dt_sec
+    } else {
+        0.0
+    }
+}
+
+impl MultilevelTimeseries {
+    /// Create a new MultilevelTimeseries with the durations from `window_sizes`
+    /// (e.g., 1min, 10min, 1hr). Each window_size will use `num_buckets` buckets.
+    pub fn new(window_sizes: Vec<Duration>, num_buckets: usize) -> Self {
+        Self::new_with_create_time(window_sizes, num_buckets, Instant::now())
+    }
+
+    pub fn new_with_create_time(
+        window_sizes: Vec<Duration>,
+        num_buckets: usize,
+        created_time: Instant,
+    ) -> Self {
+        let mut levels = Vec::new();
+        for win in &window_sizes {
+            // We compute the bucket width in microseconds. We do use integer division and
+            // the duration might not be evenly divisable by the number of buckets. However, the
+            // resulting error should be insignificant because we already quantize the values
+            // on size of a single bucket (we drop a whole bucket at a time when advancing).
+            // Also because we are using microseconds, the error can't be more than
+            // num_buckets microseconds and we expect to track time windows of seconds to
+            // hours.
+            let bucket_dur_us = win.as_micros() / (num_buckets as u128);
+            levels.push(BucketedTimeSeries::new_with_create_time(
+                created_time,
+                Duration::from_micros(bucket_dur_us as u64),
+                num_buckets,
+            ));
+        }
+        MultilevelTimeseries {
+            created_time,
+            levels,
+            window_sizes,
+            all_time: CounterBucket::default(),
+            most_recent_time: created_time,
+        }
+    }
+
+    /// Add `value` at time `now` to all levels. Will rotate
+    /// buckets if needed
+    pub fn add_value(&mut self, value: u64, now: Instant) {
+        self.most_recent_time = now;
+        for lvl in &mut self.levels {
+            lvl.add_value(value, now);
+        }
+        self.all_time.add(value);
+    }
+
+    /// Rotate buckets so that the observed time window of each
+    /// BucketedTimeseries ends at `now`. This method should be called
+    /// before calling any `get_X()` method to ensure an accurate value
+    /// is returned by the getters.
+    pub fn update_buckets(&mut self, now: Instant) {
+        self.most_recent_time = now;
+        for lvl in &mut self.levels {
+            lvl.update_buckets(now);
+        }
+    }
+
+    /// Get the sum for the given level. Where level_idx corresponds to the
+    /// index in `windows_sizes`. If `level_idx >= self.levels.sum()` returns
+    /// the `all_time` sum.
+    pub fn get_sum(&self, level_idx: usize) -> u64 {
+        if level_idx >= self.levels.len() {
+            self.all_time.sum
+        } else {
+            self.levels[level_idx].get_sum()
+        }
+    }
+
+    /// The avg for the given level. See `get_sum()` for how `level_idx` is handled
+    pub fn get_avg(&self, level_idx: usize) -> f64 {
+        if level_idx >= self.levels.len() {
+            self.all_time.avg()
+        } else {
+            self.levels[level_idx].get_avg()
+        }
+    }
+
+    /// The avg for the given level. See `get_sum()` for how `level_idx` is handled
+    pub fn get_max(&self, level_idx: usize) -> u64 {
+        if level_idx >= self.levels.len() {
+            self.all_time.max
+        } else {
+            self.levels[level_idx].get_max()
+        }
+    }
+
+    /// The avg for the given level. See `get_sum()` for how `level_idx` is handled
+    pub fn get_num_entries(&self, level_idx: usize) -> u64 {
+        if level_idx >= self.levels.len() {
+            self.all_time.num_entries
+        } else {
+            self.levels[level_idx].get_num_entries()
+        }
+    }
+
+    /// The avg for the given level. See `get_sum()` for how `level_idx` is handled
+    pub fn get_rate(&self, level_idx: usize) -> f64 {
+        if level_idx >= self.levels.len() {
+            compute_rate(self.all_time.sum, self.most_recent_time - self.created_time)
+        } else {
+            let dt = std::cmp::min(
+                self.window_sizes[level_idx],
+                self.most_recent_time - self.created_time,
+            );
+            compute_rate(self.levels[level_idx].get_sum(), dt)
         }
     }
 }
@@ -366,5 +534,225 @@ mod test {
         // wraps twice
         ts.add_value(7, create_time + 13 * dt);
         assert_eq!(get_bucket_values(&ts), &[0, 7, 0, 0]);
+    }
+
+    #[test]
+    fn test_counter_bucket() {
+        let mut cb = CounterBucket::default();
+        cb.add(5);
+        cb.add(10);
+        cb.add(2);
+        assert_eq!(cb.sum, 17);
+        assert_eq!(cb.max, 10);
+        assert_eq!(cb.num_entries, 3);
+        assert_eq!(cb.avg(), 17. / 3.);
+
+        cb.clear();
+        assert_eq!(cb.sum, 0);
+        assert_eq!(cb.max, 0);
+        assert_eq!(cb.num_entries, 0);
+        assert_eq!(cb.avg(), 0.0);
+
+        let cb = CounterBucket::default();
+        assert_eq!(cb.avg(), 0.0);
+    }
+
+    #[test]
+    fn test_bucked_timeseries_getters() {
+        let t0 = Instant::now();
+        let mut ts = BucketedTimeSeries::new_with_create_time(t0, Duration::from_secs(1), 60);
+        for i in 0..60 {
+            ts.add_value(i + 1, t0 + Duration::from_secs(i));
+            ts.add_value(i + 1, t0 + Duration::from_secs(i));
+        }
+        let expected_sum = 60 * 61; // 2*  n*(n+1)/2 :-)
+        assert_eq!(ts.get_sum(), expected_sum);
+        assert_eq!(ts.get_num_entries(), 120);
+        assert_eq!(ts.get_avg(), expected_sum as f64 / 120.);
+        assert_eq!(ts.get_max(), 60);
+
+        // now call update. Make sure buckets are advanced
+        ts.update_buckets(t0 + Duration::from_secs(62));
+        // three buckets should have been evicted. with two entries each
+        assert_eq!(ts.get_num_entries(), 114);
+        // the sum should have been reduced by 2 + 4 + 6 = 12
+        assert_eq!(ts.get_sum(), expected_sum - 12);
+    }
+
+    #[test]
+    fn test_bucked_timeseries_max() {
+        let t0 = Instant::now();
+        let mut ts = BucketedTimeSeries::new_with_create_time(t0, Duration::from_secs(1), 5);
+        ts.add_value(10, t0);
+
+        ts.add_value(25, t0 + Duration::from_secs(1));
+        ts.add_value(100, t0 + Duration::from_secs(1));
+        ts.add_value(50, t0 + Duration::from_secs(1));
+
+        ts.add_value(23, t0 + Duration::from_secs(2));
+        ts.add_value(42, t0 + Duration::from_secs(3));
+        assert_eq!(ts.get_num_entries(), 6);
+        assert_eq!(ts.get_max(), 100);
+
+        ts.update_buckets(t0 + Duration::from_secs(7));
+        assert_eq!(ts.get_max(), 42);
+    }
+
+    #[test]
+    fn test_compute_rate() {
+        assert_eq!(compute_rate(120, Duration::from_secs(2)), 60.);
+        assert_eq!(compute_rate(120, Duration::from_millis(500)), 240.);
+        assert_eq!(compute_rate(120, Duration::from_millis(0)), 0.0);
+    }
+
+    /// Make sure the time windows and levels in a MultilevelTimeseries are
+    /// correctly set up.
+    #[test]
+    fn test_multilevel_timeseries_creation() {
+        let t0 = Instant::now();
+        let mlts = MultilevelTimeseries::new_with_create_time(
+            vec![Duration::from_secs(60), Duration::from_secs(600)],
+            60,
+            t0,
+        );
+        assert_eq!(
+            mlts.window_sizes,
+            vec![Duration::from_secs(60), Duration::from_secs(600)]
+        );
+        assert_eq!(mlts.levels.len(), 2);
+        assert_eq!(mlts.levels[0].bucket_time_window, Duration::from_secs(1));
+        assert_eq!(mlts.levels[1].bucket_time_window, Duration::from_secs(10));
+    }
+
+    /// Make sure an empty, just craeted MultilevelTimeseries is correct
+    #[test]
+    fn test_multilevel_timeseries_empty() {
+        let t0 = Instant::now();
+        let mlts = MultilevelTimeseries::new_with_create_time(
+            vec![Duration::from_secs(60), Duration::from_secs(600)],
+            60,
+            t0,
+        );
+        assert_eq!(mlts.get_num_entries(0), 0);
+        assert_eq!(mlts.get_num_entries(1), 0);
+        assert_eq!(mlts.get_num_entries(2), 0);
+        assert_eq!(mlts.get_sum(0), 0);
+        assert_eq!(mlts.get_sum(1), 0);
+        assert_eq!(mlts.get_sum(2), 0);
+        // make sure not divide by zero for avg or rate
+        assert_eq!(mlts.get_avg(0), 0.0);
+        assert_eq!(mlts.get_avg(1), 0.0);
+        assert_eq!(mlts.get_avg(2), 0.0);
+        assert_eq!(mlts.get_rate(0), 0.0);
+        assert_eq!(mlts.get_rate(1), 0.0);
+        assert_eq!(mlts.get_rate(2), 0.0);
+    }
+
+    /// Test the rate computation of MultilevelTimeseries. Esp. at the beginning
+    /// when we didn't have enough data points / timestamps to fill the full time
+    /// window yet.
+    #[test]
+    fn test_multilevel_timeseries_rate() {
+        let t0 = Instant::now();
+        let mut mlts = MultilevelTimeseries::new_with_create_time(
+            vec![Duration::from_secs(60), Duration::from_secs(600)],
+            60,
+            t0,
+        );
+
+        mlts.add_value(10, t0);
+        mlts.add_value(10, t0 + Duration::from_secs(10));
+        mlts.add_value(50, t0 + Duration::from_secs(30));
+
+        // we omly have 30 seconds worth of data in the MLTS. in this get_rate()
+        // will use the 30sec instead of the window size. Make sure that's the case
+        assert_eq!(mlts.get_rate(0), 70. / 30.); // 60s
+        assert_eq!(mlts.get_rate(1), 70. / 30.); // 600s
+        assert_eq!(mlts.get_rate(2), 70. / 30.); // all time
+        assert_eq!(mlts.get_sum(0), 70); // 60s
+        assert_eq!(mlts.get_sum(1), 70); // 600s
+        assert_eq!(mlts.get_sum(2), 70); // all time
+
+        // add more values
+        // these three values will end up in 60 and 600 levels
+        // the previously added values will be evicted from the 60sec level
+        mlts.add_value(200, t0 + Duration::from_secs(120 + 10));
+        mlts.add_value(500, t0 + Duration::from_secs(120 + 20));
+        mlts.add_value(100, t0 + Duration::from_secs(120 + 30));
+
+        assert_eq!(mlts.get_sum(0), 800); // 60s
+        assert_eq!(mlts.get_sum(1), 870); // 600s
+        assert_eq!(mlts.get_sum(2), 870); // all time
+
+        // check rates again. the 60s window should now be based on
+        // a 60sec duration
+        assert_eq!(mlts.get_rate(0), 800. / 60.); // 60s
+        assert_eq!(mlts.get_rate(1), 870. / 150.); // 600s
+        assert_eq!(mlts.get_rate(2), 870. / 150.); // all time
+    }
+
+    #[test]
+    fn test_multilevel_timeseries_evictions() {
+        let t0 = Instant::now();
+        let mut mlts = MultilevelTimeseries::new_with_create_time(
+            vec![Duration::from_secs(60), Duration::from_secs(600)],
+            60,
+            t0,
+        );
+
+        for i in 0..60 {
+            let dt = Duration::from_secs(10 * i);
+            mlts.add_value(42, t0 + dt);
+        }
+        assert_eq!(mlts.get_sum(0), 6 * 42);
+        assert_eq!(mlts.get_sum(1), 60 * 42);
+        assert_eq!(mlts.get_sum(2), 60 * 42);
+        assert_eq!(mlts.get_num_entries(0), 6);
+        assert_eq!(mlts.get_num_entries(1), 60);
+        assert_eq!(mlts.get_num_entries(2), 60);
+
+        // now add more data. Will start to evit buckets from the 600sec window
+        let t1 = mlts.most_recent_time;
+        assert_eq!(mlts.most_recent_time, t0 + Duration::from_secs(590));
+        for i in 1..=30 {
+            let dt = Duration::from_secs(10 * i);
+            mlts.add_value(23, t1 + dt);
+        }
+        assert_eq!(mlts.get_num_entries(0), 6);
+        assert_eq!(mlts.get_num_entries(1), 60);
+        assert_eq!(mlts.get_num_entries(2), 90);
+        assert_eq!(mlts.get_sum(0), 6 * 23);
+        assert_eq!(mlts.get_sum(1), 30 * 23 + 30 * 42);
+        assert_eq!(mlts.get_sum(2), 60 * 42 + 30 * 23);
+
+        assert_eq!(mlts.get_rate(0), (6 * 23) as f64 / 60.);
+        assert_eq!(mlts.get_rate(1), (30 * 23 + 30 * 42) as f64 / 600.);
+        let all_time_dt = mlts.most_recent_time - t0;
+        assert_eq!(
+            mlts.get_rate(2),
+            (60 * 42 + 30 * 23) as f64 / all_time_dt.as_secs_f64()
+        );
+
+        assert_eq!(mlts.get_avg(0), (6 * 23) as f64 / 6.); // 60sec win. 6 entries
+        assert_eq!(mlts.get_avg(1), (30 * 23 + 30 * 42) as f64 / 60.); // 600sec win. 60 entries
+        assert_eq!(mlts.get_avg(2), (60 * 42 + 30 * 23) as f64 / 90.);
+
+        assert_eq!(mlts.get_max(0), 23);
+        assert_eq!(mlts.get_max(1), 42);
+        assert_eq!(mlts.get_max(2), 42);
+
+        // advance buckets. 60sec win will be empty, 600sec window will have just a single entry
+        mlts.update_buckets(mlts.most_recent_time + Duration::from_secs(599));
+        assert_eq!(mlts.get_sum(0), 0);
+        assert_eq!(mlts.get_sum(1), 23);
+        assert_eq!(mlts.get_sum(2), 60 * 42 + 30 * 23);
+
+        assert_eq!(mlts.get_max(0), 0);
+        assert_eq!(mlts.get_max(1), 23);
+        assert_eq!(mlts.get_max(2), 42);
+
+        assert_eq!(mlts.get_num_entries(0), 0);
+        assert_eq!(mlts.get_num_entries(1), 1);
+        assert_eq!(mlts.get_num_entries(2), 90);
     }
 }
