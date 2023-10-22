@@ -536,6 +536,7 @@ impl<'a> DnsTracker<'a> {
  */
 
 fn dns_ptr_decode(name: &String) -> Result<IpAddr, Box<dyn std::error::Error>> {
+    let name = name.to_lowercase(); // can't be chained with .trim_end_matches()
     let name = name.trim_end_matches('.'); // remove trailing period if there
     if name.ends_with(DNS_PTR_V4_DOMAIN) {
         let tokens = name.split(".").collect::<Vec<&str>>();
@@ -975,5 +976,26 @@ mod test {
         let entry = dns_tracker.reverse_map.get(&dns_ptr_ip).unwrap();
         assert_eq!(entry.hostname, dns_ptr_hostname);
         assert!(entry.from_ptr_record);
+    }
+
+    #[test]
+    fn dns_upper_case_domains() {
+        // from garbage DNS services
+        let test_data = vec![
+            (
+                "203.135.235.44.IN-ADDR.arpa".to_string(),
+                IpAddr::from([44, 235, 135, 203]),
+            ),
+            (
+                "1.7.0.0.0.0.0.0.0.0.0.0.0.0.0.0.c.0.c.0.2.0.0.4.0.b.8.f.7.0.6.2.ip6.ARPA"
+                    .to_string(),
+                IpAddr::from([
+                    0x26, 0x07, 0xf8, 0xb0, 0x40, 0x02, 0x0c, 0x0c, 0, 0, 0, 0, 0, 0, 0, 0x71,
+                ]),
+            ),
+        ];
+        for (test, valid) in test_data {
+            assert_eq!(dns_ptr_decode(&test).unwrap(), valid);
+        }
     }
 }
