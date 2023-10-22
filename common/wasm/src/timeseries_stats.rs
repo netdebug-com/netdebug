@@ -209,6 +209,21 @@ impl BucketedTimeSeries {
         entries
     }
 
+    /**
+     * NOTE that this is subtly but critically different from ```CounterBucket::get_max()```
+     *
+     * The former grabs the max value across the counter values that are inserted
+     * while this grabs the max sum across all of the counters.
+     */
+
+    pub fn get_max_bucket(&self) -> u64 {
+        let mut max = 0;
+        for b in &self.buckets {
+            max = b.sum.max(max);
+        }
+        max
+    }
+
     /****
      * Average over time, for the the length of the bucket's time
      */
@@ -222,6 +237,33 @@ impl BucketedTimeSeries {
         } else {
             sum / self.num_buckets as f64
         }
+    }
+
+    /***
+     * Convert the data in the buckets into a time series of the format
+     * that chartjs expected, e.g.,
+     * # json
+     * [ { x: 10, y: 20 }
+     *   ....
+     * ]
+     *
+     * This involves re-ordering the data so that the most recent data (e.g., current
+     * bucket) is all the way on the right (x=max) and the oldest is all the way on
+     * the left (x= min)
+     */
+
+    pub fn to_chartjs_data(&self, x_scale: usize, y_scale: f64) -> Vec<serde_json::Value> {
+        self.buckets
+            .iter()
+            .enumerate()
+            .map(|(bucket_index, b)| {
+                serde_json::json!({
+                    "y": b.sum as f64 / y_scale,
+                    "x": bucket_index * x_scale as usize
+                }
+                )
+            })
+            .collect()
     }
 }
 

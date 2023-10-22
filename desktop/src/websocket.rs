@@ -140,7 +140,7 @@ async fn handle_dump_aggregate_connection_tracker_counters(
     perf_check!(
         "handle_dump_aggregate_connection_tracker_counters",
         start,
-        Duration::from_millis(100)
+        Duration::from_millis(50)
     );
 }
 
