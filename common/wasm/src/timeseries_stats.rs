@@ -1,5 +1,10 @@
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    time::{Duration, Instant},
+};
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CounterBucket {
@@ -410,6 +415,244 @@ impl MultilevelTimeseries {
     }
 }
 
+/// The different statistic types `ExportedStats` can export
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum StatType {
+    /// The maximum over the given time windows
+    MAX,
+    /// The sum of values over the given time windows
+    SUM,
+    /// The average (mean) of values over the given time windows
+    AVG,
+    /// The count, i.e., number of entries over the given time windows
+    COUNT,
+    /// The per-second rate over the given time window (i.e., sum / window_duration_in_seconds)
+    RATE,
+}
+
+/// Represents the unit of what ExportedStats is tracking
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Units {
+    Packets,
+    Bytes,
+    Milliseconds,
+    Microseconds,
+    None,
+}
+
+impl Units {
+    /// Converts this unit to a string to use in the counter name
+    pub fn to_counter_name_part(&self) -> &'static str {
+        match self {
+            Units::Packets => ".pkts",
+            Units::Bytes => ".bytes",
+            Units::Milliseconds => ".ms",
+            Units::Microseconds => ".us",
+            Units::None => "",
+        }
+    }
+}
+
+/// An exported statistics for a given "item". E.g., packets received. The ExportedStats
+/// can track different stats type (max, sum, avg, etc. see `StatType`) over different time
+/// windows (cf. `MultilevelTimeseries`). ExportetStats have a base name.
+///
+/// E.g., lets assume we want to track `bytes_received` over 60sec and 600sec time windows,
+/// and export the `sum` and `avg`. Exported stats will the export the following named counters:
+///    `received.bytes.SUM.60`    <- sum over last 60sec<br>
+///    `received.bytes.SUM.600`   <- sum over last 600sec<br>
+///    `received.bytes.SUM`    <- sum since the stat was created ("all time")<br>
+///    `received.bytes.AVG.60`    <- avg over last 60sec<br>
+///    `received.bytes.AVG.600`   <- avg over last 600sec<br>
+///    `received.bytes.AVG`    <- avg since the stat was created ("all time")<br>
+///
+/// Example:
+/// ```
+/// # use common_wasm::timeseries_stats::*;
+/// let mut rx_bytes = ExportedStat::new("received", Units::Bytes, [StatType::SUM, StatType::AVG]);
+/// // Add data to rx_bytes. E.g., in a receive loop.
+/// rx_bytes.add_value(42);
+/// rx_bytes.add_value(23);
+/// // Lets retrieve the counters
+/// let map = rx_bytes.get_counter_map();
+/// assert_eq!(map.get("received.bytes.SUM.60").unwrap(), &65);  // sum of rx bytes over the last min
+/// assert_eq!(map.get("received.bytes.SUM.600").unwrap(), &65); // sum of rx bytes over the last 10 min
+/// assert_eq!(map.get("received.bytes.AVG.60").unwrap(), &33);  // avg of rx bytes over the last
+/// ```
+///
+/// When tracking time-units / duration, we can directly add duration values:
+/// ```
+/// # use common_wasm::timeseries_stats::*;
+/// let mut proc_time = ExportedStat::new("processing_time", Units::Microseconds, [StatType::MAX]);
+/// proc_time.add_duration_value(std::time::Duration::from_micros(123));
+pub struct ExportedStat {
+    /// The (base-)name of the stat / item we want to track. E.g., `bytes_received`
+    name: String,
+    /// The actual MultilevelTimeseries that does all the tracking work.
+    data: MultilevelTimeseries,
+    /// The statistic types we are interested in exporting.
+    stat_types: Vec<StatType>,
+    /// The suffix to use for counternames for different time-window levels. E.g.,
+    /// `.600` for the 10min window, `.60` for the 1min window, etc.
+    /// The index corresponds to the level index of MultilevelTimeseries. Note that
+    /// the last entry is the empty string (for the all-time stats)
+    level_suffixes: Vec<String>,
+    unit: Units,
+}
+
+impl ExportedStat {
+    pub fn new<I: IntoIterator<Item = StatType>>(
+        name: &str,
+        unit: Units,
+        stat_types: I,
+    ) -> ExportedStat {
+        ExportedStat::new_with_create_time(name, unit, stat_types, Instant::now())
+    }
+
+    pub fn new_with_create_time<I: IntoIterator<Item = StatType>>(
+        name: &str,
+        unit: Units,
+        stat_types: I,
+        now: Instant,
+    ) -> ExportedStat {
+        let mut stat_type_vec = Vec::from_iter(stat_types);
+        stat_type_vec.sort();
+        stat_type_vec.dedup();
+        let window_sizes_sec = vec![60, 600, 3600];
+        let mut level_suffixes: Vec<String> = window_sizes_sec
+            .iter()
+            .map(|sz| ".".to_string() + &sz.to_string())
+            .collect();
+        level_suffixes.push("".to_string()); // for all-time
+
+        ExportedStat {
+            name: name.to_string(),
+            data: MultilevelTimeseries::new_with_create_time(
+                window_sizes_sec
+                    .into_iter()
+                    .map(|ws| Duration::from_secs(ws))
+                    .collect_vec(),
+                60, // num_buckets
+                now,
+            ),
+            stat_types: stat_type_vec,
+            level_suffixes,
+            unit,
+        }
+    }
+
+    /// Add the given value at time `now`, rotating buckets as necessary to move time
+    /// forward to `now`
+    pub fn add_value_with_time(&mut self, value: u64, now: Instant) {
+        self.data.add_value(value, now);
+    }
+
+    /// Add the given value at time `now`, rotating buckets as necessary to move time
+    /// forward to `now`
+    pub fn add_value(&mut self, value: u64) {
+        self.data.add_value(value, Instant::now());
+    }
+
+    /// If the unit we are tracking is a time duration (ms, us). Then add the given duration
+    /// at time `now`, rotating buckets as necessary to move time
+    /// forward to `now`
+    /// Panics if the tracked unit is not time based
+    pub fn add_duration_value_with_time(&mut self, dur: Duration, now: Instant) {
+        let val = match self.unit {
+            // TODO: we might want to do a clamping conversion here instead of just `as`.
+            // Then again. If we have more than 2^64 mircoseconds, something is off already...
+            Units::Milliseconds => dur.as_millis() as u64,
+            Units::Microseconds => dur.as_micros() as u64,
+            _ => panic!(
+                "`{:?}` is not a duration unit for ExportedStat `{}`",
+                self.unit, self.name
+            ),
+        };
+        self.add_value_with_time(val, now);
+    }
+
+    /// If the unit we are tracking is a time duration (ms, us). Then add the given duration
+    /// at time `Instant::now()`, rotating buckets as necessary to move time forward
+    /// Panics if the tracked unit is not time based
+    pub fn add_duration_value(&mut self, dur: Duration) {
+        self.add_duration_value_with_time(dur, Instant::now());
+    }
+
+    /// Rotate buckets as necessary to move time forward to `now`. This method
+    /// should be called before querying the counters/
+    pub fn update(&mut self, now: Instant) {
+        self.data.update_buckets(now);
+    }
+
+    /// The number of counters tracked/exported by this instances. Can be used to reserve space in a collection
+    /// or map before calling `append_counters`.
+    pub fn num_counters(&self) -> usize {
+        self.stat_types.len() * self.level_suffixes.len()
+    }
+
+    /// Append all the counter name, value pairs from this exporter to the given
+    /// collection/map. Note that `HashMap<String, u64>`, `Vec<(String,u64)>` all implement
+    /// the `Extend` trait.
+    /// The method will append `self.num_counters()` entries to the collection/map.
+    pub fn append_counters<M>(&self, map: &mut M)
+    where
+        M: Extend<(String, u64)>,
+    {
+        use std::iter::once;
+
+        for stat_type in &self.stat_types {
+            for (idx, suffix) in self.level_suffixes.iter().enumerate() {
+                let counter_name = format!(
+                    "{}{}.{:?}{}",
+                    self.name,
+                    self.unit.to_counter_name_part(),
+                    stat_type,
+                    suffix
+                );
+                // We are converting the floating point values (avg, rate) into u64. That's fb303
+                // does as well and probably makes sense here too to keep a single datatype for
+                // values
+                let value = match stat_type {
+                    StatType::MAX => self.data.get_max(idx),
+                    StatType::SUM => self.data.get_sum(idx),
+                    StatType::AVG => self.data.get_avg(idx).round() as u64,
+                    StatType::COUNT => self.data.get_num_entries(idx),
+                    StatType::RATE => self.data.get_rate(idx).round() as u64,
+                };
+                map.extend(once((counter_name, value)));
+            }
+        }
+    }
+
+    /// Return a map of `counter_name, value` pairs for all the stats/counters tracked by
+    /// this instance.
+    pub fn get_counter_map(&self) -> HashMap<String, u64> {
+        let mut ret = HashMap::with_capacity(self.num_counters());
+        self.append_counters(&mut ret);
+        ret
+    }
+
+    /// Return a vecor of `counter_name, value` pairs tuples for all the stats/counters
+    /// tracked by this instance. The order of the counter names that this method produces
+    /// is "nice" so it's quite handy for printing :-)
+    pub fn get_counter_vec(&self) -> Vec<(String, u64)> {
+        let mut ret = Vec::with_capacity(self.num_counters());
+        self.append_counters(&mut ret);
+        ret
+    }
+}
+
+impl Display for ExportedStat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // TODO: Ideally, we'd call `update_buckets()` here but we can't since we
+        // only got a shared reference.
+        for (name, val) in self.get_counter_map() {
+            writeln!(f, "{}={}", name, val)?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -796,5 +1039,168 @@ mod test {
         assert_eq!(mlts.get_num_entries(0), 0);
         assert_eq!(mlts.get_num_entries(1), 1);
         assert_eq!(mlts.get_num_entries(2), 90);
+    }
+
+    fn mk_and_populate_exported_stat<I>(unit: Units, stat_types: I, now: Instant) -> ExportedStat
+    where
+        I: IntoIterator<Item = StatType>,
+    {
+        let add = |t0, dt| t0 + Duration::from_secs(dt);
+        let mut es = ExportedStat::new_with_create_time("foobar", unit, stat_types, now);
+        es.add_value_with_time(20_000, now); // only in all-time
+
+        es.add_value_with_time(15_000, add(now, 500)); // in 3600sec+
+
+        es.add_value_with_time(11_000, add(now, 3500)); // in 600sec+
+        es.add_value_with_time(7_000, add(now, 3500)); // in 600sec+
+
+        es.add_value_with_time(1_000, add(now, 4000));
+        es.add_value_with_time(3_000, add(now, 4000));
+        es.add_value_with_time(5_000, add(now, 4000));
+
+        // sanity checks
+        assert_eq!(es.data.get_num_entries(0), 3);
+        assert_eq!(es.data.get_num_entries(1), 5);
+        assert_eq!(es.data.get_num_entries(2), 6);
+        assert_eq!(es.data.get_num_entries(3), 7);
+
+        assert_eq!(es.data.get_sum(0), 9_000);
+        assert_eq!(es.data.get_sum(1), 27_000);
+        assert_eq!(es.data.get_sum(2), 42_000);
+        assert_eq!(es.data.get_sum(3), 62_000);
+
+        assert_eq!(es.data.get_max(0), 5_000);
+        assert_eq!(es.data.get_max(1), 11_000);
+        assert_eq!(es.data.get_max(2), 15_000);
+        assert_eq!(es.data.get_max(3), 20_000);
+
+        assert_eq!(es.data.get_avg(0), 9_000. / 3.); // 3_000
+        assert_eq!(es.data.get_avg(1), 27_000. / 5.); // 5_400
+        assert_eq!(es.data.get_avg(2), 42_000. / 6.); // 7_000
+        assert_eq!(es.data.get_avg(3), 62_000. / 7.); // 8857.14
+
+        assert_eq!(es.data.get_rate(0), 9_000. / 60.); // 150
+        assert_eq!(es.data.get_rate(1), 27_000. / 600.); // 45
+        assert_eq!(es.data.get_rate(2), 42_000. / 3600.); // 11.67
+        assert_eq!(es.data.get_rate(3), 62_000. / 4000.); // 15.5
+        es
+    }
+
+    #[test]
+    fn test_exported_stats_1() {
+        let now = Instant::now();
+        let es = mk_and_populate_exported_stat(
+            Units::Packets,
+            [StatType::AVG, StatType::SUM, StatType::SUM],
+            now,
+        );
+        let mut counters = es.get_counter_vec();
+        assert_eq!(counters.len(), es.num_counters());
+        counters.sort();
+
+        let mut expected: Vec<(String, u64)> = [
+            ("foobar.pkts.AVG.60", 3000),
+            ("foobar.pkts.AVG.600", 5400),
+            ("foobar.pkts.AVG.3600", 7000),
+            ("foobar.pkts.AVG", 8857),
+            ("foobar.pkts.SUM.60", 9_000),
+            ("foobar.pkts.SUM.600", 27_000),
+            ("foobar.pkts.SUM.3600", 42_000),
+            ("foobar.pkts.SUM", 62_000),
+        ]
+        .iter()
+        .map(|(name, val)| (name.to_string(), *val))
+        .collect_vec();
+
+        expected.sort();
+
+        assert_eq!(counters, expected);
+
+        let counters_map = es.get_counter_map();
+        let expected_map = HashMap::from_iter(expected.clone().into_iter());
+        assert_eq!(counters_map, expected_map);
+
+        // now test "append_counter" function
+        counters.clear();
+        es.append_counters(&mut counters);
+        counters.sort();
+        assert_eq!(counters, expected);
+    }
+
+    #[test]
+    fn test_exported_stats_all_types() {
+        let now = Instant::now();
+        let es = mk_and_populate_exported_stat(
+            Units::None,
+            [
+                StatType::AVG,
+                StatType::SUM,
+                StatType::COUNT,
+                StatType::RATE,
+                StatType::MAX,
+            ],
+            now,
+        );
+        let counters_map = es.get_counter_map();
+
+        let expected: HashMap<String, u64> = [
+            ("foobar.AVG.60", 3000),
+            ("foobar.AVG.600", 5400),
+            ("foobar.AVG.3600", 7000),
+            ("foobar.AVG", 8857),
+            //
+            ("foobar.SUM.60", 9_000),
+            ("foobar.SUM.600", 27_000),
+            ("foobar.SUM.3600", 42_000),
+            ("foobar.SUM", 62_000),
+            //
+            ("foobar.COUNT.60", 3),
+            ("foobar.COUNT.600", 5),
+            ("foobar.COUNT.3600", 6),
+            ("foobar.COUNT", 7),
+            //
+            ("foobar.MAX.60", 5_000),
+            ("foobar.MAX.600", 11_000),
+            ("foobar.MAX.3600", 15_000),
+            ("foobar.MAX", 20_000),
+            //
+            ("foobar.RATE.60", 150),
+            ("foobar.RATE.600", 45),
+            ("foobar.RATE.3600", 12), // rounded
+            ("foobar.RATE", 16),      // rounded
+        ]
+        .iter()
+        .fold(HashMap::new(), |mut m, (name, val)| {
+            m.insert(name.to_string(), *val);
+            m
+        });
+
+        assert_eq!(counters_map, expected);
+    }
+
+    #[test]
+    fn test_exported_stats_duration_units_ms() {
+        let mut es = ExportedStat::new("foo", Units::Milliseconds, [StatType::AVG]);
+        es.add_duration_value(Duration::from_secs(2));
+        es.add_duration_value(Duration::from_millis(42));
+        let counters = es.get_counter_map();
+        assert_eq!(counters.get("foo.ms.AVG.60"), Some(&1021));
+    }
+
+    #[test]
+    fn test_exported_stats_duration_units_us() {
+        let mut es = ExportedStat::new("foo", Units::Microseconds, [StatType::SUM]);
+        es.add_duration_value(Duration::from_secs(1));
+        es.add_duration_value(Duration::from_millis(42));
+        es.add_duration_value(Duration::from_micros(23));
+        let counters = es.get_counter_map();
+        assert_eq!(counters.get("foo.us.SUM.60"), Some(&1_042_023));
+    }
+
+    #[test]
+    #[should_panic(expected = "`Bytes` is not a duration unit for ExportedStat `foo`")]
+    fn test_exported_stats_duration_panic() {
+        let mut es = ExportedStat::new("foo", Units::Bytes, [StatType::SUM]);
+        es.add_duration_value(Duration::from_secs(1));
     }
 }
