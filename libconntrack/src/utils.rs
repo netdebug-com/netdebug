@@ -132,6 +132,7 @@ macro_rules! perf_check {
  * Wraps any Message and forces you to check the performance to get the message
  */
 
+#[derive(Debug, Clone)]
 pub struct PerfMsgCheck<T> {
     data: T,
     send_time: std::time::Instant,

@@ -100,6 +100,12 @@ impl ProcessTracker {
             use ProcessTrackerMessage::*;
             let start = Instant::now();
             let msg = msg.perf_check_get("ProcessTracker::do_async_loop queue");
+            // quick debug message, unless it's the really big
+            if let UpdatePidMapping { pid2process } = &msg {
+                debug!("Got UpdatePidMapping msg : {} pids", pid2process.len());
+            } else {
+                debug!("Got msg: {:?}", msg); // all the rest are short enough to log via Debug
+            }
             match &msg {
                 LookupOne { key, tx } => self.handle_lookup(key, tx),
                 UpdateCache => self.update_cache(),
