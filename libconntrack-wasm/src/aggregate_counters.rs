@@ -43,7 +43,7 @@ impl AggregateCounter {
         self.update_with_time(count, Instant::now())
     }
 
-    fn update_with_time(&mut self, count: u64, now: Instant) {
+    pub fn update_with_time(&mut self, count: u64, now: Instant) {
         for ts in &mut self.counts.values_mut() {
             ts.add_value(count, now);
         }

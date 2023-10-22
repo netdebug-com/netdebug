@@ -571,10 +571,13 @@ impl<'a> ConnectionTracker<'a> {
         &self,
         tx: UnboundedSender<AggregateCounterConnectionTracker>,
     ) {
-        let counters = AggregateCounterConnectionTracker {
-            send: self.tx_bytes.clone(),
-            recv: self.rx_bytes.clone(),
-        };
+        let mut send = self.tx_bytes.clone();
+        let now = Instant::now();
+        let mut recv = self.rx_bytes.clone();
+        // force send and recv counters to be up to date with now and time sync'd
+        send.update_with_time(0, now);
+        recv.update_with_time(0, now);
+        let counters = AggregateCounterConnectionTracker { send, recv };
         if let Err(e) = tx.send(counters) {
             warn!(
                 "Tried to send aggregate_counters back to caller but got {}",

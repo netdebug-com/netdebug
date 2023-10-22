@@ -2532,6 +2532,7 @@ name = "web-gui"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "common-wasm",
  "console_error_panic_hook",
  "desktop_common",
  "futures",
