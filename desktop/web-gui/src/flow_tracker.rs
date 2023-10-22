@@ -280,6 +280,8 @@ pub fn handle_dumpflows_reply(
 ) -> Result<(), JsValue> {
     // first, sort the flows
     flows.sort_by(|a, b| {
+        // it would seem to make sense to sort by open vs. closed flows, but it makes
+        // the UI too jumpy... just sort by max rate
         // sort by the max rate (tx or rx) so that most active flows show at the top
         let max_a = std::cmp::max(&a.tx_byte_rate, &a.rx_byte_rate);
         let max_b = std::cmp::max(&b.tx_byte_rate, &b.rx_byte_rate);
@@ -349,16 +351,18 @@ pub fn handle_dumpflows_reply(
         } else {
             format!("[{}]", measurements.remote_ip)
         };
-        flow_elm.set_inner_html(
-            format!(
-                "{} ::{} --> {}::{}",
-                measurements.ip_proto,
-                measurements.local_l4_port,
-                remote,
-                measurements.remote_l4_port
-            )
-            .as_str(),
+        let flow_name = format!(
+            "{} ::{} --> {}::{}",
+            measurements.ip_proto, measurements.local_l4_port, remote, measurements.remote_l4_port
         );
+        if measurements.four_way_close_done {
+            // mark closing flows with a strikethrough
+            let closed_flow = html!("s").unwrap();
+            closed_flow.set_inner_html(&flow_name);
+            flow_elm.append_child(&closed_flow).unwrap();
+        } else {
+            flow_elm.set_inner_html(&flow_name);
+        }
         let apps = if !measurements.associated_apps.is_empty() {
             measurements
                 .associated_apps
