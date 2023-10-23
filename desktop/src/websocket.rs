@@ -123,7 +123,7 @@ async fn handle_dump_aggregate_connection_tracker_counters(
     let start = std::time::Instant::now();
     let (reply_tx, mut reply_rx) = mpsc::unbounded_channel();
     if let Err(e) = connection_tracker.try_send(PerfMsgCheck::new(
-        ConnectionTrackerMsg::GetAggregateCountersConnectionTracker { tx: reply_tx },
+        ConnectionTrackerMsg::GetTrafficCounters { tx: reply_tx },
     )) {
         warn!(
             "Failed to send GetAggregateCounters to the connection tracker!?: {}",

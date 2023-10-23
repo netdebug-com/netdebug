@@ -1,6 +1,6 @@
 use common_wasm::perf_check;
 use desktop_common::GuiToServerMessages;
-use libconntrack_wasm::aggregate_counters::AggregateCounterConnectionTracker;
+use libconntrack_wasm::aggregate_counters::TrafficCounters;
 use std::collections::HashMap;
 use std::time::Duration;
 use wasm_bindgen::prelude::Closure;
@@ -153,7 +153,7 @@ fn send_aggregate_request(
 }
 
 pub(crate) fn handle_aggregate_counters(
-    counters: AggregateCounterConnectionTracker,
+    counters: TrafficCounters,
     ws: WebSocket,
     tabs: Tabs,
 ) -> Result<(), wasm_bindgen::JsValue> {
