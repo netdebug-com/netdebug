@@ -8,17 +8,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum AggregateCounterKind {
-    DnsDstDomain,
-    Application,
+    DnsDstDomain { name: String },
+    Application { name: String },
     ConnectionTracker,
 }
-
-impl Copy for AggregateCounterKind {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AggregateCounter {
     pub kind: AggregateCounterKind,
-    pub name: String,
     pub counts: HashMap<String, BucketedTimeSeries>, // "label" --> "BucketedTimeSeries"
 }
 
@@ -31,10 +28,9 @@ impl AggregateCounter {
     /**
      * s
      */
-    pub fn new(kind: AggregateCounterKind, name: String) -> AggregateCounter {
+    pub fn new(kind: AggregateCounterKind) -> AggregateCounter {
         AggregateCounter {
             kind,
-            name,
             counts: HashMap::new(),
         }
     }
@@ -49,8 +45,8 @@ impl AggregateCounter {
         }
     }
 
-    pub fn get_info(&self) -> (String, AggregateCounterKind) {
-        (self.name.clone(), self.kind)
+    pub fn get_kind(&self) -> AggregateCounterKind {
+        self.kind.clone()
     }
 
     pub fn add_time_series(
@@ -66,7 +62,7 @@ impl AggregateCounter {
 
 impl std::fmt::Display for AggregateCounter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} :: ", self.name)?;
+        write!(f, "{:?} :: ", self.kind)?;
         for (name, ts) in &self.counts {
             write!(
                 f,
@@ -81,7 +77,8 @@ impl std::fmt::Display for AggregateCounter {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AggregateCounterConnectionTracker {
+pub struct TrafficCounters {
     pub send: AggregateCounter,
     pub recv: AggregateCounter,
+    // TODO: add drops here
 }

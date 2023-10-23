@@ -12,9 +12,7 @@ use common_wasm::{
 };
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{
-    aggregate_counters::{
-        AggregateCounter, AggregateCounterConnectionTracker, AggregateCounterKind,
-    },
+    aggregate_counters::{AggregateCounter, AggregateCounterKind, TrafficCounters},
     DnsTrackerEntry, IpProtocol, RateEstimator,
 };
 #[cfg(not(test))]
@@ -184,8 +182,8 @@ pub enum ConnectionTrackerMsg {
         key: ConnectionKey,
         remote_hostname: Option<String>, // will be None if lookup fails
     },
-    GetAggregateCountersConnectionTracker {
-        tx: mpsc::UnboundedSender<AggregateCounterConnectionTracker>,
+    GetTrafficCounters {
+        tx: mpsc::UnboundedSender<TrafficCounters>,
     },
 }
 
@@ -226,8 +224,7 @@ pub struct ConnectionTracker<'a> {
     tx: ConnectionTrackerSender, // so we can tell others how to send msgs to us
     rx: ConnectionTrackerReceiver, // to read messages sent to us
     // aggregate counters of everything that's gone through this connection manager
-    tx_bytes: AggregateCounter,
-    rx_bytes: AggregateCounter,
+    traffic_counters: TrafficCounters,
     dequeue_delay_stats_us: AggregateCounter,
 }
 impl<'a> ConnectionTracker<'a> {
@@ -241,13 +238,11 @@ impl<'a> ConnectionTracker<'a> {
         let (tx, rx) = tokio::sync::mpsc::channel(max_queue_size);
         let storage_service_msg_tx_clone = storage_service_msg_tx.clone();
         // for now, track these big counters by minute and second
-        let tx_bytes = ConnectionTracker::create_aggregate_counter("tx_bytes");
-        let rx_bytes = ConnectionTracker::create_aggregate_counter("rx_bytes");
+        let tx_bytes = ConnectionTracker::create_aggregate_counter();
+        let rx_bytes = ConnectionTracker::create_aggregate_counter();
 
-        let mut dequeue_delay_stats_us = AggregateCounter::new(
-            AggregateCounterKind::ConnectionTracker,
-            "dequeue_delay stats".to_string(),
-        );
+        let mut dequeue_delay_stats_us =
+            AggregateCounter::new(AggregateCounterKind::ConnectionTracker);
         dequeue_delay_stats_us.add_time_series(
             "(us)".to_string(),
             std::time::Duration::from_millis(1),
@@ -267,8 +262,10 @@ impl<'a> ConnectionTracker<'a> {
             dns_tx: None,
             tx,
             rx,
-            tx_bytes,
-            rx_bytes,
+            traffic_counters: TrafficCounters {
+                send: tx_bytes,
+                recv: rx_bytes,
+            },
             dequeue_delay_stats_us,
         }
     }
@@ -332,9 +329,7 @@ impl<'a> ConnectionTracker<'a> {
                 } => {
                     self.set_connection_remote_hostname_dns(&key, remote_hostname);
                 }
-                GetAggregateCountersConnectionTracker { tx } => {
-                    self.get_aggregate_connection_tracker_counters(tx)
-                }
+                GetTrafficCounters { tx } => self.get_traffic_counters(tx),
             }
         }
         warn!("ConnectionTracker exiting rx_loop()");
@@ -344,9 +339,9 @@ impl<'a> ConnectionTracker<'a> {
         let mut needs_dns_lookup = false;
         if let Some((key, src_is_local)) = packet.to_connection_key(&self.local_addrs) {
             if src_is_local {
-                self.tx_bytes.update(packet.len as u64);
+                self.traffic_counters.send.update(packet.len as u64);
             } else {
-                self.rx_bytes.update(packet.len as u64);
+                self.traffic_counters.recv.update(packet.len as u64);
             }
             let connection = match self.connections.get_mut(&key) {
                 Some(connection) => connection,
@@ -543,11 +538,8 @@ impl<'a> ConnectionTracker<'a> {
      * Create the aggregate counter for this connection tracker
      * Just do per second and per minute for now
      */
-    fn create_aggregate_counter(counter_name: &str) -> AggregateCounter {
-        let mut agg_counter = AggregateCounter::new(
-            AggregateCounterKind::ConnectionTracker,
-            counter_name.to_string(),
-        );
+    fn create_aggregate_counter() -> AggregateCounter {
+        let mut agg_counter = AggregateCounter::new(AggregateCounterKind::ConnectionTracker);
         agg_counter.add_time_series(
             "Last 5 Seconds".to_string(),
             std::time::Duration::from_millis(10),
@@ -567,20 +559,15 @@ impl<'a> ConnectionTracker<'a> {
         agg_counter
     }
 
-    fn get_aggregate_connection_tracker_counters(
-        &self,
-        tx: UnboundedSender<AggregateCounterConnectionTracker>,
-    ) {
-        let mut send = self.tx_bytes.clone();
+    fn get_traffic_counters(&self, tx: UnboundedSender<TrafficCounters>) {
+        let mut traffic_counters = self.traffic_counters.clone();
         let now = Instant::now();
-        let mut recv = self.rx_bytes.clone();
         // force send and recv counters to be up to date with now and time sync'd
-        send.update_with_time(0, now);
-        recv.update_with_time(0, now);
-        let counters = AggregateCounterConnectionTracker { send, recv };
-        if let Err(e) = tx.send(counters) {
+        traffic_counters.send.update_with_time(0, now);
+        traffic_counters.recv.update_with_time(0, now);
+        if let Err(e) = tx.send(traffic_counters) {
             warn!(
-                "Tried to send aggregate_counters back to caller but got {}",
+                "Tried to send traffic_counters back to caller but got {}",
                 e
             );
         }
