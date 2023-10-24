@@ -97,7 +97,7 @@ fn send_aggregate_request(
         .now();
 
     let request_rtt = now - last_sent_ms;
-    if (now - last_sent_ms) > min_interval.as_millis() as f64 {
+    if (now - last_sent_ms) >= min_interval.as_millis() as f64 {
         // send right away if it's been long enough
         send_aggregate_request_now(ws);
         if request_rtt > max_interval.as_millis() as f64 {
