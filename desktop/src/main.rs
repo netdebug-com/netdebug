@@ -2,7 +2,9 @@ mod websocket;
 
 use chrono::Duration;
 use clap::Parser;
-use common_wasm::timeseries_stats::{CounterProvider, ExportedStatRegistry, SuperRegistry};
+use common_wasm::timeseries_stats::{
+    CounterProvider, CounterProviderWithTimeUpdate, ExportedStatRegistry, SuperRegistry,
+};
 use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg, ConnectionTrackerSender},
     connection_storage_handler::ConnectionStorageHandler,
@@ -149,6 +151,7 @@ pub fn make_counter_routes(
     warp::path!("counters" / "get_counters").map(move || {
         // IndexMap iterates over entries in insertion order
         let mut map = indexmap::IndexMap::<String, u64>::new();
+        registries.update_time();
         registries.append_counters(&mut map);
         serde_json::to_string_pretty(&map).unwrap()
     })
