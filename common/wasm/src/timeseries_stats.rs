@@ -579,6 +579,12 @@ impl ExportedStat {
     pub fn add_duration_value(&mut self, dur: Duration) {
         self.add_duration_value_with_time(dur, Instant::now());
     }
+
+    /// Rotate buckets as necessary to move time forward to `now`. This method
+    /// should be called before querying the counters/
+    fn update_time_to(&mut self, now: Instant) {
+        self.data.update_buckets(now);
+    }
 }
 
 impl Display for ExportedStat {
@@ -599,14 +605,6 @@ pub trait CounterProvider {
     /// the `Extend` trait.
     /// The method will append `self.num_counters()` entries to the collection/map.
     fn append_counters<M: Extend<(String, u64)>>(&self, map: &mut M);
-
-    /// Rotate buckets as necessary to move time forward to `now`. This method
-    /// should be called before querying the counters/
-    fn update_time_to(&mut self, now: Instant);
-
-    fn update_time(&mut self) {
-        self.update_time_to(Instant::now());
-    }
 
     /// The number of counters tracked/exported by this instances. Can be used to reserve space in a collection
     /// or map before calling `append_counters`.
@@ -630,11 +628,18 @@ pub trait CounterProvider {
     }
 }
 
-impl CounterProvider for ExportedStat {
-    fn update_time_to(&mut self, now: Instant) {
-        self.data.update_buckets(now);
-    }
+pub trait CounterProviderWithTimeUpdate: CounterProvider {
+    /// Rotate buckets as necessary to move time forward to `now`. This method
+    /// should be called before querying the counters/
+    /// NOTE that we require update_time_to to only take a const reference.
+    fn update_time_to(&self, now: Instant);
 
+    fn update_time(&self) {
+        self.update_time_to(Instant::now());
+    }
+}
+
+impl CounterProvider for ExportedStat {
     fn num_counters(&self) -> usize {
         self.stat_types.len() * self.level_suffixes.len()
     }
@@ -788,18 +793,20 @@ impl ExportedStatRegistry {
     }
 }
 
+impl CounterProviderWithTimeUpdate for ExportedStatRegistry {
+    fn update_time_to(&self, now: Instant) {
+        let mut stats_locked = self.stats.lock().unwrap();
+        for stat in &mut *stats_locked {
+            stat.update_time_to(now);
+        }
+    }
+}
+
 impl CounterProvider for ExportedStatRegistry {
     fn append_counters<M: Extend<(String, u64)>>(&self, map: &mut M) {
         let stats_locked = self.stats.lock().unwrap();
         for stat in &*stats_locked {
             stat.append_counters(map);
-        }
-    }
-
-    fn update_time_to(&mut self, now: Instant) {
-        let mut stats_locked = self.stats.lock().unwrap();
-        for stat in &mut *stats_locked {
-            stat.update_time_to(now);
         }
     }
 
@@ -813,17 +820,19 @@ impl CounterProvider for ExportedStatRegistry {
     }
 }
 
+impl CounterProviderWithTimeUpdate for Vec<ExportedStatRegistry> {
+    fn update_time_to(&self, now: Instant) {
+        for registry in self.iter() {
+            registry.update_time_to(now);
+        }
+    }
+}
+
 // TODO: is this really the best way to tackle this?
 impl CounterProvider for Vec<ExportedStatRegistry> {
     fn append_counters<M: Extend<(String, u64)>>(&self, map: &mut M) {
         for registry in self.iter() {
             registry.append_counters(map);
-        }
-    }
-
-    fn update_time_to(&mut self, now: Instant) {
-        for registry in self.iter_mut() {
-            registry.update_time_to(now);
         }
     }
 
