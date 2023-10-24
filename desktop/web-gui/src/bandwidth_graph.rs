@@ -244,8 +244,10 @@ pub(crate) fn handle_aggregate_counters(
             .expect("RX and TX to have same durations");
         let tx_data = tx_counters.to_chartjs_data(units_per_bucket, mbps_conversion);
         // create a vertical bar that acts as a slider that moves left to right with time
-        let max_y =
-            rx_counters.get_max_bucket().max(tx_counters.get_max()) as f64 / mbps_conversion;
+        let max_y = rx_counters
+            .get_max_bucket()
+            .max(tx_counters.get_max_bucket()) as f64
+            / mbps_conversion;
         let slider_x = tx_counters.last_used_bucket * units_per_bucket;
         let slider = serde_json::json!([
             {
