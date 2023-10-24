@@ -14,7 +14,7 @@ use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 
 use crate::connection::ConnectionKey;
 use crate::perf_check;
-use crate::utils::PerfMsgCheck;
+use crate::utils::{make_perf_check_stats, PerfCheckStats, PerfMsgCheck};
 
 #[derive(Clone, Debug)]
 pub enum ProcessTrackerMessage {
@@ -46,6 +46,8 @@ pub struct ProcessTracker {
     udp_cache: HashMap<(IpAddr, u16), ProcessTrackerEntry>,
     pid2app_name_cache: HashMap<u32, String>,
     msgs_received: StatHandle,
+    dump_cache_perf_stat: PerfCheckStats,
+    update_cache_perf_stat: PerfCheckStats,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +66,8 @@ impl ProcessTracker {
             udp_cache: HashMap::new(),
             pid2app_name_cache: HashMap::new(),
             msgs_received,
+            dump_cache_perf_stat: make_perf_check_stats("dump_cache", &mut stats),
+            update_cache_perf_stat: make_perf_check_stats("update_cache", &mut stats),
         }
     }
 
@@ -126,7 +130,8 @@ impl ProcessTracker {
                             self.udp_cache.len()
                         ),
                         start,
-                        std::time::Duration::from_millis(25)
+                        std::time::Duration::from_millis(25),
+                        self.dump_cache_perf_stat
                     );
                 }
                 UpdatePidMapping { pid2process } => {
@@ -240,7 +245,8 @@ impl ProcessTracker {
         perf_check!(
             "ProcessTracker::update_cache",
             start,
-            std::time::Duration::from_millis(25)
+            std::time::Duration::from_millis(25),
+            self.update_cache_perf_stat
         );
     }
 }
