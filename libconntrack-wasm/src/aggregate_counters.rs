@@ -6,7 +6,7 @@ use std::{
 use common_wasm::timeseries_stats::{BucketIndex, BucketedTimeSeries};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum AggregateCounterKind {
     DnsDstDomain { name: String },
     Application { name: String },
@@ -81,4 +81,53 @@ pub struct TrafficCounters {
     pub send: AggregateCounter,
     pub recv: AggregateCounter,
     // TODO: add drops here
+}
+
+impl TrafficCounters {
+    pub fn new() -> TrafficCounters {
+        TrafficCounters {
+            send: TrafficCounters::create_aggregate_counter(),
+            recv: TrafficCounters::create_aggregate_counter(),
+        }
+    }
+    /**
+     * Create the aggregate counter for this connection tracker
+     * Create them for:
+     *  - 10ms buckets over last 5 seconds
+     *  - 1second buckets over last 60 seconds
+     *  - 1 minute buckets over last hour
+     */
+    fn create_aggregate_counter() -> AggregateCounter {
+        let mut agg_counter = AggregateCounter::new(AggregateCounterKind::ConnectionTracker);
+        agg_counter.add_time_series(
+            "Last 5 Seconds".to_string(),
+            std::time::Duration::from_millis(10),
+            500,
+        );
+        agg_counter.add_time_series(
+            "Last Minute".to_string(),
+            std::time::Duration::from_secs(1),
+            60,
+        );
+        agg_counter.add_time_series(
+            "Last Hour".to_string(),
+            std::time::Duration::from_secs(60),
+            60,
+        );
+
+        agg_counter
+    }
+
+    /**
+     * Update the send or recv byte traffic counters, depending on whether
+     * the src of the packet is local or not
+     */
+
+    pub fn update_bytes(&mut self, src_is_local: bool, len: u64) {
+        if src_is_local {
+            self.send.update(len);
+        } else {
+            self.recv.update(len);
+        }
+    }
 }

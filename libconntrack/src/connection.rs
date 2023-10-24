@@ -224,8 +224,9 @@ pub struct ConnectionTracker<'a> {
     tx: ConnectionTrackerSender, // so we can tell others how to send msgs to us
     rx: ConnectionTrackerReceiver, // to read messages sent to us
     // aggregate counters of everything that's gone through this connection manager
-    traffic_counters: TrafficCounters,
     dequeue_delay_stats_us: AggregateCounter,
+    // used to track traffic grouped by, e.g., DNS destination
+    aggregate_traffic_counters: HashMap<AggregateCounterKind, TrafficCounters>,
 }
 impl<'a> ConnectionTracker<'a> {
     pub fn new(
@@ -238,9 +239,6 @@ impl<'a> ConnectionTracker<'a> {
         let (tx, rx) = tokio::sync::mpsc::channel(max_queue_size);
         let storage_service_msg_tx_clone = storage_service_msg_tx.clone();
         // for now, track these big counters by minute and second
-        let tx_bytes = ConnectionTracker::create_aggregate_counter();
-        let rx_bytes = ConnectionTracker::create_aggregate_counter();
-
         let mut dequeue_delay_stats_us =
             AggregateCounter::new(AggregateCounterKind::ConnectionTracker);
         dequeue_delay_stats_us.add_time_series(
@@ -262,11 +260,12 @@ impl<'a> ConnectionTracker<'a> {
             dns_tx: None,
             tx,
             rx,
-            traffic_counters: TrafficCounters {
-                send: tx_bytes,
-                recv: rx_bytes,
-            },
             dequeue_delay_stats_us,
+            // we always have at least the top-level ConnectionTracker traffic counters
+            aggregate_traffic_counters: HashMap::from([(
+                AggregateCounterKind::ConnectionTracker,
+                TrafficCounters::new(),
+            )]),
         }
     }
 
@@ -329,7 +328,7 @@ impl<'a> ConnectionTracker<'a> {
                 } => {
                     self.set_connection_remote_hostname_dns(&key, remote_hostname);
                 }
-                GetTrafficCounters { tx } => self.get_traffic_counters(tx),
+                GetTrafficCounters { tx } => self.get_conntrack_traffic_counters(tx),
             }
         }
         warn!("ConnectionTracker exiting rx_loop()");
@@ -338,11 +337,6 @@ impl<'a> ConnectionTracker<'a> {
     pub fn add(&mut self, packet: Box<OwnedParsedPacket>) {
         let mut needs_dns_lookup = false;
         if let Some((key, src_is_local)) = packet.to_connection_key(&self.local_addrs) {
-            if src_is_local {
-                self.traffic_counters.send.update(packet.len as u64);
-            } else {
-                self.traffic_counters.recv.update(packet.len as u64);
-            }
             let connection = match self.connections.get_mut(&key) {
                 Some(connection) => connection,
                 None => {
@@ -356,6 +350,17 @@ impl<'a> ConnectionTracker<'a> {
                     self.connections.get_mut(&key).unwrap()
                 }
             };
+            for group in &connection.aggregate_groups {
+                if let Some(counters) = self.aggregate_traffic_counters.get_mut(group) {
+                    counters.update_bytes(src_is_local, packet.len as u64);
+                } else {
+                    warn!(
+                            "Group counters out of sync between connection {} and tracker: missing {:?}", 
+                            connection.connection_key,
+                            group
+                        );
+                }
+            }
             connection.update(
                 packet,
                 &mut self.prober_tx,
@@ -425,6 +430,7 @@ impl<'a> ConnectionTracker<'a> {
             rx_byte_rate: RateEstimator::new(),
             tx_packet_rate: RateEstimator::new(),
             rx_packet_rate: RateEstimator::new(),
+            aggregate_groups: HashSet::new(),
         };
         debug!("Tracking new connection: {}", &key);
 
@@ -514,7 +520,21 @@ impl<'a> ConnectionTracker<'a> {
         remote_hostname: Option<String>,
     ) {
         if let Some(connection) = self.connections.get_mut(key) {
-            connection.remote_hostname = remote_hostname;
+            connection.remote_hostname = remote_hostname.clone();
+            if let Some(remote_hostname) = remote_hostname {
+                match utils::dns_to_cannonical_domain(&remote_hostname) {
+                    Ok(domain) => {
+                        // add this group and make sure the connection tracker is tracking it
+                        let group = AggregateCounterKind::DnsDstDomain { name: domain };
+                        connection.aggregate_groups.insert(group.clone());
+                        if !self.aggregate_traffic_counters.contains_key(&group) {
+                            self.aggregate_traffic_counters
+                                .insert(group, TrafficCounters::new());
+                        }
+                    }
+                    Err(e) => warn!("Unparsible DNS name: {} :: {}", &remote_hostname, e),
+                }
+            }
         } else {
             // This can happen if the connection is torn down faster than we can get the DNS
             // name back from the DNS tracker; make it debug for now
@@ -534,33 +554,12 @@ impl<'a> ConnectionTracker<'a> {
         self.tx.clone()
     }
 
-    /**
-     * Create the aggregate counter for this connection tracker
-     * Just do per second and per minute for now
-     */
-    fn create_aggregate_counter() -> AggregateCounter {
-        let mut agg_counter = AggregateCounter::new(AggregateCounterKind::ConnectionTracker);
-        agg_counter.add_time_series(
-            "Last 5 Seconds".to_string(),
-            std::time::Duration::from_millis(10),
-            500,
-        );
-        agg_counter.add_time_series(
-            "Last Minute".to_string(),
-            std::time::Duration::from_secs(1),
-            60,
-        );
-        agg_counter.add_time_series(
-            "Last Hour".to_string(),
-            std::time::Duration::from_secs(60),
-            60,
-        );
-
-        agg_counter
-    }
-
-    fn get_traffic_counters(&self, tx: UnboundedSender<TrafficCounters>) {
-        let mut traffic_counters = self.traffic_counters.clone();
+    fn get_conntrack_traffic_counters(&self, tx: UnboundedSender<TrafficCounters>) {
+        let mut traffic_counters = self
+            .aggregate_traffic_counters
+            .get(&AggregateCounterKind::ConnectionTracker)
+            .unwrap() // unwrap is ok b/c we should always have this counter
+            .clone();
         let now = Instant::now();
         // force send and recv counters to be up to date with now and time sync'd
         traffic_counters.send.update_with_time(0, now);
@@ -638,6 +637,8 @@ pub struct Connection {
     pub tx_packet_rate: RateEstimator,
     pub rx_byte_rate: RateEstimator,
     pub rx_packet_rate: RateEstimator,
+    // which counter groups does this flow belong to, e.g., "google.com" and "chrome"
+    pub aggregate_groups: HashSet<AggregateCounterKind>,
 }
 impl Connection {
     fn update(
@@ -1416,6 +1417,7 @@ impl Connection {
                 if remote_hostname.is_none() {
                     // store it this way
                     self.remote_hostname = remote_hostname_dns_cache.clone();
+                    self.add_dns_dst_aggregate_counter();
                     remote_hostname = remote_hostname_dns_cache;
                 }
             }
@@ -1483,6 +1485,37 @@ impl Connection {
             last_packet_time: self.last_packet_time,
             close_has_started: self.close_has_started(),
             four_way_close_done: self.is_four_way_close_done_or_rst(),
+        }
+    }
+
+    /**
+     * This is called when we set the self.remote_hostname field so that
+     * we can add this connection to the matching aggregate group traffic
+     * counter.
+     *
+     * This will intentionally panic if it's called without a valid self.remote_host
+     *
+     * Note that there are two code paths here, one which adds the counter to the
+     * underlying ConnectionTracker and one which does not.  If the code takes
+     * the path which does not add the counter, we risk a warn!() of things being
+     * out of sync.  This second path should only happen as a race condition and the
+     * warn!()'s should not persist but let's see how often they happen and if we
+     * need to do the gymnastics to fix up the second code path (not trivial)
+     */
+    fn add_dns_dst_aggregate_counter(&mut self) {
+        match utils::dns_to_cannonical_domain(
+            self.remote_hostname
+                .as_ref()
+                .expect("Valid remote Hostname"),
+        ) {
+            Ok(domain) => {
+                self.aggregate_groups
+                    .insert(AggregateCounterKind::DnsDstDomain { name: domain });
+            }
+            Err(e) => warn!(
+                "Invalid remote_hostname for {} :: {}",
+                self.connection_key, e
+            ),
         }
     }
 }
