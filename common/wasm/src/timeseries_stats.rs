@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fmt::Display,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -485,6 +486,7 @@ impl Units {
 /// # use common_wasm::timeseries_stats::*;
 /// let mut proc_time = ExportedStat::new("processing_time", Units::Microseconds, [StatType::MAX]);
 /// proc_time.add_duration_value(std::time::Duration::from_micros(123));
+#[derive(Debug)]
 pub struct ExportedStat {
     /// The (base-)name of the stat / item we want to track. E.g., `bytes_received`
     name: String,
@@ -577,24 +579,67 @@ impl ExportedStat {
     pub fn add_duration_value(&mut self, dur: Duration) {
         self.add_duration_value_with_time(dur, Instant::now());
     }
+}
 
-    /// Rotate buckets as necessary to move time forward to `now`. This method
-    /// should be called before querying the counters/
-    pub fn update(&mut self, now: Instant) {
-        self.data.update_buckets(now);
+impl Display for ExportedStat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // TODO: Ideally, we'd call `update_buckets()` here but we can't since we
+        // only got a shared reference.
+        for (name, val) in self.get_counter_map() {
+            writeln!(f, "{}={}", name, val)?;
+        }
+        Ok(())
     }
+}
 
-    /// The number of counters tracked/exported by this instances. Can be used to reserve space in a collection
-    /// or map before calling `append_counters`.
-    pub fn num_counters(&self) -> usize {
-        self.stat_types.len() * self.level_suffixes.len()
-    }
-
+/// A trait that provides counters as key-value pairs.
+pub trait CounterProvider {
     /// Append all the counter name, value pairs from this exporter to the given
     /// collection/map. Note that `HashMap<String, u64>`, `Vec<(String,u64)>` all implement
     /// the `Extend` trait.
     /// The method will append `self.num_counters()` entries to the collection/map.
-    pub fn append_counters<M>(&self, map: &mut M)
+    fn append_counters<M: Extend<(String, u64)>>(&self, map: &mut M);
+
+    /// Rotate buckets as necessary to move time forward to `now`. This method
+    /// should be called before querying the counters/
+    fn update_time_to(&mut self, now: Instant);
+
+    fn update_time(&mut self) {
+        self.update_time_to(Instant::now());
+    }
+
+    /// The number of counters tracked/exported by this instances. Can be used to reserve space in a collection
+    /// or map before calling `append_counters`.
+    fn num_counters(&self) -> usize;
+
+    /// Return a map of `counter_name, value` pairs for all the stats/counters tracked by
+    /// this instance.
+    fn get_counter_map(&self) -> HashMap<String, u64> {
+        let mut ret = HashMap::with_capacity(self.num_counters());
+        self.append_counters(&mut ret);
+        ret
+    }
+
+    /// Return a vector of `counter_name, value` pairs tuples for all the stats/counters
+    /// tracked by this instance. The order of the counter names that this method produces
+    /// is "nice" so it's quite handy for printing :-)
+    fn get_counter_vec(&self) -> Vec<(String, u64)> {
+        let mut ret = Vec::with_capacity(self.num_counters());
+        self.append_counters(&mut ret);
+        ret
+    }
+}
+
+impl CounterProvider for ExportedStat {
+    fn update_time_to(&mut self, now: Instant) {
+        self.data.update_buckets(now);
+    }
+
+    fn num_counters(&self) -> usize {
+        self.stat_types.len() * self.level_suffixes.len()
+    }
+
+    fn append_counters<M>(&self, map: &mut M)
     where
         M: Extend<(String, u64)>,
     {
@@ -623,33 +668,221 @@ impl ExportedStat {
             }
         }
     }
+}
 
-    /// Return a map of `counter_name, value` pairs for all the stats/counters tracked by
-    /// this instance.
-    pub fn get_counter_map(&self) -> HashMap<String, u64> {
-        let mut ret = HashMap::with_capacity(self.num_counters());
-        self.append_counters(&mut ret);
-        ret
+/// A thread safe-registry for ExportedStats. The registry can be used to create
+/// new ExportedStat instances (represented via a `StatHandle`). The registry will
+/// keep track of all stats created from it and it implemented `CounterProvider` to
+/// query the counters from all contained `ExportedStats`.
+///
+/// ExportedStatRegistry internally used `Arc` so it's safe and easy to clone the
+/// registry. The cloned registry will contain the same set of counters.
+///
+/// Note that the locking granularity is for the whole `ExportedStatRegistry`. I.e.,
+/// best practice is to use a separate registry for each thread or tokio task and then
+/// keep a top-level collection of all registries.
+///
+/// # Example
+///  
+///  ```
+/// # use common_wasm::timeseries_stats::*;
+/// use std::thread::spawn;
+///
+/// let system_epoch = std::time::Instant::now();
+/// let mut registry1 = ExportedStatRegistry::new(system_epoch);
+/// let mut registry2 = ExportedStatRegistry::new(system_epoch);
+/// let mut registry3 = ExportedStatRegistry::new(system_epoch);
+/// let my_registries = vec![registry1.clone(), registry2.clone(), registry3.clone()];
+///
+/// let join_handle1 = spawn(move || {
+///     let mut stat_foo = registry1.add_stat("thread1_foo", Units::Packets, [StatType::SUM]);
+///     stat_foo.add_value(42);
+/// });
+///
+/// let join_handle2 = spawn(move || {
+///     let mut stat_foo = registry2.add_stat("thread2_bar", Units::Packets, [StatType::SUM]);
+///     let mut another_stat = registry2.add_duration_stat("other_stat", Units::Milliseconds, [StatType::AVG]);
+///     stat_foo.add_value(23);
+///     another_stat.add_duration_value(std::time::Duration::from_millis(10));
+/// });
+///
+///  //  Alternatively, we can also just move (or clone) the individual StatHandle into the thread
+/// let mut thread3_stat = registry3.add_stat("thread3_foobar", Units::Packets, [StatType::SUM]);
+/// let join_handle3 = spawn(move || {
+///     thread3_stat.add_value(2342);
+/// });
+/// join_handle1.join();
+/// join_handle2.join();
+/// join_handle3.join();
+/// let all_counters_map = my_registries.get_counter_map();
+/// assert_eq!(*all_counters_map.get("thread1_foo.pkts.SUM.60").unwrap(), 42);
+/// assert_eq!(*all_counters_map.get("thread2_bar.pkts.SUM.60").unwrap(), 23);
+/// assert_eq!(*all_counters_map.get("other_stat.ms.AVG.60").unwrap(), 10);
+/// assert_eq!(*all_counters_map.get("thread3_foobar.pkts.SUM.60").unwrap(), 2342);
+///
+/// assert_eq!(all_counters_map.len(), my_registries.num_counters());
+///
+/// ```
+#[derive(Clone, Debug)]
+pub struct ExportedStatRegistry {
+    stats: Arc<Mutex<Vec<ExportedStat>>>,
+    created_time: Instant,
+}
+
+impl ExportedStatRegistry {
+    /// Create a new registry with the given epoch time. All timeseries will use the same
+    /// epoch.
+    pub fn new(created_time: Instant) -> Self {
+        Self {
+            stats: Arc::new(Mutex::new(Vec::new())),
+            created_time,
+        }
     }
 
-    /// Return a vecor of `counter_name, value` pairs tuples for all the stats/counters
-    /// tracked by this instance. The order of the counter names that this method produces
-    /// is "nice" so it's quite handy for printing :-)
-    pub fn get_counter_vec(&self) -> Vec<(String, u64)> {
-        let mut ret = Vec::with_capacity(self.num_counters());
-        self.append_counters(&mut ret);
-        ret
+    /// Create a new ExportedStat in this registry and return a thread-safe
+    /// `StatHandle`. The `StateHandle` can be used to add data points to the
+    /// ExportedStat
+    pub fn add_stat<I: IntoIterator<Item = StatType>>(
+        &mut self,
+        name: &str,
+        unit: Units,
+        stat_types: I,
+    ) -> StatHandle {
+        // TODO: make sure there are not name collisions.
+        let idx = {
+            let mut stats_vec_locked = self.stats.lock().unwrap();
+            stats_vec_locked.push(ExportedStat::new_with_create_time(
+                name,
+                unit,
+                stat_types,
+                self.created_time,
+            ));
+            stats_vec_locked.len() - 1
+        };
+        StatHandle {
+            registry: self.clone(),
+            idx,
+        }
+    }
+
+    /// Create a new ExportedStat in this registry and return a thread-safe
+    /// `StatHandle`. The `StateHandle` can be used to add data points to the
+    /// ExportedStat
+    pub fn add_duration_stat<I: IntoIterator<Item = StatType>>(
+        &mut self,
+        name: &str,
+        unit: Units,
+        stat_types: I,
+    ) -> StatHandleDuration {
+        assert!(unit == Units::Microseconds || unit == Units::Milliseconds);
+        // TODO: make sure there are not name collisions.
+        let idx = {
+            let mut stats_vec_locked = self.stats.lock().unwrap();
+            stats_vec_locked.push(ExportedStat::new_with_create_time(
+                name,
+                unit,
+                stat_types,
+                self.created_time,
+            ));
+            stats_vec_locked.len() - 1
+        };
+        StatHandleDuration {
+            raw_handle: StatHandle {
+                registry: self.clone(),
+                idx,
+            },
+        }
     }
 }
 
-impl Display for ExportedStat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // TODO: Ideally, we'd call `update_buckets()` here but we can't since we
-        // only got a shared reference.
-        for (name, val) in self.get_counter_map() {
-            writeln!(f, "{}={}", name, val)?;
+impl CounterProvider for ExportedStatRegistry {
+    fn append_counters<M: Extend<(String, u64)>>(&self, map: &mut M) {
+        let stats_locked = self.stats.lock().unwrap();
+        for stat in &*stats_locked {
+            stat.append_counters(map);
         }
-        Ok(())
+    }
+
+    fn update_time_to(&mut self, now: Instant) {
+        let mut stats_locked = self.stats.lock().unwrap();
+        for stat in &mut *stats_locked {
+            stat.update_time_to(now);
+        }
+    }
+
+    fn num_counters(&self) -> usize {
+        let mut cnt = 0;
+        let stats_locked = self.stats.lock().unwrap();
+        for stat in &*stats_locked {
+            cnt += stat.num_counters();
+        }
+        cnt
+    }
+}
+
+// TODO: is this really the best way to tackle this?
+impl CounterProvider for Vec<ExportedStatRegistry> {
+    fn append_counters<M: Extend<(String, u64)>>(&self, map: &mut M) {
+        for registry in self.iter() {
+            registry.append_counters(map);
+        }
+    }
+
+    fn update_time_to(&mut self, now: Instant) {
+        for registry in self.iter_mut() {
+            registry.update_time_to(now);
+        }
+    }
+
+    fn num_counters(&self) -> usize {
+        let mut cnt = 0;
+        for registry in self.iter() {
+            cnt += registry.num_counters();
+        }
+        cnt
+    }
+}
+
+/// A thread-safe representation of an ExportedStat. `StatHandles` are created by an
+/// ExportedStatRegistry. A `StatHandle` can be safely cloned. The clone will still represent the
+/// same ExportedStat. `StatHandle` implements `add_value()` and `add_value_with_time()` methods
+///  that ExportedStat provides. See `StatHandleDuration` for a variant that supports time durations
+#[derive(Clone, Debug)]
+pub struct StatHandle {
+    /// This is the registry used to create/register this handle
+    registry: ExportedStatRegistry,
+    idx: usize,
+}
+
+impl StatHandle {
+    /// see ExportedStat::add_value_with_time()
+    pub fn add_value_with_time(&mut self, value: u64, now: Instant) {
+        self.registry.stats.lock().unwrap()[self.idx].add_value_with_time(value, now);
+    }
+
+    /// see ExportedStat::add_value()
+    pub fn add_value(&mut self, value: u64) {
+        self.add_value_with_time(value, Instant::now());
+    }
+}
+
+/// A thread-safe representation of an ExportedStat to track time durations
+/// See also `StatHandle`
+#[derive(Clone, Debug)]
+pub struct StatHandleDuration {
+    raw_handle: StatHandle,
+}
+
+impl StatHandleDuration {
+    /// see ExportedStat::add_duration_value_with_time()
+    pub fn add_duration_value_with_time(&mut self, dur: Duration, now: Instant) {
+        self.raw_handle.registry.stats.lock().unwrap()[self.raw_handle.idx]
+            .add_duration_value_with_time(dur, now);
+    }
+
+    /// see ExportedStat::add_duration_value()
+    pub fn add_duration_value(&mut self, dur: Duration) {
+        self.add_duration_value_with_time(dur, Instant::now());
     }
 }
 
