@@ -430,7 +430,8 @@ impl<'a> ConnectionTracker<'a> {
             rx_byte_rate: RateEstimator::new(),
             tx_packet_rate: RateEstimator::new(),
             rx_packet_rate: RateEstimator::new(),
-            aggregate_groups: HashSet::new(),
+            // all connections are part of the connection tracker counter group
+            aggregate_groups: HashSet::from([AggregateCounterKind::ConnectionTracker]),
         };
         debug!("Tracking new connection: {}", &key);
 
