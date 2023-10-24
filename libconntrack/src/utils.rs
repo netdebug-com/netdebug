@@ -169,6 +169,39 @@ impl<T> PerfMsgCheck<T> {
     }
 }
 
+/**
+ * Convert the hostname to the relevant part of the DNS domain using
+ * the public suffix list.  Then apply a list of aliases to convert
+ * related domains to their well-known equivalents, e.g., "1e100.net" --> "google.com"
+ *
+ * TODO: list of aliases should probably be more complete
+ */
+
+pub fn dns_to_cannonical_domain(hostname: &String) -> Result<String, String> {
+    let hostname = hostname.to_lowercase();
+    // use the 'psl' crate that uses the https://publicsuffix.org/ list to parse the domain
+    // this is non-trivial so I'm glad someone else solved this for us!
+    // Note that psl downloads a new copy of the list at it's publication time
+    // so the list updates with each new release of psl - which should be fine for
+    // our purposes (which are mostly cosmetic)
+    let domain = match psl::domain(hostname.as_bytes()) {
+        Some(domain) => domain,
+        None => {
+            return Err(format!(
+                "public suffix list failed to parse domain {}",
+                hostname
+            ))
+        }
+    };
+    // now apply aliases
+    let cannonical_domain = match domain.as_bytes() {
+        // TODO: this list is woefully inadequate
+        b"googlecontent.com" | b"googleusercontent.com" | b"1e100.net" => b"google.com",
+        _other => _other,
+    };
+    Ok(String::from_utf8_lossy(cannonical_domain).to_string())
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -195,5 +228,21 @@ mod test {
             std::time::Duration::from_millis(0)
         );
         assert!(!passed);
+    }
+
+    #[test]
+    fn test_dns_cannonical_domain() {
+        let test_pairs = [
+            ("foo.bar.com", "bar.com"),
+            ("foo.bar.co.uk", "bar.co.uk"),
+            ("googlehosted.l.googleusercontent.com", "google.com"),
+        ];
+
+        for (test, valid) in test_pairs {
+            assert_eq!(
+                dns_to_cannonical_domain(&test.to_string()),
+                Ok(valid.to_string())
+            );
+        }
     }
 }
