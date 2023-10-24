@@ -1,6 +1,7 @@
 use std::net::IpAddr;
 
 use chrono::{DateTime, Utc};
+use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration};
 use etherparse::IpHeader;
 use libconntrack_wasm::aggregate_counters::AggregateCounter;
 
@@ -87,13 +88,25 @@ pub fn packet_is_tcp_rst(packet: &OwnedParsedPacket) -> bool {
  * TODO: use features to log this data ... somewhere... for regression testing
  *
  * perf_check!(message, instant, duration)
+ * perf_check!(message, instant, duration, perf_check_stat)
  *
- * /// use std::time::Instant;
- * ///
- * /// let start = Instant::now();
- * /// // do_something();
- * /// let (next_time, passed) = perf_check!("do_something()", start, Duration::from_millis(10));
- * /// assert!(passed);
+ * ```
+ * use std::time::{Duration, Instant};
+ *
+ * use common_wasm::timeseries_stats::{CounterProvider, ExportedStatRegistry};
+ * use libconntrack::perf_check;
+ * use libconntrack::utils::make_perf_check_stats;
+ *
+ * let start = Instant::now();
+ * // do_something();
+ * let (next_time, passed) = perf_check!("do_something()", start, Duration::from_millis(10));
+ * assert!(passed);
+ *
+ * let mut stat_registry = ExportedStatRegistry::new("example", Instant::now());
+ * let mut perf_stats = make_perf_check_stats("foobar", &mut stat_registry);
+ * perf_check!("foo bar baz", start, Duration::from_millis(10), perf_stats);
+ * assert_eq!(*stat_registry.get_counter_map().get("example.perf.foobar.violations.us.COUNT.60").unwrap(), 0);
+ * ```
  */
 
 #[macro_export]
@@ -125,6 +138,69 @@ macro_rules! perf_check {
             (now, passed)
         })()
     };
+    ($m:expr, $t:expr, $d:expr, $s:expr) => {
+        (|| -> (std::time::Instant, bool) {
+            let now = std::time::Instant::now();
+            let elapsed = (now - $t);
+            let passed = if elapsed > $d {
+                log::warn!(
+                    "PERF_CHECK {}:{} failed: {} - {:?} > SLA of {:?}",
+                    file!(),
+                    line!(),
+                    $m,
+                    now - $t,
+                    $d
+                );
+                false
+            } else {
+                log::trace!(
+                    "PERF_CHECK {}:{} passed: {} - {:?} <= SLA of {:?}",
+                    file!(),
+                    line!(),
+                    $m,
+                    now - $t,
+                    $d
+                );
+                true
+            };
+            $s.duration.add_duration_value(elapsed);
+            if !passed {
+                $s.violations.add_duration_value(elapsed);
+            }
+            (now, passed)
+        })()
+    };
+}
+
+/// Wrapper around the two StatHandle we want to use for `perf_check!()`
+/// This allows the `perf_check!()` macro to track duration, violations, etc. as
+/// ExportedStat
+#[derive(Clone)]
+pub struct PerfCheckStats {
+    /// Tracks the number of SLA violations (COUNT) as well as the AVG and
+    /// MAX violation time
+    pub violations: StatHandleDuration,
+    /// Tracks the MAX and AVG of the duration, regardless of whether it violated the SLA or not
+    pub duration: StatHandleDuration,
+}
+
+/// Create a PerfCheckStats instance using the given basename and registry
+pub fn make_perf_check_stats(name: &str, registry: &mut ExportedStatRegistry) -> PerfCheckStats {
+    use common_wasm::timeseries_stats::{StatType, Units};
+    let violation_name = format!("perf.{}.violations", name);
+    let duration_name = format!("perf.{}.duration", name);
+    PerfCheckStats {
+        violations: registry.add_duration_stat(
+            &violation_name,
+            Units::Microseconds,
+            [StatType::COUNT, StatType::AVG, StatType::MAX],
+        ),
+        duration: registry.add_duration_stat(
+            &duration_name,
+            Units::Microseconds,
+            [StatType::AVG, StatType::MAX],
+        ),
+    }
 }
 
 /**
