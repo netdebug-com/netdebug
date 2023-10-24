@@ -2,6 +2,7 @@ mod websocket;
 
 use chrono::Duration;
 use clap::Parser;
+use common_wasm::timeseries_stats::{CounterProvider, ExportedStatRegistry, SuperRegistry};
 use libconntrack::{
     connection::{ConnectionTracker, ConnectionTrackerMsg, ConnectionTrackerSender},
     connection_storage_handler::ConnectionStorageHandler,
@@ -52,7 +53,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     common::init::netdebug_init();
 
     let args = Args::parse();
+    let system_epoch = std::time::Instant::now();
 
+    let mut counter_registries = SuperRegistry::new(system_epoch);
     // create a channel for the ConnectionTracker
     let (tx, rx) = tokio::sync::mpsc::channel::<PerfMsgCheck<ConnectionTrackerMsg>>(
         MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
@@ -65,7 +68,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .flatten()
         .collect::<HashSet<IpAddr>>();
     // launch the process tracker
-    let process_tracker = ProcessTracker::new(MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
+    let process_tracker = ProcessTracker::new(
+        MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
+        counter_registries.new_registry("process_tracker"),
+    );
     let (process_tracker, _join) = process_tracker.spawn(Duration::milliseconds(500)).await;
 
     // launch the DNS tracker; cache localhost entries
@@ -128,12 +134,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
             tx,
             dns_tx,
             process_tracker,
+            counter_registries.registries(),
         )
         .await,
     )
     .run(listen_addr)
     .await;
     Ok(())
+}
+
+pub fn make_counter_routes(
+    registries: Vec<ExportedStatRegistry>,
+) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    warp::path!("counters" / "get_counters").map(move || {
+        // IndexMap iterates over entries in insertion order
+        let mut map = indexmap::IndexMap::<String, u64>::new();
+        registries.append_counters(&mut map);
+        serde_json::to_string_pretty(&map).unwrap()
+    })
 }
 
 /***** A bunch of copied/funged code from libwebserver - think about how to refactor */
@@ -144,16 +162,19 @@ pub async fn make_desktop_http_routes(
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: ProcessTrackerSender,
+    counter_registries: Vec<ExportedStatRegistry>,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     let webclient =
         libwebserver::http_routes::make_webclient_route(&wasm_root).with(warp::log("webclient"));
     let ws = make_desktop_ws_route(connection_tracker, dns_tracker, process_tracker)
         .with(warp::log("websocket"));
     let static_path = warp::fs::dir(html_root.clone()).with(warp::log("static"));
+    let counter_path =
+        make_counter_routes(counter_registries).with(warp::log("counters/get_counters"));
 
     // this is the order that the filters try to match; it's important that
     // it's in this order to make sure the routing works correctly
-    let routes = ws.or(webclient).or(static_path);
+    let routes = ws.or(webclient).or(static_path).or(counter_path);
     routes
 }
 

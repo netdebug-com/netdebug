@@ -2,6 +2,7 @@ use std::net::IpAddr;
 use std::{collections::HashMap, time::Instant};
 
 use chrono::Duration;
+use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units};
 #[cfg(not(test))]
 use log::{debug, warn};
 use netstat2::{AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo};
@@ -44,6 +45,7 @@ pub struct ProcessTracker {
     tcp_cache: HashMap<ConnectionKey, ProcessTrackerEntry>,
     udp_cache: HashMap<(IpAddr, u16), ProcessTrackerEntry>,
     pid2app_name_cache: HashMap<u32, String>,
+    msgs_received: StatHandle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,14 +54,16 @@ pub struct ProcessTrackerEntry {
 }
 
 impl ProcessTracker {
-    pub fn new(max_queue: usize) -> ProcessTracker {
+    pub fn new(max_queue: usize, mut stats: ExportedStatRegistry) -> ProcessTracker {
         let (tx, rx) = channel::<PerfMsgCheck<ProcessTrackerMessage>>(max_queue);
+        let msgs_received = stats.add_stat("messages_recieved", Units::None, [StatType::COUNT]);
         ProcessTracker {
             tx,
             rx,
             tcp_cache: HashMap::new(),
             udp_cache: HashMap::new(),
             pid2app_name_cache: HashMap::new(),
+            msgs_received,
         }
     }
 
@@ -98,6 +102,7 @@ impl ProcessTracker {
         });
         while let Some(msg) = self.rx.recv().await {
             use ProcessTrackerMessage::*;
+            self.msgs_received.add_value(1);
             let start = Instant::now();
             let msg = msg.perf_check_get("ProcessTracker::do_async_loop queue");
             // quick debug message, unless it's the really big
@@ -341,7 +346,10 @@ mod test {
         };
         //
 
-        let mut process_tracker = ProcessTracker::new(128);
+        let mut process_tracker = ProcessTracker::new(
+            128,
+            ExportedStatRegistry::new("process_tracker", Instant::now()),
+        );
         process_tracker.update_cache();
 
         let mut found_it = false;

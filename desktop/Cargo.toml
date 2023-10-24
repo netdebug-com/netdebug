@@ -10,6 +10,7 @@ edition = "2021"
 chrono = "0.4.26"
 clap = { version = "4.2.7", features = ["derive"] }
 common = { path = "../common" }
+common-wasm = { path = "../common/wasm" }
 desktop_common = { path = "./desktop_common" }
 # move back to the public branch once https://github.com/JulianSchmid/etherparse/pull/66 is merged
 # NOTE: 0.14.0 looks like it breaks partial IpHeader::from_slice() parsing
@@ -18,6 +19,7 @@ desktop_common = { path = "./desktop_common" }
 etherparse = { git = "https://github.com/robs-zeynet/etherparse", branch = "tcp_header" }
 futures = "0.3.28"
 futures-util = "0.3.28"
+indexmap = { version = "2", features = ["serde"] }
 libconntrack = { path = "../libconntrack" }
 libconntrack-wasm = { path = "../libconntrack-wasm" }
 log = "0.4.18"

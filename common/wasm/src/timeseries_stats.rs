@@ -689,9 +689,9 @@ impl CounterProvider for ExportedStat {
 /// use std::thread::spawn;
 ///
 /// let system_epoch = std::time::Instant::now();
-/// let mut registry1 = ExportedStatRegistry::new(system_epoch);
-/// let mut registry2 = ExportedStatRegistry::new(system_epoch);
-/// let mut registry3 = ExportedStatRegistry::new(system_epoch);
+/// let mut registry1 = ExportedStatRegistry::new("t1", system_epoch);
+/// let mut registry2 = ExportedStatRegistry::new("t2", system_epoch);
+/// let mut registry3 = ExportedStatRegistry::new("t3", system_epoch);
 /// let my_registries = vec![registry1.clone(), registry2.clone(), registry3.clone()];
 ///
 /// let join_handle1 = spawn(move || {
@@ -715,10 +715,11 @@ impl CounterProvider for ExportedStat {
 /// join_handle2.join();
 /// join_handle3.join();
 /// let all_counters_map = my_registries.get_counter_map();
-/// assert_eq!(*all_counters_map.get("thread1_foo.pkts.SUM.60").unwrap(), 42);
-/// assert_eq!(*all_counters_map.get("thread2_bar.pkts.SUM.60").unwrap(), 23);
-/// assert_eq!(*all_counters_map.get("other_stat.ms.AVG.60").unwrap(), 10);
-/// assert_eq!(*all_counters_map.get("thread3_foobar.pkts.SUM.60").unwrap(), 2342);
+/// println!("{:#?}", all_counters_map);
+/// assert_eq!(*all_counters_map.get("t1.thread1_foo.pkts.SUM.60").unwrap(), 42);
+/// assert_eq!(*all_counters_map.get("t2.thread2_bar.pkts.SUM.60").unwrap(), 23);
+/// assert_eq!(*all_counters_map.get("t2.other_stat.ms.AVG.60").unwrap(), 10);
+/// assert_eq!(*all_counters_map.get("t3.thread3_foobar.pkts.SUM.60").unwrap(), 2342);
 ///
 /// assert_eq!(all_counters_map.len(), my_registries.num_counters());
 ///
@@ -726,15 +727,17 @@ impl CounterProvider for ExportedStat {
 #[derive(Clone, Debug)]
 pub struct ExportedStatRegistry {
     stats: Arc<Mutex<Vec<ExportedStat>>>,
+    prefix: String,
     created_time: Instant,
 }
 
 impl ExportedStatRegistry {
     /// Create a new registry with the given epoch time. All timeseries will use the same
     /// epoch.
-    pub fn new(created_time: Instant) -> Self {
+    pub fn new(prefix: &str, created_time: Instant) -> Self {
         Self {
             stats: Arc::new(Mutex::new(Vec::new())),
+            prefix: prefix.to_string(),
             created_time,
         }
     }
@@ -749,10 +752,15 @@ impl ExportedStatRegistry {
         stat_types: I,
     ) -> StatHandle {
         // TODO: make sure there are not name collisions.
+        let fullname = if self.prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}.{}", self.prefix, name)
+        };
         let idx = {
             let mut stats_vec_locked = self.stats.lock().unwrap();
             stats_vec_locked.push(ExportedStat::new_with_create_time(
-                name,
+                &fullname,
                 unit,
                 stat_types,
                 self.created_time,
@@ -775,23 +783,8 @@ impl ExportedStatRegistry {
         stat_types: I,
     ) -> StatHandleDuration {
         assert!(unit == Units::Microseconds || unit == Units::Milliseconds);
-        // TODO: make sure there are not name collisions.
-        let idx = {
-            let mut stats_vec_locked = self.stats.lock().unwrap();
-            stats_vec_locked.push(ExportedStat::new_with_create_time(
-                name,
-                unit,
-                stat_types,
-                self.created_time,
-            ));
-            stats_vec_locked.len() - 1
-        };
-        StatHandleDuration {
-            raw_handle: StatHandle {
-                registry: self.clone(),
-                idx,
-            },
-        }
+        let raw_handle = self.add_stat(name, unit, stat_types);
+        StatHandleDuration { raw_handle }
     }
 }
 
@@ -883,6 +876,32 @@ impl StatHandleDuration {
     /// see ExportedStat::add_duration_value()
     pub fn add_duration_value(&mut self, dur: Duration) {
         self.add_duration_value_with_time(dur, Instant::now());
+    }
+}
+
+/// A utility struct to make it easy to crate and keep track of created Registries.
+#[derive(Clone)]
+pub struct SuperRegistry {
+    system_epoch: Instant,
+    registries: Vec<ExportedStatRegistry>,
+}
+
+impl SuperRegistry {
+    pub fn new(system_epoch: Instant) -> Self {
+        Self {
+            system_epoch,
+            registries: Vec::new(),
+        }
+    }
+
+    pub fn new_registry(&mut self, prefix: &str) -> ExportedStatRegistry {
+        let registry = ExportedStatRegistry::new(prefix, self.system_epoch);
+        self.registries.push(registry.clone());
+        registry
+    }
+
+    pub fn registries(&self) -> Vec<ExportedStatRegistry> {
+        self.registries.clone()
     }
 }
 
