@@ -74,11 +74,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
         counter_registries.new_registry("process_tracker"),
     );
-    let (process_tracker, _join) = process_tracker.spawn(Duration::milliseconds(500)).await;
+    let (process_tx, _join) = process_tracker.spawn(Duration::milliseconds(500)).await;
 
     // launch the DNS tracker; cache localhost entries
     let (dns_tx, _) = DnsTracker::spawn(/* expiring cache capacity */ 4096).await;
     let dns_tx_clone = dns_tx.clone();
+    let process_tx_clone = process_tx.clone();
     for ip in local_addrs.clone() {
         dns_tx
             .send(DnsTrackerMessage::CacheForever {
@@ -120,6 +121,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         );
         connection_tracker.set_tx_rx(connection_manager_tx, rx);
         connection_tracker.set_dns_tracker(dns_tx_clone);
+        connection_tracker.set_process_tracker(process_tx_clone);
         // loop forever tracking messages sent on the channel
         connection_tracker.rx_loop().await;
     });
@@ -135,7 +137,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             &args.html_root,
             tx,
             dns_tx,
-            process_tracker,
+            process_tx,
             counter_registries.registries(),
         )
         .await,
