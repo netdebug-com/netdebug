@@ -13,8 +13,8 @@ use tokio::sync::mpsc::channel;
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 
 use crate::connection::{ConnectionKey, ConnectionTrackerMsg, ConnectionTrackerSender};
-use crate::perf_check;
 use crate::utils::{make_perf_check_stats, PerfCheckStats, PerfMsgCheck};
+use crate::{perf_check, try_send_async, try_send_sync};
 
 #[derive(Clone, Debug)]
 pub enum ProcessTrackerMessage {
@@ -46,6 +46,7 @@ pub struct ProcessTracker {
     udp_cache: HashMap<(IpAddr, u16), ProcessTrackerEntry>,
     pid2app_name_cache: HashMap<u32, String>,
     msgs_received: StatHandle,
+    msgs_tx_errors: StatHandle,
     dump_cache_perf_stat: PerfCheckStats,
     update_cache_perf_stat: PerfCheckStats,
     lookup_queue: Vec<(ConnectionKey, ConnectionTrackerSender)>, // where we store queued lookup requests
@@ -60,6 +61,7 @@ impl ProcessTracker {
     pub fn new(max_queue: usize, mut stats: ExportedStatRegistry) -> ProcessTracker {
         let (tx, rx) = channel::<PerfMsgCheck<ProcessTrackerMessage>>(max_queue);
         let msgs_received = stats.add_stat("messages_recieved", Units::None, [StatType::COUNT]);
+        let msgs_tx_errors = stats.add_stat("messages_tx_errors", Units::None, [StatType::COUNT]);
         ProcessTracker {
             tx,
             rx,
@@ -67,6 +69,7 @@ impl ProcessTracker {
             udp_cache: HashMap::new(),
             pid2app_name_cache: HashMap::new(),
             msgs_received,
+            msgs_tx_errors,
             dump_cache_perf_stat: make_perf_check_stats("dump_cache", &mut stats),
             update_cache_perf_stat: make_perf_check_stats("update_cache", &mut stats),
             lookup_queue: Vec::new(),
@@ -97,13 +100,18 @@ impl ProcessTracker {
     pub async fn do_async_loop(&mut self, update_frequency: Duration) {
         // setup a background task to periodically send a UpdateCache message
         let tx = self.tx.clone();
+        let mut stat = self.msgs_tx_errors.clone();
         tokio::spawn(async move {
             loop {
                 // TODO: break on too many errors? Then do what?
                 tokio::time::sleep(update_frequency.to_std().unwrap()).await;
-                if let Err(e) = tx.try_send(PerfMsgCheck::new(ProcessTrackerMessage::UpdateCache)) {
-                    warn!("ProcessTracker :: update cache sender failed: {}", e);
-                }
+                try_send_async!(
+                    &tx,
+                    "process_tracker",
+                    ProcessTrackerMessage::UpdateCache,
+                    &mut stat
+                )
+                .await;
             }
         });
         while let Some(msg) = self.rx.recv().await {
@@ -179,17 +187,15 @@ impl ProcessTracker {
     fn lookup_or_queue(&mut self, key: ConnectionKey, tx: ConnectionTrackerSender) {
         let reply = self.lookup_from_cache(&key);
         if reply.is_some() {
-            if let Err(e) = tx.try_send(PerfMsgCheck::new(
+            try_send_sync!(
+                tx,
+                "ConnectionTracker",
                 ConnectionTrackerMsg::SetConnectionApplication {
                     key,
                     application: reply,
                 },
-            )) {
-                warn!(
-                    "Failed to send reply from ProcessTracker::handle_lookup!?: {}",
-                    e
-                );
-            }
+                &mut self.msgs_tx_errors
+            );
         } else {
             // try again on next refresh to avoid a race condition
             self.lookup_queue.push((key.clone(), tx.clone()));
@@ -278,14 +284,15 @@ impl ProcessTracker {
     fn process_queued_lookups(&mut self) {
         while let Some((key, tx)) = self.lookup_queue.pop() {
             let application = self.lookup_from_cache(&key);
-            if let Err(e) = tx.try_send(PerfMsgCheck::new(
+            try_send_sync!(
+                tx,
+                "ConnectionTracker",
                 ConnectionTrackerMsg::SetConnectionApplication {
                     key,
                     application: application,
                 },
-            )) {
-                warn!("Problem sending to the ConnectionTracker: {}", e);
-            }
+                &mut self.msgs_tx_errors
+            );
         }
     }
 }
@@ -311,9 +318,7 @@ async fn run_pid2process_loop(update_frequency: Duration, tx: ProcessTrackerSend
         };
 
         use ProcessTrackerMessage::*;
-        if let Err(e) = tx.try_send(PerfMsgCheck::new(UpdatePidMapping { pid2process })) {
-            warn!("Failed to send UpdatePidMapping to process tracker: {}", e);
-        }
+        try_send_async!(tx, "process_tracker", UpdatePidMapping { pid2process }).await;
 
         let next_update = start + update_frequency;
         let now = Utc::now();
