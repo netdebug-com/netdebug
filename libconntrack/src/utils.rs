@@ -83,6 +83,122 @@ pub fn packet_is_tcp_rst(packet: &OwnedParsedPacket) -> bool {
 }
 
 /**
+ * Easy macro to reduce code testing errors and updating stats around our common
+ * try_send pattern
+ *
+ * ```rust
+ * use std::vec::Vec;
+ * use tokio::sync::mpsc::{Sender, channel};
+ * use common_wasm::timeseries_stats::{ExportedStatRegistry, StatType, Units};
+ * use log::warn;
+ * use libconntrack::{try_send_sync, utils::PerfMsgCheck};
+ *
+ * let (tx, _rx) = channel::<PerfMsgCheck<Vec<u8>>>(128);
+ * let mut stats_registry = ExportedStatRegistry::new("example", std::time::Instant::now());
+ * let mut msg_errs_counter = stats_registry.add_stat("message_tx_errors", Units::None, [StatType::COUNT]);
+ *
+ * let data = Vec::from([0;128]);
+ * // Instead of this:
+ * // if let Err(e) = tx.try_send(PerfMsgChk::new(data)) {
+ * //   warn!("Failed to send data to process: {}", e);
+ * //   msg_errs_counter.update(1);
+ * // }
+ * // Write this:
+ * try_send_sync!(tx, "process", data.clone(), &mut msg_errs_counter);
+ * // Or this to explicitly specificy the SLA
+ * try_send_sync!(tx, "process", data, &mut msg_errs_counter, std::time::Duration::from_millis(15));
+ * // Or try_send_async!() if in an async context
+ * ```
+ */
+
+#[macro_export]
+macro_rules! try_send_sync {
+    // no stats or SLA
+    ($tx:expr, $msg:expr, $data:expr) => {
+        (|| {
+            if let Err(e) = $tx.try_send(PerfMsgCheck::new($data)) {
+                warn!("Failed to send data to {} :: err {}", $msg, e);
+            }
+        })()
+    };
+    // stats, no SLA
+    ($tx:expr, $msg:expr, $data:expr, $stats:expr) => {
+        (|| {
+            if let Err(e) = $tx.try_send(PerfMsgCheck::new($data)) {
+                warn!("Failed to send data to {} :: err {}", $msg, e);
+            }
+            $stats.add_value(1);
+        })()
+    };
+    // stats AND SLA
+    ($tx:expr, $msg:expr, $data:expr, $stats:expr, $sla:expr) => {
+        (|| {
+            if let Err(e) = $tx.try_send(crate::libconntrack::utils::PerfMsgCheck::with_sla(
+                $data, $sla,
+            )) {
+                warn!("Failed to send data to {} :: err {}", $msg, e);
+                $stats.add_value(1);
+            }
+        })()
+    };
+}
+
+/**
+ * Easy macro to reduce code testing errors and updating stats around our common
+ * try_send pattern
+ *
+ * ```rust
+ * # tokio_test::block_on( async {
+ * use std::vec::Vec;
+ * use tokio::sync::mpsc::{Sender, channel};
+ * use common_wasm::timeseries_stats::{ExportedStatRegistry, StatType, Units};
+ * use log::warn;
+ * use libconntrack::{try_send_async, utils::PerfMsgCheck};
+ *
+ * let (tx, _rx) = channel::<PerfMsgCheck<Vec<u8>>>(128);
+ * let mut stats_registry = ExportedStatRegistry::new("example", std::time::Instant::now());
+ * let mut msg_errs_counter = stats_registry.add_stat("message_tx_errors", Units::None, [StatType::COUNT]);
+ *
+ * let data = Vec::from([0;128]);
+ * // Instead of this:
+ * // if let Err(e) = tx.send(PerfMsgChk::new(data)).await {
+ * //   warn!("Failed to send data to process: {}", e);
+ * //   msg_errs_counter.update(1);
+ * // }
+ * // Write this:
+ * try_send_async!(tx, "process", data.clone(), &mut msg_errs_counter).await;
+ * // Or this to explicitly specificy the SLA
+ * try_send_async!(tx, "process", data, &mut msg_errs_counter, std::time::Duration::from_millis(15)).await;
+ * # });
+ * ```
+ */
+#[macro_export]
+macro_rules! try_send_async {
+    ($tx:expr, $msg:expr, $data:expr) => {
+        async {
+            if let Err(e) = $tx.send(PerfMsgCheck::new($data)).await {
+                warn!("Failed to send data to {:?} :: err {}", $msg, e);
+            }
+        }
+    };
+    ($tx:expr, $msg:expr, $data:expr, $stat:expr) => {
+        async {
+            if let Err(e) = $tx.send(PerfMsgCheck::new($data)).await {
+                warn!("Failed to send data to {:?} :: err {}", $msg, e);
+            }
+            $stat.add_value(1);
+        }
+    };
+    ($tx:expr, $msg:expr, $data:expr, $stat:expr, $sla:expr) => {
+        async {
+            if let Err(e) = $tx.send(PerfMsgCheck::with_sla($data, $sla)).await {
+                warn!("Failed to send data to {:?} :: err {}", $msg, e);
+            }
+            $stat.add_value(1);
+        }
+    };
+}
+/**
  * Easy macro to validate that a section of code ran in the given time.
  * TODO: use features to turn this on/off
  * TODO: use features to log this data ... somewhere... for regression testing
