@@ -208,7 +208,7 @@ pub fn make_perf_check_stats(name: &str, registry: &mut ExportedStatRegistry) ->
  * Wraps any Message and forces you to check the performance to get the message
  */
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PerfMsgCheck<T> {
     data: T,
     send_time: std::time::Instant,
@@ -234,6 +234,14 @@ impl<T> PerfMsgCheck<T> {
 
     pub fn perf_check_get(self, msg: &str) -> T {
         perf_check!(msg, self.send_time, self.sla);
+        self.data
+    }
+
+    /**
+     * For testing, sometimes we want to skip the perf checks
+     */
+    #[cfg(test)]
+    pub fn skip_perf_check(self) -> T {
         self.data
     }
 

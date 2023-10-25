@@ -32,7 +32,7 @@ use crate::{
     dns_tracker::{DnsTrackerMessage, UDP_DNS_PORT},
     in_band_probe::ProbeMessage,
     owned_packet::OwnedParsedPacket,
-    process_tracker::ProcessTrackerEntry,
+    process_tracker::{ProcessTrackerEntry, ProcessTrackerMessage, ProcessTrackerSender},
     utils::{
         self, calc_rtt_ms, etherparse_ipheaders2ipaddr, packet_is_tcp_rst, timestamp_to_ms,
         PerfMsgCheck,
@@ -182,6 +182,10 @@ pub enum ConnectionTrackerMsg {
         key: ConnectionKey,
         remote_hostname: Option<String>, // will be None if lookup fails
     },
+    SetConnectionApplication {
+        key: ConnectionKey,
+        application: Option<ProcessTrackerEntry>, // will be None if lookup fails, which we need for stats
+    },
     GetTrafficCounters {
         tx: mpsc::UnboundedSender<TrafficCounters>,
     },
@@ -221,6 +225,7 @@ pub struct ConnectionTracker<'a> {
     prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
     storage_service_msg_tx: Option<mpsc::Sender<ConnectionStorageEntry>>,
     dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
+    process_tx: Option<ProcessTrackerSender>,
     tx: ConnectionTrackerSender, // so we can tell others how to send msgs to us
     rx: ConnectionTrackerReceiver, // to read messages sent to us
     // aggregate counters of everything that's gone through this connection manager
@@ -258,6 +263,7 @@ impl<'a> ConnectionTracker<'a> {
             prober_tx,
             storage_service_msg_tx,
             dns_tx: None,
+            process_tx: None,
             tx,
             rx,
             dequeue_delay_stats_us,
@@ -271,6 +277,10 @@ impl<'a> ConnectionTracker<'a> {
 
     pub fn set_dns_tracker(&mut self, dns_tx: mpsc::UnboundedSender<DnsTrackerMessage>) {
         self.dns_tx = Some(dns_tx);
+    }
+
+    pub fn set_process_tracker(&mut self, process_tx: ProcessTrackerSender) {
+        self.process_tx = Some(process_tx);
     }
 
     pub async fn rx_loop(&mut self) {
@@ -329,13 +339,16 @@ impl<'a> ConnectionTracker<'a> {
                     self.set_connection_remote_hostname_dns(&key, remote_hostname);
                 }
                 GetTrafficCounters { tx } => self.get_conntrack_traffic_counters(tx),
+                SetConnectionApplication { key, application } => {
+                    self.set_connection_application(key, application)
+                }
             }
         }
         warn!("ConnectionTracker exiting rx_loop()");
     }
 
     pub fn add(&mut self, packet: Box<OwnedParsedPacket>) {
-        let mut needs_dns_lookup = false;
+        let mut needs_dns_and_process_lookup = false;
         if let Some((key, src_is_local)) = packet.to_connection_key(&self.local_addrs) {
             let connection = match self.connections.get_mut(&key) {
                 Some(connection) => connection,
@@ -346,7 +359,7 @@ impl<'a> ConnectionTracker<'a> {
                     }
                     // else create the state and look it up again
                     self.new_connection(key.clone());
-                    needs_dns_lookup = true;
+                    needs_dns_and_process_lookup = true;
                     self.connections.get_mut(&key).unwrap()
                 }
             };
@@ -368,16 +381,29 @@ impl<'a> ConnectionTracker<'a> {
                 src_is_local,
                 &self.dns_tx,
             );
-            if needs_dns_lookup {
+            if needs_dns_and_process_lookup {
                 // only new connections that we don't immediately tear down need DNS lookups
                 if let Some(dns_tx) = self.dns_tx.as_mut() {
-                    // ask the DNS tracker to tell us the remote DNS name
+                    // ask the DNS tracker to async message us the remote DNS name
                     if let Err(e) = dns_tx.send(DnsTrackerMessage::Lookup {
                         ip: key.remote_ip,
                         key: key.clone(),
                         tx: self.tx.clone(),
                     }) {
                         warn!("Failed to send a Lookup message to the DNS Tracker: {}", e);
+                    }
+                }
+                if let Some(process_tx) = self.process_tx.as_mut() {
+                    if let Err(e) =
+                        process_tx.try_send(PerfMsgCheck::new(ProcessTrackerMessage::LookupOne {
+                            key: key.clone(),
+                            tx: self.tx.clone(),
+                        }))
+                    {
+                        warn!(
+                            "Failed to send a Lookup message to the Process Tracker: {}",
+                            e
+                        );
                     }
                 }
             }
@@ -570,6 +596,25 @@ impl<'a> ConnectionTracker<'a> {
                 "Tried to send traffic_counters back to caller but got {}",
                 e
             );
+        }
+    }
+
+    fn set_connection_application(
+        &mut self,
+        key: ConnectionKey,
+        application: Option<ProcessTrackerEntry>,
+    ) {
+        if let Some(application) = application {
+            if let Some(connection) = self.connections.get_mut(&key) {
+                connection.associated_apps = Some(application.associated_apps);
+            } else {
+                warn!(
+                    "Tried to update application id for non-existent connection: {}",
+                    key
+                );
+            }
+        } else {
+            // TODO: update a stats counter to count the number of non-identified connections
         }
     }
 }
@@ -1523,9 +1568,13 @@ impl Connection {
 
 #[cfg(test)]
 pub mod test {
+    use core::panic;
     use std::env;
     use std::path::Path;
     use std::str::FromStr;
+
+    use tokio::sync::mpsc::channel;
+    use tokio::sync::mpsc::error::TryRecvError;
 
     use super::*;
 
@@ -2070,20 +2119,20 @@ pub mod test {
         assert_eq!(probe_id, 32);
     }
 
+    const REMOTE_RST: [u8; 60] = [
+        0x7c, 0x8a, 0xe1, 0x5a, 0xac, 0xc2, 0xf8, 0x0d, 0xac, 0xd4, 0x91, 0x89, 0x08, 0x00, 0x45,
+        0x00, 0x00, 0x28, 0xdb, 0x89, 0x00, 0x00, 0x40, 0x06, 0x1b, 0x45, 0xc0, 0xa8, 0x01, 0x4a,
+        0xc0, 0xa8, 0x01, 0x67, 0x02, 0x77, 0xcd, 0x35, 0xde, 0xde, 0x42, 0xa5, 0x00, 0x00, 0x00,
+        0x00, 0x50, 0x04, 0x00, 0x00, 0x3a, 0xae, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
     /***
      * If we get a RST from the remote side from a connection we're not tracking, then make sure
      * to not track that connection _based_ on the RST.
      */
     #[tokio::test]
     async fn dont_track_remote_rsts() {
-        let remote_rst = [
-            0x7c, 0x8a, 0xe1, 0x5a, 0xac, 0xc2, 0xf8, 0x0d, 0xac, 0xd4, 0x91, 0x89, 0x08, 0x00,
-            0x45, 0x00, 0x00, 0x28, 0xdb, 0x89, 0x00, 0x00, 0x40, 0x06, 0x1b, 0x45, 0xc0, 0xa8,
-            0x01, 0x4a, 0xc0, 0xa8, 0x01, 0x67, 0x02, 0x77, 0xcd, 0x35, 0xde, 0xde, 0x42, 0xa5,
-            0x00, 0x00, 0x00, 0x00, 0x50, 0x04, 0x00, 0x00, 0x3a, 0xae, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-        ];
-        let remote_rst = OwnedParsedPacket::try_from_fake_time(remote_rst.to_vec()).unwrap();
+        let remote_rst = OwnedParsedPacket::try_from_fake_time(REMOTE_RST.to_vec()).unwrap();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.103").unwrap()]);
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
@@ -2356,5 +2405,83 @@ pub mod test {
             .is_some());
 
         tokio::time::resume();
+    }
+    /***
+     * Verify that we send a lookup messasge to the ProcessTracker on new connections (not a rst)
+     * and that we set them properly when we get the reply.
+     */
+    #[tokio::test]
+    async fn connection_tracker_process_lookup() {
+        let (process_tx, mut process_rx) = channel(128);
+        let remote_rst = OwnedParsedPacket::try_from_fake_time(REMOTE_RST.to_vec()).unwrap();
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.103").unwrap()]);
+        let storage_service_client = None;
+        let max_connections_per_tracker = 32;
+        let raw_sock = MockRawSocketProber::new();
+        let mut connection_tracker = ConnectionTracker::new(
+            storage_service_client,
+            max_connections_per_tracker,
+            local_addrs,
+            raw_sock.tx.clone(),
+            128,
+        );
+        connection_tracker.set_process_tracker(process_tx);
+        connection_tracker.add(remote_rst);
+        assert_eq!(connection_tracker.connections.len(), 0);
+        // make sure we didn't get a message from the connection tracker
+        // don't use assert_eq!() as it forces everything down a complex chain to
+        // derive(PartialEq, Eq)
+        match process_rx.try_recv() {
+            Err(TryRecvError::Empty) => (),
+            _e => panic!("Got a process message where none was expected: {:?}", _e),
+        }
+        // now try a real packet and make sure we get a message
+        let local_syn = OwnedParsedPacket::try_from_fake_time(TEST_1_LOCAL_SYN.to_vec()).unwrap();
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.37").unwrap()]);
+        connection_tracker.local_addrs = local_addrs; // new packet has a different local ip; hack it in
+        connection_tracker.add(local_syn);
+        // spawn the connection tracker to the background so it can start processing msgs
+        let conntrack_tx = connection_tracker.get_tx();
+        tokio::spawn(async move {
+            connection_tracker.rx_loop().await;
+        });
+        let msg = process_rx.try_recv().unwrap().skip_perf_check();
+        let my_app = "MyApp".to_string();
+        let my_pid = 12345;
+        let test_process_entry = ProcessTrackerEntry {
+            associated_apps: HashMap::from([(my_pid, Some(my_app.clone()))]),
+        };
+        use ProcessTrackerMessage::*;
+        match msg {
+            LookupOne { key, tx } => {
+                tx.send(PerfMsgCheck::new(
+                    ConnectionTrackerMsg::SetConnectionApplication {
+                        key,
+                        application: Some(test_process_entry),
+                    },
+                ))
+                .await
+                .unwrap();
+            }
+            _wtf => panic!("Got unknown message: {:?}", _wtf),
+        }
+        // now verify that the ConnectionTracker correctly updated the state
+        // use the tx/rx interface instead of the internals to ensure no race condition
+        // because this message will be behind the SetApplication message
+        let (conns_tx, mut conns_rx) = tokio::sync::mpsc::unbounded_channel();
+        conntrack_tx
+            .send(PerfMsgCheck::new(ConnectionTrackerMsg::GetConnections {
+                tx: conns_tx,
+            }))
+            .await
+            .unwrap();
+        let mut connections = conns_rx.recv().await.unwrap();
+        assert_eq!(connections.len(), 1);
+        let connection = connections.pop().unwrap();
+        let associated_apps = connection.associated_apps.unwrap();
+        assert_eq!(associated_apps.len(), 1);
+        let (test_pid, test_app) = associated_apps.iter().next().unwrap();
+        assert_eq!(*test_pid, my_pid);
+        assert_eq!(*test_app, Some(my_app));
     }
 }

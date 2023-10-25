@@ -12,7 +12,7 @@ use std::{println as debug, println as warn};
 use tokio::sync::mpsc::channel;
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 
-use crate::connection::ConnectionKey;
+use crate::connection::{ConnectionKey, ConnectionTrackerMsg, ConnectionTrackerSender};
 use crate::perf_check;
 use crate::utils::{make_perf_check_stats, PerfCheckStats, PerfMsgCheck};
 
@@ -20,7 +20,7 @@ use crate::utils::{make_perf_check_stats, PerfCheckStats, PerfMsgCheck};
 pub enum ProcessTrackerMessage {
     LookupOne {
         key: ConnectionKey,
-        tx: UnboundedSender<Option<ProcessTrackerEntry>>,
+        tx: ConnectionTrackerSender,
     },
     UpdateCache,
     UpdatePidMapping {
@@ -48,6 +48,7 @@ pub struct ProcessTracker {
     msgs_received: StatHandle,
     dump_cache_perf_stat: PerfCheckStats,
     update_cache_perf_stat: PerfCheckStats,
+    lookup_queue: Vec<(ConnectionKey, ConnectionTrackerSender)>, // where we store queued lookup requests
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +69,7 @@ impl ProcessTracker {
             msgs_received,
             dump_cache_perf_stat: make_perf_check_stats("dump_cache", &mut stats),
             update_cache_perf_stat: make_perf_check_stats("update_cache", &mut stats),
+            lookup_queue: Vec::new(),
         }
     }
 
@@ -116,7 +118,7 @@ impl ProcessTracker {
                 debug!("Got msg: {:?}", msg); // all the rest are short enough to log via Debug
             }
             match &msg {
-                LookupOne { key, tx } => self.handle_lookup(key, tx),
+                LookupOne { key, tx } => self.lookup_or_queue(key.clone(), tx.clone()),
                 UpdateCache => self.update_cache(),
                 DumpCache { tx } => {
                     let start = Instant::now();
@@ -151,12 +153,8 @@ impl ProcessTracker {
         }
     }
 
-    fn handle_lookup(
-        &self,
-        key: &ConnectionKey,
-        tx: &UnboundedSender<Option<ProcessTrackerEntry>>,
-    ) {
-        let reply = if key.ip_proto == etherparse::IpNumber::Tcp as u8 {
+    fn lookup_from_cache(&self, key: &ConnectionKey) -> Option<ProcessTrackerEntry> {
+        if key.ip_proto == etherparse::IpNumber::Tcp as u8 {
             if let Some(entry) = self.tcp_cache.get(&key) {
                 Some(entry.clone())
             } else {
@@ -170,12 +168,31 @@ impl ProcessTracker {
             } else {
                 None
             }
-        };
-        if let Err(e) = tx.send(reply) {
-            warn!(
-                "Failed to send reply from ProcessTracker::handle_lookup!?: {}",
-                e
-            );
+        }
+    }
+
+    /**
+     * If we get a request to lookup one application, if we have the data now, send it immediately.
+     * If not, queue it until the next update
+     */
+
+    fn lookup_or_queue(&mut self, key: ConnectionKey, tx: ConnectionTrackerSender) {
+        let reply = self.lookup_from_cache(&key);
+        if reply.is_some() {
+            if let Err(e) = tx.try_send(PerfMsgCheck::new(
+                ConnectionTrackerMsg::SetConnectionApplication {
+                    key,
+                    application: reply,
+                },
+            )) {
+                warn!(
+                    "Failed to send reply from ProcessTracker::handle_lookup!?: {}",
+                    e
+                );
+            }
+        } else {
+            // try again on next refresh to avoid a race condition
+            self.lookup_queue.push((key.clone(), tx.clone()));
         }
     }
 
@@ -242,12 +259,34 @@ impl ProcessTracker {
         // last, move new cache into place
         self.tcp_cache = new_tcp_cache;
         self.udp_cache = new_udp_cache;
+        self.process_queued_lookups();
         perf_check!(
             "ProcessTracker::update_cache",
             start,
             std::time::Duration::from_millis(25),
             self.update_cache_perf_stat
         );
+    }
+
+    /**
+     * This is called after an update, so process any queued lookups that were hoping
+     * that their application was listed in the most recent update.
+     *
+     * If it's not, just return None so they can track the stats appropriately
+     */
+
+    fn process_queued_lookups(&mut self) {
+        while let Some((key, tx)) = self.lookup_queue.pop() {
+            let application = self.lookup_from_cache(&key);
+            if let Err(e) = tx.try_send(PerfMsgCheck::new(
+                ConnectionTrackerMsg::SetConnectionApplication {
+                    key,
+                    application: application,
+                },
+            )) {
+                warn!("Problem sending to the ConnectionTracker: {}", e);
+            }
+        }
     }
 }
 
@@ -329,6 +368,10 @@ fn make_pid2process() -> Result<HashMap<u32, String>, Box<dyn std::error::Error>
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
+    use libconntrack_wasm::IpProtocol;
+
     use super::*;
     #[tokio::test]
     async fn process_update() {
@@ -371,6 +414,50 @@ mod test {
             }
         }
         assert!(found_it);
+    }
+
+    #[tokio::test]
+    async fn test_queued_lookups() {
+        let mut process_tracker = ProcessTracker::new(
+            128,
+            ExportedStatRegistry::new("process_tracker", Instant::now()),
+        );
+        let local_ip = IpAddr::from_str("1.1.1.1").unwrap();
+        let remote_ip = IpAddr::from_str("2.2.2.2").unwrap();
+        let (conntrack_tx, mut conntrack_rx) = tokio::sync::mpsc::channel(128);
+        let test_key = ConnectionKey {
+            local_ip,
+            remote_ip,
+            local_l4_port: 3333,
+            remote_l4_port: 4444,
+            ip_proto: IpProtocol::TCP.to_wire(),
+        };
+        assert_eq!(process_tracker.lookup_queue.len(), 0);
+        // cache is empty, so lookup should queue
+        process_tracker.lookup_or_queue(test_key.clone(), conntrack_tx);
+        assert_eq!(process_tracker.lookup_queue.len(), 1);
+        let my_pid = 12345;
+        let my_app = "MyApp".to_string();
+        // fake insert some data into the queue
+        process_tracker.tcp_cache.insert(
+            test_key.clone(),
+            ProcessTrackerEntry {
+                associated_apps: HashMap::from([(my_pid, Some(my_app.clone()))]),
+            },
+        );
+        process_tracker.process_queued_lookups();
+        use ConnectionTrackerMsg::*;
+        match conntrack_rx.try_recv().unwrap().skip_perf_check() {
+            SetConnectionApplication { key, application } => {
+                assert_eq!(key, test_key);
+                let application = application.unwrap();
+                assert_eq!(application.associated_apps.len(), 1);
+                let (test_pid, test_app) = application.associated_apps.iter().next().unwrap();
+                assert_eq!(*test_pid, my_pid);
+                assert_eq!(*test_app, Some(my_app));
+            }
+            _other => panic!("Expected SetConnectionApplication: got {:?}", _other),
+        }
     }
 
     /**
