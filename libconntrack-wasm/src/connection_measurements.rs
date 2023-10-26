@@ -25,7 +25,7 @@ pub struct ConnectionMeasurements {
     pub probe_report_summary: ProbeReportSummary,
     pub user_annotation: Option<String>, // an human supplied comment on this connection
     pub user_agent: Option<String>, // when created via a web request, store the user-agent header
-    pub associated_apps: HashMap<u32, Option<String>>, // PID --> ProcessName, if we know it
+    pub associated_apps: Option<HashMap<u32, Option<String>>>, // PID --> ProcessName, if we know it
     /// Whether this connection has been (partially) closed. I.e., at least on FIN of RST ]
     /// was received.
     pub close_has_started: bool,

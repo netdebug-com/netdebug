@@ -363,9 +363,8 @@ pub fn handle_dumpflows_reply(
         } else {
             flow_elm.set_inner_html(&flow_name);
         }
-        let apps = if !measurements.associated_apps.is_empty() {
-            measurements
-                .associated_apps
+        let apps = match &measurements.associated_apps {
+            Some(apps) => apps
                 .iter()
                 .map(|(p, a)| {
                     if let Some(name) = a {
@@ -375,9 +374,8 @@ pub fn handle_dumpflows_reply(
                     }
                 })
                 .collect::<Vec<String>>()
-                .join(", ")
-        } else {
-            "(unknown!)".to_string()
+                .join(", "),
+            None => "(unknown)".to_string(),
         };
         let app_elm = html!("td").unwrap();
         app_elm.set_inner_html(&apps);

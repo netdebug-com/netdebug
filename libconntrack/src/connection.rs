@@ -13,7 +13,7 @@ use common_wasm::{
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{
     aggregate_counters::{AggregateCounter, AggregateCounterKind, TrafficCounters},
-    DnsTrackerEntry, IpProtocol, RateEstimator,
+    ConnectionMeasurements, DnsTrackerEntry, IpProtocol, RateEstimator,
 };
 #[cfg(not(test))]
 use log::{debug, info, warn};
@@ -175,8 +175,8 @@ pub enum ConnectionTrackerMsg {
     GetConnectionKeys {
         tx: mpsc::Sender<Vec<ConnectionKey>>,
     },
-    GetConnections {
-        tx: mpsc::UnboundedSender<Vec<Connection>>,
+    GetConnectionMeasurements {
+        tx: mpsc::UnboundedSender<Vec<ConnectionMeasurements>>,
     },
     SetConnectionRemoteHostnameDns {
         key: ConnectionKey,
@@ -329,8 +329,8 @@ impl<'a> ConnectionTracker<'a> {
                         );
                     }
                 }
-                GetConnections { tx } => {
-                    self.handle_get_connections(tx);
+                GetConnectionMeasurements { tx } => {
+                    self.handle_get_connection_measurements(tx);
                 }
                 SetConnectionRemoteHostnameDns {
                     key,
@@ -527,12 +527,15 @@ impl<'a> ConnectionTracker<'a> {
         }
     }
 
-    fn handle_get_connections(&self, tx: tokio::sync::mpsc::UnboundedSender<Vec<Connection>>) {
+    fn handle_get_connection_measurements(
+        &mut self,
+        tx: tokio::sync::mpsc::UnboundedSender<Vec<ConnectionMeasurements>>,
+    ) {
         let connections = self
             .connections
-            .values()
-            .cloned()
-            .collect::<Vec<Connection>>();
+            .iter_mut()
+            .map(|(_key, c)| c.to_connection_measurements(None))
+            .collect::<Vec<ConnectionMeasurements>>();
         if let Err(e) = tx.send(connections) {
             warn!(
                 "Tried to send the connections back to caller, but failed: {}",
@@ -1419,11 +1422,14 @@ impl Connection {
         }
     }
 
+    /**
+     * Convert a `struct Connection` which has a lot of operational state to
+     * a `struct ConnectionMeasurements` which only has the measurement info
+     * that we want to export
+     */
+
     pub fn to_connection_measurements(
         &mut self,
-        dns_cache: &HashMap<IpAddr, DnsTrackerEntry>,
-        tcp_cache: &HashMap<ConnectionKey, ProcessTrackerEntry>,
-        udp_cache: &HashMap<(IpAddr, u16), ProcessTrackerEntry>,
         probe_timeout: Option<Duration>,
     ) -> libconntrack_wasm::ConnectionMeasurements {
         // if there's an active probe round going, finish it/generate the report if it's been longer
@@ -1439,129 +1445,26 @@ impl Connection {
                 self.generate_probe_report(probe_round.round_number as u32, None, false);
             }
         }
-        let local_hostname = if let Some(entry) = dns_cache.get(&self.connection_key.local_ip) {
-            Some(entry.hostname.clone())
-        } else {
-            None
-        };
-        let mut remote_hostname = self.remote_hostname.clone();
-        let remote_hostname_dns_cache =
-            if let Some(entry) = dns_cache.get(&self.connection_key.remote_ip) {
-                Some(entry.hostname.clone())
-            } else {
-                None
-            };
-        // sanity check the two sources of remote_hostname
-        match (&remote_hostname, &remote_hostname_dns_cache) {
-            (None, None) | (Some(_), Some(_)) => (), // they're in sync
-            (None, Some(_)) | (Some(_), None) => {
-                debug!(
-                    "DNS cache and stored hostname out of sync: stored {:?} cached {:?}",
-                    &remote_hostname, &remote_hostname_dns_cache
-                );
-                // use which ever one we actually have
-                if remote_hostname.is_none() {
-                    // store it this way
-                    self.remote_hostname = remote_hostname_dns_cache.clone();
-                    self.add_dns_dst_aggregate_counter();
-                    remote_hostname = remote_hostname_dns_cache;
-                }
-            }
-        }
-        if remote_hostname.is_none() {
-            // if we're STILL none, log it
-            debug!(
-                "UNABLE to find DNS lookup for {}",
-                self.connection_key.remote_ip
-            )
-        }
-
-        use IpProtocol::*;
-        let ip_proto = IpProtocol::from_wire(self.connection_key.ip_proto);
-        let inaddr_any = IpAddr::from([0, 0, 0, 0]);
-        let associated_apps = match ip_proto {
-            TCP => {
-                if let Some(entry) = tcp_cache.get(&self.connection_key) {
-                    entry.associated_apps.clone()
-                } else {
-                    HashMap::new()
-                }
-            }
-            UDP => {
-                /*
-                 * UDP is a hard case to map, because depending on the application it may:
-                 * 1) Bind INADDR_ANY (0.0.0.0) or the specific interface when it listens
-                 * 2) May or may not connect(3) to the remote
-                 *
-                 * So we store the UDP data by (src_ip, port) pair and try both the interface
-                 * address and the INADDR_ANY address types to find it
-                 */
-                let key = (
-                    self.connection_key.local_ip,
-                    self.connection_key.local_l4_port,
-                );
-                let key_in_addr_any = (inaddr_any.clone(), self.connection_key.local_l4_port);
-                if let Some(entry) = udp_cache.get(&key) {
-                    entry.associated_apps.clone()
-                } else if let Some(entry) = udp_cache.get(&key_in_addr_any) {
-                    entry.associated_apps.clone()
-                } else {
-                    HashMap::new()
-                }
-            }
-            _ => HashMap::new(), // no info
-        };
         libconntrack_wasm::ConnectionMeasurements {
             tx_byte_rate: self.tx_byte_rate.clone(),
             tx_packet_rate: self.tx_packet_rate.clone(),
             rx_byte_rate: self.rx_byte_rate.clone(),
             rx_packet_rate: self.rx_packet_rate.clone(),
-            local_hostname,
+            local_hostname: Some("localhost".to_string()),
             local_ip: self.connection_key.local_ip.clone(),
             local_l4_port: self.connection_key.local_l4_port,
-            remote_hostname,
+            remote_hostname: self.remote_hostname.clone(),
             remote_ip: self.connection_key.remote_ip.clone(),
             remote_l4_port: self.connection_key.remote_l4_port,
-            ip_proto,
+            ip_proto: IpProtocol::from_wire(self.connection_key.ip_proto),
             probe_report_summary: self.probe_report_summary.clone(),
             user_annotation: self.user_annotation.clone(),
             user_agent: self.user_agent.clone(),
-            associated_apps,
+            associated_apps: self.associated_apps.clone(),
             start_tracking_time: self.start_tracking_time.clone(),
             last_packet_time: self.last_packet_time,
             close_has_started: self.close_has_started(),
             four_way_close_done: self.is_four_way_close_done_or_rst(),
-        }
-    }
-
-    /**
-     * This is called when we set the self.remote_hostname field so that
-     * we can add this connection to the matching aggregate group traffic
-     * counter.
-     *
-     * This will intentionally panic if it's called without a valid self.remote_host
-     *
-     * Note that there are two code paths here, one which adds the counter to the
-     * underlying ConnectionTracker and one which does not.  If the code takes
-     * the path which does not add the counter, we risk a warn!() of things being
-     * out of sync.  This second path should only happen as a race condition and the
-     * warn!()'s should not persist but let's see how often they happen and if we
-     * need to do the gymnastics to fix up the second code path (not trivial)
-     */
-    fn add_dns_dst_aggregate_counter(&mut self) {
-        match utils::dns_to_cannonical_domain(
-            self.remote_hostname
-                .as_ref()
-                .expect("Valid remote Hostname"),
-        ) {
-            Ok(domain) => {
-                self.aggregate_groups
-                    .insert(AggregateCounterKind::DnsDstDomain { name: domain });
-            }
-            Err(e) => warn!(
-                "Invalid remote_hostname for {} :: {}",
-                self.connection_key, e
-            ),
         }
     }
 }
@@ -2203,9 +2106,9 @@ pub mod test {
         tokio::time::sleep(Duration::milliseconds(100).to_std().unwrap()).await;
         let (connections_tx, mut connections_rx) = tokio::sync::mpsc::unbounded_channel();
         conn_track_tx
-            .try_send(PerfMsgCheck::new(ConnectionTrackerMsg::GetConnections {
-                tx: connections_tx,
-            }))
+            .try_send(PerfMsgCheck::new(
+                ConnectionTrackerMsg::GetConnectionMeasurements { tx: connections_tx },
+            ))
             .unwrap();
         // make sure there's one and make sure remote_host is populated as expected
         let mut connections = connections_rx.recv().await.unwrap();
@@ -2470,9 +2373,9 @@ pub mod test {
         // because this message will be behind the SetApplication message
         let (conns_tx, mut conns_rx) = tokio::sync::mpsc::unbounded_channel();
         conntrack_tx
-            .send(PerfMsgCheck::new(ConnectionTrackerMsg::GetConnections {
-                tx: conns_tx,
-            }))
+            .send(PerfMsgCheck::new(
+                ConnectionTrackerMsg::GetConnectionMeasurements { tx: conns_tx },
+            ))
             .await
             .unwrap();
         let mut connections = conns_rx.recv().await.unwrap();
