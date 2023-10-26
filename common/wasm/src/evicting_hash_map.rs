@@ -33,6 +33,15 @@ where
         self.map.keys()
     }
 
+    /// Create an iterator
+    pub fn iter(&self) -> linked_hash_map::Iter<K, V> {
+        self.map.iter()
+    }
+    /// Create a mutable iterator
+    pub fn iter_mut(&mut self) -> linked_hash_map::IterMut<K, V> {
+        self.map.iter_mut()
+    }
+
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         while self.map.len() >= self.max_elements && !self.map.contains_key(&k) {
             // evict oldest entry

@@ -17,6 +17,7 @@ use libconntrack_wasm::DnsTrackerEntry;
 
 use crate::{
     connection::{ConnectionKey, ConnectionTrackerMsg, ConnectionTrackerSender},
+    try_send_sync,
     utils::PerfMsgCheck,
 };
 use dns_parser::{self, QueryType};
@@ -502,19 +503,24 @@ impl<'a> DnsTracker<'a> {
         let remote_hostname = if let Some(entry) = self.reverse_map.get(&ip) {
             Some(entry.hostname.clone())
         } else {
+            /*
+            TODO:
+            check expired and if not
+            queue request in an evicting hash and send out a DNS request for the PTR record
+            nuke the lookup_batch function
+            */
             None
         };
         debug!("Looking up IP: {} - found {:?}", ip, remote_hostname);
         use ConnectionTrackerMsg::*;
-        if let Err(e) = tx.try_send(PerfMsgCheck::new(SetConnectionRemoteHostnameDns {
-            key,
-            remote_hostname,
-        })) {
-            warn!(
-                "Failed to send DnsLookup reply to connection manager: {}",
-                e
-            );
-        }
+        try_send_sync!(
+            tx,
+            "conntracker",
+            SetConnectionRemoteHostnameDns {
+                key,
+                remote_hostname,
+            }
+        );
     }
 
     fn fetch_stats(&self, tx: UnboundedSender<DnsTrackerStats>) {
