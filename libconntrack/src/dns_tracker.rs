@@ -39,6 +39,7 @@ pub struct DnsTracker<'a> {
     pub pending: HashMap<DnsPendingKey, DnsPendingEntry>,
     pub unparsed_pkt_count: usize,
     pub local_dns_servers: HashMap<IpAddr, usize>,
+    pending_lookups: EvictingHashMap<'a, IpAddr, (Vec<ConnectionKey>, ConnectionTrackerSender)>,
 }
 
 pub struct DnsTrackerStats {
@@ -90,6 +91,8 @@ impl<'a> DnsTracker<'a> {
             reverse_map_recently_expired: EvictingHashMap::new(expired_entries_capacity, |_, _| {}),
             unparsed_pkt_count: 0,
             local_dns_servers: HashMap::new(),
+            // TODO: use the eviction callback to track DNS entires that never got a reply
+            pending_lookups: EvictingHashMap::new(expired_entries_capacity, |_, _| {}),
         }
     }
 
@@ -145,7 +148,7 @@ impl<'a> DnsTracker<'a> {
                     tx,
                     use_expired,
                 } => self.lookup_batch(addrs, tx, use_expired).await,
-                Lookup { ip, key, tx } => self.lookup_for_connection_tracker(ip, key, tx),
+                Lookup { ip, key, tx } => self.lookup_for_connection_tracker(ip, key, tx).await,
                 GetStats { tx } => self.fetch_stats(tx),
             }
         }
@@ -294,6 +297,7 @@ impl<'a> DnsTracker<'a> {
                         ttl: Some(chrono::Duration::seconds(answer.ttl as i64)),
                     },
                 );
+                self.check_pending_lookups(ip, hostname);
             }
         }
     }
@@ -376,6 +380,10 @@ impl<'a> DnsTracker<'a> {
      */
 
     async fn send_dns_ptr_lookup(&mut self, ip: IpAddr) {
+        if cfg!(test) {
+            // if we're a test, never send a packet out
+            return;
+        }
         let dns_server = if self.local_dns_servers.len() > 0 {
             // pick the most common DNS server we've seen a reply from
             self.local_dns_servers
@@ -494,22 +502,31 @@ impl<'a> DnsTracker<'a> {
      * for the lifetime of the connection
      */
 
-    fn lookup_for_connection_tracker(
-        &self,
+    async fn lookup_for_connection_tracker(
+        &mut self,
         ip: IpAddr,
         key: ConnectionKey,
         tx: ConnectionTrackerSender,
     ) {
         let remote_hostname = if let Some(entry) = self.reverse_map.get(&ip) {
             Some(entry.hostname.clone())
-        } else {
+        } else if let Some(entry) = self.reverse_map_recently_expired.get_mut(&ip) {
             /*
             TODO:
             check expired and if not
             queue request in an evicting hash and send out a DNS request for the PTR record
             nuke the lookup_batch function
             */
-            None
+            Some(entry.hostname.clone())
+        } else {
+            if !self.pending_lookups.contains_key(&ip) {
+                self.pending_lookups.insert(ip.clone(), (vec![key], tx));
+                self.send_dns_ptr_lookup(ip).await;
+            } else {
+                let (keys, _tx) = self.pending_lookups.get_mut(&ip).unwrap();
+                keys.push(key);
+            }
+            return;
         };
         debug!("Looking up IP: {} - found {:?}", ip, remote_hostname);
         use ConnectionTrackerMsg::*;
@@ -517,7 +534,7 @@ impl<'a> DnsTracker<'a> {
             tx,
             "conntracker",
             SetConnectionRemoteHostnameDns {
-                key,
+                keys: vec![key],
                 remote_hostname,
             }
         );
@@ -528,6 +545,29 @@ impl<'a> DnsTracker<'a> {
             unparsed_pkt_count: self.unparsed_pkt_count,
         }) {
             warn!("Sending error processing fetch_stats(): {}", e);
+        }
+    }
+
+    /**
+     * When we learn a new ip --> hostname mapping, check to see if
+     * the ConnectionTracker is waiting to hear about this IP and
+     * notify it if it is.
+     *
+     * Remove the entry if it's found
+     *
+     */
+    fn check_pending_lookups(&mut self, ip: IpAddr, remote_hostname: String) {
+        if self.pending_lookups.contains_key(&ip) {
+            let (keys, tx) = self.pending_lookups.remove(&ip).unwrap();
+            use ConnectionTrackerMsg::*;
+            try_send_sync!(
+                tx,
+                "Connection_tracker",
+                SetConnectionRemoteHostnameDns {
+                    keys,
+                    remote_hostname: Some(remote_hostname)
+                }
+            );
         }
     }
 }
@@ -661,6 +701,7 @@ pub fn make_dns_ptr_lookup_request(
 mod test {
     use dns_parser::QueryType;
     use etherparse::TransportHeader;
+    use tokio::sync::mpsc::channel;
 
     use crate::{
         connection::{test::test_dir, ConnectionTracker},
@@ -982,6 +1023,73 @@ mod test {
         let entry = dns_tracker.reverse_map.get(&dns_ptr_ip).unwrap();
         assert_eq!(entry.hostname, dns_ptr_hostname);
         assert!(entry.from_ptr_record);
+    }
+
+    /**
+     * Do a lookup on an empty cache, which should create a pending entry,
+     * and then fake the reply and verify we get notified about the new
+     * entry (what we asked for) and that the pending entry got cleared.
+     *
+     * Running this test will actually call the code (``DnsTracker::send_dns_ptr_lookup``)
+     * to send a PTR request out, but it's 'if cfg!(test)'d to not send packets so
+     * that's harmless.
+     */
+
+    #[tokio::test]
+    async fn dns_pending_lookup() {
+        let dns_ptr_ip = IpAddr::from_str("128.8.128.8").unwrap();
+        let dns_ptr_hostname = "netman.cs.umd.edu".to_string();
+        let (tx, mut rx) = channel(128);
+        /*
+         * 0000   00 02 81 80 00 01 00 01 00 00 00 00 01 38 03 31   .............8.1
+         * 0010   32 38 01 38 03 31 32 38 07 69 6e 2d 61 64 64 72   28.8.128.in-addr
+         * 0020   04 61 72 70 61 00 00 0c 00 01 c0 0c 00 0c 00 01   .arpa...........
+         * 0030   00 00 0e 02 00 13 06 6e 65 74 6d 61 6e 02 63 73   .......netman.cs
+         * 0040   03 75 6d 64 03 65 64 75 00                        .umd.edu.
+         */
+        let dns_ptr_reply = [
+            0x00, 0x02, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x38,
+            0x03, 0x31, 0x32, 0x38, 0x01, 0x38, 0x03, 0x31, 0x32, 0x38, 0x07, 0x69, 0x6e, 0x2d,
+            0x61, 0x64, 0x64, 0x72, 0x04, 0x61, 0x72, 0x70, 0x61, 0x00, 0x00, 0x0c, 0x00, 0x01,
+            0xc0, 0x0c, 0x00, 0x0c, 0x00, 0x01, 0x00, 0x00, 0x0e, 0x02, 0x00, 0x13, 0x06, 0x6e,
+            0x65, 0x74, 0x6d, 0x61, 0x6e, 0x02, 0x63, 0x73, 0x03, 0x75, 0x6d, 0x64, 0x03, 0x65,
+            0x64, 0x75, 0x00,
+        ];
+        let mut dns_tracker = DnsTracker::new(10);
+        let key = ConnectionKey {
+            local_ip: IpAddr::from_str("127.0.0.1").unwrap(),
+            remote_ip: IpAddr::from_str("8.8.8.8").unwrap(),
+            local_l4_port: 1234,
+            remote_l4_port: 53,
+            ip_proto: 6,
+        };
+        dns_tracker
+            .lookup_for_connection_tracker(dns_ptr_ip, key.clone(), tx)
+            .await;
+        assert_eq!(dns_tracker.pending_lookups.len(), 1);
+
+        let timestamp = DateTime::<Utc>::UNIX_EPOCH;
+        dns_tracker
+            .parse_dns(key.clone(), timestamp, dns_ptr_reply.to_vec(), true)
+            .await;
+        assert_eq!(dns_tracker.reverse_map.len(), 1);
+        assert!(dns_tracker.reverse_map.contains_key(&dns_ptr_ip));
+        let entry = dns_tracker.reverse_map.get(&dns_ptr_ip).unwrap();
+        assert_eq!(entry.hostname, dns_ptr_hostname);
+        assert!(entry.from_ptr_record);
+        // now verify we got the notification
+        use ConnectionTrackerMsg::*;
+        match rx.try_recv().unwrap().skip_perf_check() {
+            SetConnectionRemoteHostnameDns {
+                keys: test_key,
+                remote_hostname,
+            } => {
+                assert_eq!(test_key, vec![key]);
+                assert_eq!(remote_hostname.unwrap(), dns_ptr_hostname);
+            }
+            _other => panic!("Got unexpected notification: {:?}", _other),
+        }
+        assert_eq!(dns_tracker.pending_lookups.len(), 0);
     }
 
     #[test]

@@ -179,7 +179,7 @@ pub enum ConnectionTrackerMsg {
         tx: mpsc::UnboundedSender<Vec<ConnectionMeasurements>>,
     },
     SetConnectionRemoteHostnameDns {
-        key: ConnectionKey,
+        keys: Vec<ConnectionKey>,
         remote_hostname: Option<String>, // will be None if lookup fails
     },
     SetConnectionApplication {
@@ -333,10 +333,10 @@ impl<'a> ConnectionTracker<'a> {
                     self.handle_get_connection_measurements(tx);
                 }
                 SetConnectionRemoteHostnameDns {
-                    key,
+                    keys,
                     remote_hostname,
                 } => {
-                    self.set_connection_remote_hostname_dns(&key, remote_hostname);
+                    self.set_connection_remote_hostname_dns(&keys, remote_hostname);
                 }
                 GetTrafficCounters { tx } => self.get_conntrack_traffic_counters(tx),
                 SetConnectionApplication { key, application } => {
@@ -546,31 +546,33 @@ impl<'a> ConnectionTracker<'a> {
 
     fn set_connection_remote_hostname_dns(
         &mut self,
-        key: &ConnectionKey,
+        keys: &Vec<ConnectionKey>,
         remote_hostname: Option<String>,
     ) {
-        if let Some(connection) = self.connections.get_mut(key) {
-            connection.remote_hostname = remote_hostname.clone();
-            if let Some(remote_hostname) = remote_hostname {
-                match utils::dns_to_cannonical_domain(&remote_hostname) {
-                    Ok(domain) => {
-                        // add this group and make sure the connection tracker is tracking it
-                        let group = AggregateCounterKind::DnsDstDomain { name: domain };
-                        connection.aggregate_groups.insert(group.clone());
-                        if !self.aggregate_traffic_counters.contains_key(&group) {
-                            self.aggregate_traffic_counters
-                                .insert(group, TrafficCounters::new());
+        if let Some(remote_hostname) = remote_hostname {
+            for key in keys {
+                if let Some(connection) = self.connections.get_mut(key) {
+                    connection.remote_hostname = Some(remote_hostname.clone());
+                    match utils::dns_to_cannonical_domain(&remote_hostname) {
+                        Ok(domain) => {
+                            // add this group and make sure the connection tracker is tracking it
+                            let group = AggregateCounterKind::DnsDstDomain { name: domain };
+                            connection.aggregate_groups.insert(group.clone());
+                            if !self.aggregate_traffic_counters.contains_key(&group) {
+                                self.aggregate_traffic_counters
+                                    .insert(group, TrafficCounters::new());
+                            }
                         }
+                        Err(e) => warn!("Unparsible DNS name: {} :: {}", &remote_hostname, e),
                     }
-                    Err(e) => warn!("Unparsible DNS name: {} :: {}", &remote_hostname, e),
                 }
             }
         } else {
             // This can happen if the connection is torn down faster than we can get the DNS
             // name back from the DNS tracker; make it debug for now
             debug!(
-                "Tried to lookup unknown key {} in the conneciton map trying to set DNS name {:?}",
-                key, remote_hostname
+                "Tried to lookup unknown key(s) {:?} in the conneciton map trying to set DNS name {:?}",
+                keys, remote_hostname
             );
         }
     }
