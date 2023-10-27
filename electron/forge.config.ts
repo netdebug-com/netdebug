@@ -12,6 +12,7 @@ import { rendererConfig } from './webpack.renderer.config';
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    extraResource: "extra-resources",
   },
   rebuildConfig: {},
   makers: [new MakerSquirrel({}), new MakerZIP({}, ['darwin']), new MakerRpm({}), new MakerDeb({})],
@@ -19,6 +20,10 @@ const config: ForgeConfig = {
     new AutoUnpackNativesPlugin({}),
     new WebpackPlugin({
       mainConfig,
+      // Need this otherwise I can't connect to websocket in dev mode?!?!
+      // see https://stackoverflow.com/questions/70132291/electron-content-security-policy-error-when-connecting-to-my-api
+      // #black-magic
+      devContentSecurityPolicy: "default-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* ws://localhost:*;",
       renderer: {
         config: rendererConfig,
         entryPoints: [

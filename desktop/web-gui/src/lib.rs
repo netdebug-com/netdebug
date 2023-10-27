@@ -38,20 +38,32 @@ extern "C" {
 }
 
 fn create_websocket() -> Result<WebSocket, JsValue> {
-    let location = web_sys::window().expect("web_sys::window()").location();
-    // connect back to server with same host + port and select wss vs. ws
-    let proto = match location.protocol()?.as_str() {
-        "https:" => "wss",
-        "http:" => "ws",
-        _ => {
-            console_log!(
-                "Weird location.protocol(): - {} - default to wss://",
-                location.protocol().unwrap()
-            );
-            "wss"
-        } // default to more secure wss
+    let window = web_sys::window().expect("web_sys::window()");
+    let is_electron = window
+        .navigator()
+        .user_agent()
+        .expect("user-agent")
+        .contains("Electron");
+    let url = if is_electron {
+        // TODO: it's a hack. but will do until we move to react
+        "ws://localhost:33434/ws".to_string()
+    } else {
+        let location = window.location();
+        // connect back to server with same host + port and select wss vs. ws
+        let proto = match location.protocol()?.as_str() {
+            "https:" => "wss",
+            "http:" => "ws",
+            _ => {
+                console_log!(
+                    "Weird location.protocol(): - {} - default to wss://",
+                    location.protocol().unwrap()
+                );
+                "wss"
+            } // default to more secure wss
+        };
+        format!("{}://{}/ws", proto, location.host()?)
     };
-    let url = format!("{}://{}/ws", proto, location.host()?);
+    console_log!("Connection to websocket at {}", url);
     let ws = WebSocket::new(url.as_str())?;
     Ok(ws)
 }

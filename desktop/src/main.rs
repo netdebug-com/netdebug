@@ -33,6 +33,11 @@ pub struct Args {
     #[arg(long, default_value = "desktop/web-gui/pkg")]
     pub wasm_root: String,
 
+    /// Controls whether static content (html, css) and wasm are served by the HTTP
+    /// server or not.
+    #[arg(long, default_value_t = false)]
+    pub no_wasm_html_serving: bool,
+
     /// which TCP port to listen on
     #[arg(long, default_value_t = 33434)] // traceroute port, for fun
     pub listen_port: u16,
@@ -133,19 +138,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
         desktop_common::get_git_hash_version()
     );
     let listen_addr = ([127, 0, 0, 1], args.listen_port);
-    warp::serve(
-        make_desktop_http_routes(
-            &args.wasm_root,
-            &args.html_root,
+
+    // Warp's filter and their types are so convoluted that I could not find
+    // another way to make this work than this. Stupid warp
+    if args.no_wasm_html_serving {
+        warp::serve(make_common_desktop_http_routes(
             tx,
             dns_tx,
             process_tx,
             Arc::new(counter_registries.registries()),
+        ))
+        .run(listen_addr)
+        .await
+    } else {
+        warp::serve(
+            make_common_desktop_http_routes(
+                tx,
+                dns_tx,
+                process_tx,
+                Arc::new(counter_registries.registries()),
+            )
+            .or(make_desktop_wasm_html_http_routes(
+                &args.wasm_root,
+                &args.html_root,
+            )),
         )
-        .await,
-    )
-    .run(listen_addr)
-    .await;
+        .run(listen_addr)
+        .await;
+    }
     Ok(())
 }
 
@@ -163,16 +183,12 @@ pub fn make_counter_routes(
 
 /***** A bunch of copied/funged code from libwebserver - think about how to refactor */
 
-pub async fn make_desktop_http_routes(
-    wasm_root: &String,
-    html_root: &String,
+pub fn make_common_desktop_http_routes(
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: ProcessTrackerSender,
     counter_registries: SharedExportedStatRegistries,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-    let webclient =
-        libwebserver::http_routes::make_webclient_route(&wasm_root).with(warp::log("webclient"));
     let ws = make_desktop_ws_route(
         connection_tracker,
         dns_tracker,
@@ -180,13 +196,21 @@ pub async fn make_desktop_http_routes(
         counter_registries.clone(),
     )
     .with(warp::log("websocket"));
-    let static_path = warp::fs::dir(html_root.clone()).with(warp::log("static"));
     let counter_path =
         make_counter_routes(counter_registries).with(warp::log("counters/get_counters"));
 
-    // this is the order that the filters try to match; it's important that
-    // it's in this order to make sure the routing works correctly
-    let routes = ws.or(webclient).or(static_path).or(counter_path);
+    let routes = ws.or(counter_path);
+    routes
+}
+
+pub fn make_desktop_wasm_html_http_routes(
+    wasm_root: &String,
+    html_root: &String,
+) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    let webclient =
+        libwebserver::http_routes::make_webclient_route(&wasm_root).with(warp::log("webclient"));
+    let static_path = warp::fs::dir(html_root.clone()).with(warp::log("static"));
+    let routes = webclient.or(static_path);
     routes
 }
 
