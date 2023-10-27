@@ -100,6 +100,10 @@ where
     pub fn clear(&mut self) {
         self.map.clear()
     }
+
+    pub fn contains_key(&self, k: &K) -> bool {
+        self.map.contains_key(k)
+    }
 }
 
 #[cfg(test)]
