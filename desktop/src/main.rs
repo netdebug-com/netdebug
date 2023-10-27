@@ -14,10 +14,12 @@ use libconntrack::{
     utils::PerfMsgCheck,
 };
 use log::info;
-use std::{collections::HashSet, error::Error, net::IpAddr};
+use std::{collections::HashSet, error::Error, net::IpAddr, sync::Arc};
 use tokio::sync::mpsc::UnboundedSender;
 use warp::Filter;
 use websocket::websocket_handler;
+
+type SharedExportedStatRegistries = Arc<Vec<ExportedStatRegistry>>;
 
 /// Netdebug desktop
 #[derive(Parser, Debug, Clone)]
@@ -138,7 +140,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             tx,
             dns_tx,
             process_tx,
-            counter_registries.registries(),
+            Arc::new(counter_registries.registries()),
         )
         .await,
     )
@@ -148,7 +150,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 pub fn make_counter_routes(
-    registries: Vec<ExportedStatRegistry>,
+    registries: SharedExportedStatRegistries,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::path!("counters" / "get_counters").map(move || {
         // IndexMap iterates over entries in insertion order
@@ -167,12 +169,17 @@ pub async fn make_desktop_http_routes(
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: ProcessTrackerSender,
-    counter_registries: Vec<ExportedStatRegistry>,
+    counter_registries: SharedExportedStatRegistries,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     let webclient =
         libwebserver::http_routes::make_webclient_route(&wasm_root).with(warp::log("webclient"));
-    let ws = make_desktop_ws_route(connection_tracker, dns_tracker, process_tracker)
-        .with(warp::log("websocket"));
+    let ws = make_desktop_ws_route(
+        connection_tracker,
+        dns_tracker,
+        process_tracker,
+        counter_registries.clone(),
+    )
+    .with(warp::log("websocket"));
     let static_path = warp::fs::dir(html_root.clone()).with(warp::log("static"));
     let counter_path =
         make_counter_routes(counter_registries).with(warp::log("counters/get_counters"));
@@ -210,15 +217,24 @@ fn with_process_tracker(
     warp::any().map(move || process_tracker.clone())
 }
 
+fn with_counter_registries(
+    counter_registries: SharedExportedStatRegistries,
+) -> impl warp::Filter<Extract = (SharedExportedStatRegistries,), Error = std::convert::Infallible> + Clone
+{
+    warp::any().map(move || counter_registries.clone())
+}
+
 fn make_desktop_ws_route(
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: ProcessTrackerSender,
+    counter_registries: SharedExportedStatRegistries,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::path("ws")
         .and(with_connection_tracker(connection_tracker))
         .and(with_dns_tracker(dns_tracker))
         .and(with_process_tracker(process_tracker))
+        .and(with_counter_registries(counter_registries))
         .and(warp::ws())
         .and_then(websocket_desktop)
 }
@@ -226,9 +242,16 @@ pub async fn websocket_desktop(
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: ProcessTrackerSender,
+    counter_registries: SharedExportedStatRegistries,
     ws: warp::ws::Ws,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     Ok(ws.on_upgrade(move |websocket| {
-        websocket_handler(connection_tracker, dns_tracker, process_tracker, websocket)
+        websocket_handler(
+            connection_tracker,
+            dns_tracker,
+            process_tracker,
+            counter_registries,
+            websocket,
+        )
     }))
 }

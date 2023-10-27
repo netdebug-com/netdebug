@@ -1,6 +1,7 @@
 mod bandwidth_graph;
 mod dns_tracker;
 mod flow_tracker;
+mod stat_counters;
 mod tabs;
 mod utils;
 use std::{sync::Arc, time::Duration};
@@ -8,6 +9,7 @@ use std::{sync::Arc, time::Duration};
 use bandwidth_graph::BandwidthGraph;
 use dns_tracker::DnsTracker;
 use flow_tracker::FlowTracker;
+use stat_counters::StatCounters;
 use tabs::{Tab, Tabs, TabsContext};
 use web_sys::{MessageEvent, WebSocket};
 
@@ -79,6 +81,7 @@ fn init_tabs(ws: WebSocket) -> Result<Tabs, JsValue> {
     tabs.push(BandwidthGraph::new());
     tabs.push(FlowTracker::new());
     tabs.push(DnsTracker::new());
+    tabs.push(StatCounters::new());
     tabs.extend(test_tabs);
     let tabs = Arc::new(std::sync::Mutex::new(TabsContext::new(
         tabs,
@@ -106,6 +109,9 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, tabs: Tabs) -> Result<(), J
                 DumpDnsCache(cache) => dns_tracker::handle_dump_dns_cache_reply(cache, ws, tabs),
                 DumpAggregateCountersReply(counters) => {
                     bandwidth_graph::handle_aggregate_counters(counters, ws, tabs)
+                }
+                DumpStatCountersReply(counter_map) => {
+                    stat_counters::handle_dump_stat_counters_reply(counter_map, ws, tabs)
                 }
             }
         }
