@@ -19,6 +19,7 @@ pub enum ServerToGuiMessages {
     DumpFlowsReply(Vec<ConnectionMeasurements>),
     DumpDnsCache(HashMap<IpAddr, DnsTrackerEntry>),
     DumpAggregateCountersReply(TrafficCounters),
+    DumpStatCountersReply(HashMap<String, u64>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,4 +27,5 @@ pub enum GuiToServerMessages {
     DumpFlows(),
     DumpDnsCache(),
     DumpAggregateCounters(),
+    DumpStatCounters(),
 }

@@ -1,8 +1,12 @@
 use std::{
     collections::HashMap,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
+use common_wasm::timeseries_stats::{
+    CounterProvider, CounterProviderWithTimeUpdate, ExportedStatRegistry,
+};
 use futures_util::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
@@ -61,6 +65,7 @@ async fn handle_websocket_rx_messages(
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     _process_tracker: ProcessTrackerSender,
+    counter_registries: Arc<Vec<ExportedStatRegistry>>,
 ) {
     while let Some(msg_result) = ws_rx.next().await {
         match msg_result {
@@ -69,8 +74,14 @@ async fn handle_websocket_rx_messages(
                     let json = msg.to_str().expect("msg.is_text() lies!");
                     match serde_json::from_str::<GuiToServerMessages>(&json) {
                         Ok(msg) => {
-                            handle_gui_to_server_msg(msg, &tx, &connection_tracker, &dns_tracker)
-                                .await
+                            handle_gui_to_server_msg(
+                                msg,
+                                &tx,
+                                &connection_tracker,
+                                &dns_tracker,
+                                &counter_registries,
+                            )
+                            .await
                         }
                         Err(e) => {
                             warn!("Failed to parse JSON websocket msg: {:?}", e);
@@ -90,6 +101,7 @@ async fn handle_gui_to_server_msg(
     tx: &UnboundedSender<ServerToGuiMessages>,
     connection_tracker: &ConnectionTrackerSender,
     dns_tracker: &UnboundedSender<DnsTrackerMessage>,
+    counter_registries: &Vec<ExportedStatRegistry>,
 ) {
     let start = std::time::Instant::now();
     match &msg {
@@ -103,8 +115,22 @@ async fn handle_gui_to_server_msg(
         GuiToServerMessages::DumpAggregateCounters {} => {
             handle_dump_aggregate_connection_tracker_counters(tx, connection_tracker).await
         }
+        GuiToServerMessages::DumpStatCounters() => {
+            handle_dump_stat_counters(tx, counter_registries).await
+        }
     }
     perf_check!("process gui message", start, Duration::from_millis(200));
+}
+
+async fn handle_dump_stat_counters(
+    tx: &UnboundedSender<ServerToGuiMessages>,
+    counter_registries: &Vec<ExportedStatRegistry>,
+) {
+    counter_registries.update_time();
+    let msg = ServerToGuiMessages::DumpStatCountersReply(counter_registries.get_counter_map());
+    if let Err(e) = tx.send(msg) {
+        warn!("Failed to send the DNS cache back to the GUI!?: {}", e);
+    }
 }
 
 async fn handle_dump_aggregate_connection_tracker_counters(
@@ -193,6 +219,7 @@ pub async fn websocket_handler(
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: ProcessTrackerSender,
+    counter_registries: Arc<Vec<ExportedStatRegistry>>,
     ws: WebSocket,
 ) {
     info!("Got a websocket connection! ");
@@ -210,6 +237,7 @@ pub async fn websocket_handler(
             connection_tracker_clone,
             dns_tracker,
             process_tracker,
+            counter_registries,
         )
         .await;
     });
