@@ -189,6 +189,11 @@ pub enum ConnectionTrackerMsg {
     GetTrafficCounters {
         tx: mpsc::UnboundedSender<TrafficCounters>,
     },
+    GetDnsTrafficCounters {
+        tx: mpsc::Sender<
+            HashMap<AggregateCounterKind, (TrafficCounters, Vec<ConnectionMeasurements>)>,
+        >,
+    },
 }
 
 fn send_connection_storage_msg(
@@ -342,6 +347,10 @@ impl<'a> ConnectionTracker<'a> {
                 SetConnectionApplication { key, application } => {
                     self.set_connection_application(key, application)
                 }
+                GetDnsTrafficCounters { tx } => self.get_aggregate_traffic_counters(
+                    |kind| matches!(kind, AggregateCounterKind::DnsDstDomain { .. }),
+                    tx,
+                ),
             }
         }
         warn!("ConnectionTracker exiting rx_loop()");
@@ -620,6 +629,51 @@ impl<'a> ConnectionTracker<'a> {
             }
         } else {
             // TODO: update a stats counter to count the number of non-identified connections
+        }
+    }
+
+    /**
+     * Walk the traffic counters list and return just the counters matching the
+     * match_rule and their associated ConnectionMeasurements
+     *
+     * Used for generating the 'group by XXX' UI pages
+     *
+     * FYI: it is inefficient but likely still correct to call this for the
+     * AggregateStatsKind::ConnectionTracker stats, but call get_conntrack_traffic_counters() for that.
+     */
+
+    fn get_aggregate_traffic_counters(
+        &mut self,
+        match_rule: impl Fn(&AggregateCounterKind) -> bool,
+        tx: Sender<HashMap<AggregateCounterKind, (TrafficCounters, Vec<ConnectionMeasurements>)>>,
+    ) {
+        let mut counters: HashMap<
+            AggregateCounterKind,
+            (TrafficCounters, Vec<ConnectionMeasurements>),
+        > = HashMap::new();
+        for (_key, connection) in self.connections.iter_mut() {
+            let m = connection.to_connection_measurements(None);
+            for kind in &connection.aggregate_groups {
+                if !match_rule(kind) {
+                    continue;
+                }
+                // if we've already seen this kind before
+                if let Some((_traffic_counters, measurments)) = counters.get_mut(kind) {
+                    // just add this connection to the list
+                    measurments.push(m.clone());
+                } else {
+                    // else look up the traffic counters and add this connection to the new list
+                    if let Some(traffic_counters) = self.aggregate_traffic_counters.get(kind) {
+                        counters.insert(kind.clone(), (traffic_counters.clone(), vec![m.clone()]));
+                    }
+                }
+            }
+        }
+        if let Err(e) = tx.try_send(counters) {
+            warn!(
+                "Failed to return the aggregate counters to their caller!?: {}",
+                e
+            );
         }
     }
 }

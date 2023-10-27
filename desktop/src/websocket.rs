@@ -16,10 +16,11 @@ use libconntrack::{
     dns_tracker::DnsTrackerMessage,
     perf_check,
     process_tracker::ProcessTrackerSender,
+    try_send_sync,
     utils::PerfMsgCheck,
 };
 use log::{debug, info, warn};
-use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::mpsc::{self, channel, UnboundedSender};
 use warp::ws::{self, Message, WebSocket};
 
 use desktop_common::{GuiToServerMessages, ServerToGuiMessages};
@@ -118,6 +119,9 @@ async fn handle_gui_to_server_msg(
         GuiToServerMessages::DumpStatCounters() => {
             handle_dump_stat_counters(tx, counter_registries).await
         }
+        GuiToServerMessages::DumpDnsAggregateCounters {} => {
+            handle_gui_dump_dns_flows(tx, connection_tracker).await
+        }
     }
     perf_check!("process gui message", start, Duration::from_millis(200));
 }
@@ -180,6 +184,38 @@ async fn handle_gui_dump_dns_cache(
     };
     if let Err(e) = tx.send(ServerToGuiMessages::DumpDnsCache(cache)) {
         warn!("Failed to send the DNS cache back to the GUI!?: {}", e);
+    }
+}
+
+async fn handle_gui_dump_dns_flows(
+    tx: &UnboundedSender<ServerToGuiMessages>,
+    connection_tracker: &ConnectionTrackerSender,
+) {
+    let func_start = Instant::now();
+    // get the cache of current dns and process tracking
+    let (reply_tx, mut reply_rx) = channel(128);
+    use ConnectionTrackerMsg::*;
+    try_send_sync!(
+        connection_tracker,
+        "connection_tracker",
+        GetDnsTrafficCounters { tx: reply_tx }
+    );
+    let measurements = match reply_rx.recv().await {
+        Some(keys) => keys,
+        None => {
+            warn!("ConnectionTracker GetConnectionsKeys returned null!?");
+            HashMap::new() // just pretend it returned nothing as a hack
+        }
+    };
+    perf_check!(
+        "handle_gui_dump_dns_flows",
+        func_start,
+        Duration::from_millis(100)
+    );
+    if let Err(e) = tx.send(ServerToGuiMessages::DumpDnsAggregateCountersReply(
+        measurements,
+    )) {
+        warn!("Sending to GUI trigged: {}", e);
     }
 }
 
