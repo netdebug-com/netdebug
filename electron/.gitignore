@@ -90,3 +90,7 @@ typings/
 
 # Electron-Forge
 out/
+
+# Desktop tmp stuff
+desktop
+desktop.exe
