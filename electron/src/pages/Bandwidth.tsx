@@ -1,5 +1,4 @@
 import React from "react";
-import { useParams } from "react-router-dom";
 import useWebSocket from "react-use-websocket";
 import { WS_URL } from "../App";
 
@@ -13,7 +12,7 @@ const Bandwidth: React.FC = () => {
       console.log("Got message from websocket: ", msg.data);
     },
 
-	onClose: (msg) => {
+	onClose: () => {
       console.log("Closing websocket");
 	}
   });
