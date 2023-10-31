@@ -13,7 +13,7 @@ const Home: React.FC = () => {
       console.log("Got message from websocket: ", msg.data);
     },
 
-	onClose: (msg) => {
+	onClose: () => {
       console.log("Closing websocket");
 	}
   });
