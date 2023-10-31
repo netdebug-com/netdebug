@@ -1,9 +1,9 @@
 {
-    "recommendations": [
-        "esbenp.prettier-vscode",
-        "rust-lang.rust-analyzer",
-        "tamasfe.even-better-toml",
-        "tauri-apps.tauri-vscode",
-        "zxh404.vscode-proto3"
-    ]
+  "recommendations": [
+    "esbenp.prettier-vscode",
+    "rust-lang.rust-analyzer",
+    "tamasfe.even-better-toml",
+    "tauri-apps.tauri-vscode",
+    "zxh404.vscode-proto3"
+  ]
 }

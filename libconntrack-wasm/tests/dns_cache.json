@@ -1,196 +1,196 @@
 {
-    "DumpDnsCache": {
-        "64.233.176.106": {
-            "hostname": "www.google.com",
-            "created": "2023-08-29T22:32:09.768299400Z",
-            "rtt": 3321,
-            "ttl": 279
-        },
-        "2607:f8b0:4002:c03::8b": {
-            "hostname": "google.com",
-            "created": "2023-08-29T22:31:56.860959400Z",
-            "rtt": 5304,
-            "ttl": 150
-        },
-        "64.233.176.99": {
-            "hostname": "www.google.com",
-            "created": "2023-08-29T22:32:09.768299400Z",
-            "rtt": 3321,
-            "ttl": 279
-        },
-        "2607:f8b0:4002:c00::5e": {
-            "hostname": "ssl.gstatic.com",
-            "created": "2023-08-29T22:31:56.860918900Z",
-            "rtt": 4326,
-            "ttl": 288
-        },
-        "64.233.176.104": {
-            "hostname": "www.google.com",
-            "created": "2023-08-29T22:32:09.768299400Z",
-            "rtt": 3321,
-            "ttl": 279
-        },
-        "173.194.219.102": {
-            "hostname": "clients4.google.com",
-            "created": "2023-08-29T22:31:59.836141400Z",
-            "rtt": 4358,
-            "ttl": 250
-        },
-        "fe80::b744:a8ed:9087:63b6": {
-            "hostname": "localhost",
-            "created": "2023-08-29T22:31:44.206158900Z",
-            "rtt": null,
-            "ttl": 9223372036854776
-        },
-        "2607:f8b0:4002:c11::65": {
-            "hostname": "clients4.google.com",
-            "created": "2023-08-29T22:31:59.836155700Z",
-            "rtt": 5204,
-            "ttl": 247
-        },
-        "2607:f8b0:4002:c11::6a": {
-            "hostname": "www.google.com",
-            "created": "2023-08-29T22:32:09.768285600Z",
-            "rtt": 3271,
-            "ttl": 245
-        },
-        "2607:f8b0:4002:c11::63": {
-            "hostname": "www.google.com",
-            "created": "2023-08-29T22:32:09.768285600Z",
-            "rtt": 3271,
-            "ttl": 245
-        },
-        "192.168.1.103": {
-            "hostname": "localhost",
-            "created": "2023-08-29T22:31:44.206207Z",
-            "rtt": null,
-            "ttl": 9223372036854776
-        },
-        "172.253.124.95": {
-            "hostname": "signaler-pa.clients6.google.com",
-            "created": "2023-08-29T22:32:09.845815Z",
-            "rtt": 3205,
-            "ttl": 290
-        },
-        "173.194.219.138": {
-            "hostname": "clients4.google.com",
-            "created": "2023-08-29T22:31:59.836141400Z",
-            "rtt": 4358,
-            "ttl": 250
-        },
-        "2600:1700:5b20:4e10:fd11:b1f8:2002:d80a": {
-            "hostname": "localhost",
-            "created": "2023-08-29T22:31:44.206201500Z",
-            "rtt": null,
-            "ttl": 9223372036854776
-        },
-        "2607:f8b0:4002:c03::71": {
-            "hostname": "google.com",
-            "created": "2023-08-29T22:31:56.860959400Z",
-            "rtt": 5304,
-            "ttl": 150
-        },
-        "64.233.176.147": {
-            "hostname": "www.google.com",
-            "created": "2023-08-29T22:32:09.768299400Z",
-            "rtt": 3321,
-            "ttl": 279
-        },
-        "173.194.219.100": {
-            "hostname": "clients4.google.com",
-            "created": "2023-08-29T22:31:59.836141400Z",
-            "rtt": 4358,
-            "ttl": 250
-        },
-        "64.233.176.105": {
-            "hostname": "www.google.com",
-            "created": "2023-08-29T22:32:09.768299400Z",
-            "rtt": 3321,
-            "ttl": 279
-        },
-        "173.194.219.139": {
-            "hostname": "clients4.google.com",
-            "created": "2023-08-29T22:31:59.836141400Z",
-            "rtt": 4358,
-            "ttl": 250
-        },
-        "2607:f8b0:4002:c03::64": {
-            "hostname": "google.com",
-            "created": "2023-08-29T22:31:56.860959400Z",
-            "rtt": 5304,
-            "ttl": 150
-        },
-        "64.233.185.94": {
-            "hostname": "ssl.gstatic.com",
-            "created": "2023-08-29T22:31:56.860880900Z",
-            "rtt": 3983,
-            "ttl": 293
-        },
-        "2607:f8b0:4002:c03::8a": {
-            "hostname": "google.com",
-            "created": "2023-08-29T22:31:56.860959400Z",
-            "rtt": 5304,
-            "ttl": 150
-        },
-        "2607:f8b0:4002:c11::8a": {
-            "hostname": "clients4.google.com",
-            "created": "2023-08-29T22:31:59.836155700Z",
-            "rtt": 5204,
-            "ttl": 247
-        },
-        "2607:f8b0:4002:c11::93": {
-            "hostname": "www.google.com",
-            "created": "2023-08-29T22:32:09.768285600Z",
-            "rtt": 3271,
-            "ttl": 245
-        },
-        "173.194.219.101": {
-            "hostname": "clients4.google.com",
-            "created": "2023-08-29T22:31:59.836141400Z",
-            "rtt": 4358,
-            "ttl": 250
-        },
-        "64.233.176.103": {
-            "hostname": "www.google.com",
-            "created": "2023-08-29T22:32:09.768299400Z",
-            "rtt": 3321,
-            "ttl": 279
-        },
-        "2607:f8b0:4002:c11::69": {
-            "hostname": "www.google.com",
-            "created": "2023-08-29T22:32:09.768285600Z",
-            "rtt": 3271,
-            "ttl": 245
-        },
-        "2600:1700:5b20:4e10:9b37:4cbc:f60c:1f1f": {
-            "hostname": "localhost",
-            "created": "2023-08-29T22:31:44.206200100Z",
-            "rtt": null,
-            "ttl": 9223372036854776
-        },
-        "2607:f8b0:4002:c11::8b": {
-            "hostname": "clients4.google.com",
-            "created": "2023-08-29T22:31:59.836155700Z",
-            "rtt": 5204,
-            "ttl": 247
-        },
-        "2600:1700:5b20:4e10::43": {
-            "hostname": "localhost",
-            "created": "2023-08-29T22:31:44.206200900Z",
-            "rtt": null,
-            "ttl": 9223372036854776
-        },
-        "2607:f8b0:4002:c11::71": {
-            "hostname": "clients4.google.com",
-            "created": "2023-08-29T22:31:59.836155700Z",
-            "rtt": 5204,
-            "ttl": 247
-        },
-        "173.194.219.113": {
-            "hostname": "clients4.google.com",
-            "created": "2023-08-29T22:31:59.836141400Z",
-            "rtt": 4358,
-            "ttl": 250
-        }
+  "DumpDnsCache": {
+    "64.233.176.106": {
+      "hostname": "www.google.com",
+      "created": "2023-08-29T22:32:09.768299400Z",
+      "rtt": 3321,
+      "ttl": 279
+    },
+    "2607:f8b0:4002:c03::8b": {
+      "hostname": "google.com",
+      "created": "2023-08-29T22:31:56.860959400Z",
+      "rtt": 5304,
+      "ttl": 150
+    },
+    "64.233.176.99": {
+      "hostname": "www.google.com",
+      "created": "2023-08-29T22:32:09.768299400Z",
+      "rtt": 3321,
+      "ttl": 279
+    },
+    "2607:f8b0:4002:c00::5e": {
+      "hostname": "ssl.gstatic.com",
+      "created": "2023-08-29T22:31:56.860918900Z",
+      "rtt": 4326,
+      "ttl": 288
+    },
+    "64.233.176.104": {
+      "hostname": "www.google.com",
+      "created": "2023-08-29T22:32:09.768299400Z",
+      "rtt": 3321,
+      "ttl": 279
+    },
+    "173.194.219.102": {
+      "hostname": "clients4.google.com",
+      "created": "2023-08-29T22:31:59.836141400Z",
+      "rtt": 4358,
+      "ttl": 250
+    },
+    "fe80::b744:a8ed:9087:63b6": {
+      "hostname": "localhost",
+      "created": "2023-08-29T22:31:44.206158900Z",
+      "rtt": null,
+      "ttl": 9223372036854776
+    },
+    "2607:f8b0:4002:c11::65": {
+      "hostname": "clients4.google.com",
+      "created": "2023-08-29T22:31:59.836155700Z",
+      "rtt": 5204,
+      "ttl": 247
+    },
+    "2607:f8b0:4002:c11::6a": {
+      "hostname": "www.google.com",
+      "created": "2023-08-29T22:32:09.768285600Z",
+      "rtt": 3271,
+      "ttl": 245
+    },
+    "2607:f8b0:4002:c11::63": {
+      "hostname": "www.google.com",
+      "created": "2023-08-29T22:32:09.768285600Z",
+      "rtt": 3271,
+      "ttl": 245
+    },
+    "192.168.1.103": {
+      "hostname": "localhost",
+      "created": "2023-08-29T22:31:44.206207Z",
+      "rtt": null,
+      "ttl": 9223372036854776
+    },
+    "172.253.124.95": {
+      "hostname": "signaler-pa.clients6.google.com",
+      "created": "2023-08-29T22:32:09.845815Z",
+      "rtt": 3205,
+      "ttl": 290
+    },
+    "173.194.219.138": {
+      "hostname": "clients4.google.com",
+      "created": "2023-08-29T22:31:59.836141400Z",
+      "rtt": 4358,
+      "ttl": 250
+    },
+    "2600:1700:5b20:4e10:fd11:b1f8:2002:d80a": {
+      "hostname": "localhost",
+      "created": "2023-08-29T22:31:44.206201500Z",
+      "rtt": null,
+      "ttl": 9223372036854776
+    },
+    "2607:f8b0:4002:c03::71": {
+      "hostname": "google.com",
+      "created": "2023-08-29T22:31:56.860959400Z",
+      "rtt": 5304,
+      "ttl": 150
+    },
+    "64.233.176.147": {
+      "hostname": "www.google.com",
+      "created": "2023-08-29T22:32:09.768299400Z",
+      "rtt": 3321,
+      "ttl": 279
+    },
+    "173.194.219.100": {
+      "hostname": "clients4.google.com",
+      "created": "2023-08-29T22:31:59.836141400Z",
+      "rtt": 4358,
+      "ttl": 250
+    },
+    "64.233.176.105": {
+      "hostname": "www.google.com",
+      "created": "2023-08-29T22:32:09.768299400Z",
+      "rtt": 3321,
+      "ttl": 279
+    },
+    "173.194.219.139": {
+      "hostname": "clients4.google.com",
+      "created": "2023-08-29T22:31:59.836141400Z",
+      "rtt": 4358,
+      "ttl": 250
+    },
+    "2607:f8b0:4002:c03::64": {
+      "hostname": "google.com",
+      "created": "2023-08-29T22:31:56.860959400Z",
+      "rtt": 5304,
+      "ttl": 150
+    },
+    "64.233.185.94": {
+      "hostname": "ssl.gstatic.com",
+      "created": "2023-08-29T22:31:56.860880900Z",
+      "rtt": 3983,
+      "ttl": 293
+    },
+    "2607:f8b0:4002:c03::8a": {
+      "hostname": "google.com",
+      "created": "2023-08-29T22:31:56.860959400Z",
+      "rtt": 5304,
+      "ttl": 150
+    },
+    "2607:f8b0:4002:c11::8a": {
+      "hostname": "clients4.google.com",
+      "created": "2023-08-29T22:31:59.836155700Z",
+      "rtt": 5204,
+      "ttl": 247
+    },
+    "2607:f8b0:4002:c11::93": {
+      "hostname": "www.google.com",
+      "created": "2023-08-29T22:32:09.768285600Z",
+      "rtt": 3271,
+      "ttl": 245
+    },
+    "173.194.219.101": {
+      "hostname": "clients4.google.com",
+      "created": "2023-08-29T22:31:59.836141400Z",
+      "rtt": 4358,
+      "ttl": 250
+    },
+    "64.233.176.103": {
+      "hostname": "www.google.com",
+      "created": "2023-08-29T22:32:09.768299400Z",
+      "rtt": 3321,
+      "ttl": 279
+    },
+    "2607:f8b0:4002:c11::69": {
+      "hostname": "www.google.com",
+      "created": "2023-08-29T22:32:09.768285600Z",
+      "rtt": 3271,
+      "ttl": 245
+    },
+    "2600:1700:5b20:4e10:9b37:4cbc:f60c:1f1f": {
+      "hostname": "localhost",
+      "created": "2023-08-29T22:31:44.206200100Z",
+      "rtt": null,
+      "ttl": 9223372036854776
+    },
+    "2607:f8b0:4002:c11::8b": {
+      "hostname": "clients4.google.com",
+      "created": "2023-08-29T22:31:59.836155700Z",
+      "rtt": 5204,
+      "ttl": 247
+    },
+    "2600:1700:5b20:4e10::43": {
+      "hostname": "localhost",
+      "created": "2023-08-29T22:31:44.206200900Z",
+      "rtt": null,
+      "ttl": 9223372036854776
+    },
+    "2607:f8b0:4002:c11::71": {
+      "hostname": "clients4.google.com",
+      "created": "2023-08-29T22:31:59.836155700Z",
+      "rtt": 5204,
+      "ttl": 247
+    },
+    "173.194.219.113": {
+      "hostname": "clients4.google.com",
+      "created": "2023-08-29T22:31:59.836141400Z",
+      "rtt": 4358,
+      "ttl": 250
     }
+  }
 }

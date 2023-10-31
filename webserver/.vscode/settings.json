@@ -1,8 +1,8 @@
 {
-    "settings": {
-        "files.exclude": {
-            "**/webclient": true
-        }
-    },
-    "editor.defaultFormatter": "rust-lang.rust-analyzer"
+  "settings": {
+    "files.exclude": {
+      "**/webclient": true
+    }
+  },
+  "editor.defaultFormatter": "rust-lang.rust-analyzer"
 }

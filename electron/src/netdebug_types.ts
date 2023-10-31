@@ -2,14 +2,14 @@
 
 export type I64 = number;
 export type DnsTrackerEntry = {
-    "hostname": string;
-    "created": string;
-    "from_ptr_record": boolean;
-    "rtt"?: I64;
-    "ttl"?: I64;
+  hostname: string;
+  created: string;
+  from_ptr_record: boolean;
+  rtt?: I64;
+  ttl?: I64;
 };
 export type F64 = number;
 export type RateEstimator = {
-    "alpha": F64;
-    "estimate_rate_per_ns": (F64 | null);
+  alpha: F64;
+  estimate_rate_per_ns: F64 | null;
 };
