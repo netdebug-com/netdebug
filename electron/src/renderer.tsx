@@ -32,12 +32,6 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 
-// Remove this these three lines once we're done
-// with the old UI
-import "./tabs.css";
-import init from "./pkg/web_gui.js"; // also remove this import when we nuke the old UI
-init();
-
 // Load the react app.
 const root = createRoot(document.getElementById("root"));
 root.render(
