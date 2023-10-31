@@ -29,3 +29,16 @@ pub enum GuiToServerMessages {
     DumpAggregateCounters(),
     DumpStatCounters(),
 }
+
+#[cfg(test)]
+mod test {
+    use crate::GuiToServerMessages;
+
+    #[test]
+    fn test_message_json() {
+        println!(
+            "{}",
+            serde_json::to_string(&GuiToServerMessages::DumpDnsCache()).unwrap()
+        );
+    }
+}
