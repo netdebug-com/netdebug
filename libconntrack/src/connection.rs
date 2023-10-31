@@ -295,7 +295,7 @@ impl<'a> ConnectionTracker<'a> {
             let now = Instant::now();
             if (now - last_stats_update) > std::time::Duration::from_secs(5) {
                 last_stats_update = now;
-                info!(
+                debug!(
                     "ConnectionTracker dequeue delay stats: {}",
                     self.dequeue_delay_stats_us
                 );
