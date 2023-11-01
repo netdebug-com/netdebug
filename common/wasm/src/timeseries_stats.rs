@@ -1,13 +1,15 @@
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use std::{
     collections::HashMap,
     fmt::Display,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+use typescript_type_def::TypeDef;
 
-#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
 pub struct CounterBucket {
     pub sum: u64,
     pub max: u64,
@@ -60,7 +62,8 @@ pub type BucketIndex = usize;
  *
  */
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
 pub struct BucketedTimeSeries {
     /**
      * Instant can't be serialized and has no default, so we can't just skip it.  But we can
@@ -71,6 +74,8 @@ pub struct BucketedTimeSeries {
      */
     #[serde(skip)]
     pub created_time: Option<Instant>,
+    #[type_def(type_of = "i64")]
+    #[serde_as(as = "serde_with::DurationMicroSeconds<u64>")]
     pub bucket_time_window: Duration,
     pub buckets: Vec<CounterBucket>,
     pub num_buckets: BucketIndex,

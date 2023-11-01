@@ -4,17 +4,23 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub mod connection_measurements;
-pub use connection_measurements::*; // reshare these identifiers in this namespace
+pub use connection_measurements::*;
+use typescript_type_def::TypeDef; // reshare these identifiers in this namespace
 pub mod aggregate_counters;
 
 #[serde_with::serde_as]
-#[derive(Debug, Clone, Hash, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, Serialize, Deserialize, PartialEq, Eq, TypeDef)]
 pub struct DnsTrackerEntry {
     pub hostname: String,
+    #[type_def(type_of = "String")]
     pub created: DateTime<Utc>,
     pub from_ptr_record: bool,
+    #[type_def(type_of = "i64")]
+    #[serde(rename = "rtt_usec")]
     #[serde_as(as = "Option<serde_with::DurationMicroSeconds<i64>>")]
     pub rtt: Option<chrono::Duration>,
+    #[type_def(type_of = "i64")]
+    #[serde(rename = "ttl_sec")]
     #[serde_as(as = "Option<serde_with::DurationSeconds<i64>>")]
     pub ttl: Option<chrono::Duration>,
 }
@@ -66,7 +72,7 @@ pub fn pretty_print_duration(d: &chrono::Duration) -> String {
  * ///  assert_eq!(TCP, IpProtocol::from_wire(TCP.to_wire()));
  */
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TypeDef)]
 pub enum IpProtocol {
     ICMP,
     TCP,
@@ -113,7 +119,7 @@ impl IpProtocol {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, PartialOrd, TypeDef)]
 pub struct RateEstimator {
     alpha: f64,
     estimate_rate_per_ns: Option<f64>,

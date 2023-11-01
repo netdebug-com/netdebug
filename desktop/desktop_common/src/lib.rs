@@ -8,6 +8,7 @@ use libconntrack_wasm::{
  */
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, net::IpAddr};
+use typescript_type_def::TypeDef;
 
 pub fn get_git_hash_version() -> String {
     env!("GIT_HASH").to_string()
@@ -22,7 +23,7 @@ pub enum ServerToGuiMessages {
     DumpStatCountersReply(HashMap<String, u64>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TypeDef)]
 pub enum GuiToServerMessages {
     DumpFlows(),
     DumpDnsCache(),
