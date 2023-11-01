@@ -5,15 +5,16 @@ use std::{
 
 use common_wasm::timeseries_stats::{BucketIndex, BucketedTimeSeries};
 use serde::{Deserialize, Serialize};
+use typescript_type_def::TypeDef;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TypeDef)]
 pub enum AggregateCounterKind {
     DnsDstDomain { name: String },
     Application { name: String },
     ConnectionTracker,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
 pub struct AggregateCounter {
     pub kind: AggregateCounterKind,
     pub counts: HashMap<String, BucketedTimeSeries>, // "label" --> "BucketedTimeSeries"
@@ -76,7 +77,7 @@ impl std::fmt::Display for AggregateCounter {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
 pub struct TrafficCounters {
     pub send: AggregateCounter,
     pub recv: AggregateCounter,

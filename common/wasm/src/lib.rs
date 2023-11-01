@@ -1,6 +1,7 @@
 use analysis_messages::AnalysisInsights;
 use itertools::Itertools;
-use std::{collections::HashMap, fmt::Display, net::IpAddr}; // for .sorted()
+use std::{collections::HashMap, fmt::Display, net::IpAddr};
+use typescript_type_def::TypeDef; // for .sorted()
 
 /**
  * Attention: everything in this library (including transitively) must
@@ -95,7 +96,7 @@ fn convert_f64_ms_to_pb_timestamp(timestamp_ms: Option<f64>) -> Option<prost_typ
     })
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
 pub struct ProbeRoundReport {
     pub probes: HashMap<ProbeId, ProbeReportEntry>,
     pub probe_round: u32,
@@ -129,7 +130,7 @@ impl ProbeRoundReport {
 
 pub type ProbeId = u8;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
 pub enum ProbeReportEntry {
     // the notion of 'comment' might get abused - consider strongly typing everything(?)
     RouterReplyFound {
@@ -137,6 +138,7 @@ pub enum ProbeReportEntry {
         ttl: u8,
         out_timestamp_ms: f64,
         rtt_ms: f64,
+        #[type_def(type_of = "String")]
         src_ip: IpAddr,
         comment: String,
     },
@@ -145,6 +147,7 @@ pub enum ProbeReportEntry {
         ttl: u8,
         out_timestamp_ms: f64,
         rtt_ms: f64,
+        #[type_def(type_of = "String")]
         src_ip: IpAddr,
         comment: String,
     },
@@ -160,12 +163,14 @@ pub enum ProbeReportEntry {
     RouterReplyNoProbe {
         ttl: u8,
         in_timestamp_ms: f64,
+        #[type_def(type_of = "String")]
         src_ip: IpAddr,
         comment: String,
     },
     NatReplyNoProbe {
         ttl: u8,
         in_timestamp_ms: f64,
+        #[type_def(type_of = "String")]
         src_ip: IpAddr,
         comment: String,
     },
@@ -412,10 +417,11 @@ impl ProbeRoundReport {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
 pub struct ProbeReportSummaryNode {
     pub probe_type: ProbeReportEntry,
     pub ttl: u8,
+    #[type_def(type_of = "Option<String>")]
     pub ip: Option<IpAddr>,
     pub rtts: Vec<f64>,
     pub comments: Vec<String>,
@@ -471,7 +477,7 @@ impl Display for ProbeReportSummaryNode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
 pub struct ProbeReportSummary {
     pub raw_reports: Vec<ProbeRoundReport>,
     pub summary: HashMap<u8, Vec<ProbeReportSummaryNode>>,

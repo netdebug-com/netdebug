@@ -3,6 +3,7 @@ use std::{collections::HashMap, net::IpAddr};
 use chrono::{DateTime, Utc};
 use common_wasm::ProbeReportSummary;
 use serde::{Deserialize, Serialize};
+use typescript_type_def::TypeDef;
 
 use crate::{IpProtocol, RateEstimator};
 
@@ -13,12 +14,14 @@ use crate::{IpProtocol, RateEstimator};
  * privacy sensitive (e.g., packet payloads) except IP addresses.
  */
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
 pub struct ConnectionMeasurements {
     pub local_hostname: Option<String>,
+    #[type_def(type_of = "String")]
     pub local_ip: IpAddr,
     pub local_l4_port: u16,
     pub remote_hostname: Option<String>,
+    #[type_def(type_of = "String")]
     pub remote_ip: IpAddr,
     pub remote_l4_port: u16,
     pub ip_proto: IpProtocol,
@@ -33,8 +36,10 @@ pub struct ConnectionMeasurements {
     /// ACK'ed)
     pub four_way_close_done: bool,
     // TODO: add local_syn, remote_syn IP and TCP options
+    #[type_def(type_of = "String")]
     pub start_tracking_time: DateTime<Utc>, // time tracker: first saw a packet
-    pub last_packet_time: DateTime<Utc>,    // time tracker: last saw a packet
+    #[type_def(type_of = "String")]
+    pub last_packet_time: DateTime<Utc>, // time tracker: last saw a packet
     pub tx_byte_rate: RateEstimator,
     pub tx_packet_rate: RateEstimator,
     pub rx_byte_rate: RateEstimator,
