@@ -15,13 +15,13 @@ pub struct DnsTrackerEntry {
     #[type_def(type_of = "String")]
     pub created: DateTime<Utc>,
     pub from_ptr_record: bool,
-    #[type_def(type_of = "i64")]
     #[serde(rename = "rtt_usec")]
     #[serde_as(as = "Option<serde_with::DurationMicroSeconds<i64>>")]
-    pub rtt: Option<chrono::Duration>,
     #[type_def(type_of = "i64")]
+    pub rtt: Option<chrono::Duration>,
     #[serde(rename = "ttl_sec")]
     #[serde_as(as = "Option<serde_with::DurationSeconds<i64>>")]
+    #[type_def(type_of = "i64")]
     pub ttl: Option<chrono::Duration>,
 }
 
