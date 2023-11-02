@@ -279,7 +279,15 @@ impl<'a> DnsTracker<'a> {
                     None
                 }
             },
-            CNAME(_) | MX(_) | NS(_) | SOA(_) | SRV(_) | TXT(_) | HTTPS(_) | Unknown(_, _) => None,
+            CNAME(_)
+            | MX(_)
+            | NS(_)
+            | SOA(_)
+            | SRV(_)
+            | TXT(_)
+            | HTTPS(_)
+            | SVCB(_)
+            | Unknown(_, _) => None,
         };
         if let Some((ip, hostname, from_ptr_record)) = reply {
             if !from_ptr_record || !self.reverse_map.contains_key(&ip) {
