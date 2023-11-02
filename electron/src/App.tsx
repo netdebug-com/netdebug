@@ -9,7 +9,6 @@ import Flows from "./pages/Flows";
 import Bandwidth from "./pages/Bandwidth";
 import Dns from "./pages/Dns";
 
-
 const WS_URL = "ws://localhost:33434/ws";
 
 function App() {
