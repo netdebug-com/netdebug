@@ -51,6 +51,14 @@ jobs:
         run: |
           wasm-pack test --headless --chrome webserver/web-client/
           wasm-pack test --headless --chrome desktop/web-gui/
+      - name: Node and npm
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+          cache: "npm"
+          cache-dependency-path: electron/package-lock.json
+      - run: cd electron && npm ci
+      - run: cd electron && npm run lint
       - run: echo "🍏 This job's status is ${{ job.status }}."
 # this was needed for the 'cargo-feature[per-package-target]'
 # but nightly is unstable and it also breaks 'cargo test' so remove for now
