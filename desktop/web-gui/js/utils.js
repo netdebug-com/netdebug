@@ -13,7 +13,7 @@ export function plot_chart(chart, cfg, verbose) {
                 "Creating Chart on canvas " +
                     chart +
                     " :: " +
-                    JSON.stringify(cfg, undefined, 2)
+                    JSON.stringify(cfg, undefined, 2),
             );
         }
         return new Chart(ctx, cfg);
@@ -25,7 +25,7 @@ export function plot_chart(chart, cfg, verbose) {
                 "with cfg=" +
                 cfg +
                 " :: " +
-                err
+                err,
         );
     }
 }
@@ -39,7 +39,7 @@ export function plot_json_chart_update(chart, data_json, verbose) {
     let data = JSON.parse(data_json);
     if (verbose) {
         console.log(
-            "Setting new data to :: " + JSON.stringify(data, undefined, 2)
+            "Setting new data to :: " + JSON.stringify(data, undefined, 2),
         );
     }
     // clear out the old data
@@ -62,7 +62,7 @@ export function plot_latency_chart(
     worst_isp,
     worst_home,
     worst_app,
-    verbose
+    verbose,
 ) {
     const data = [
         { x: "Best-Case", isp: best_isp, home: best_home, app: best_app },

@@ -1,10 +1,6 @@
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
-import {
-  Link,
-  matchPath,
-  useLocation,
-} from "react-router-dom";
+import { Link, matchPath, useLocation } from "react-router-dom";
 
 const TabData = [
   ["Home", "/"],
@@ -35,7 +31,9 @@ export default function MyTabs() {
   return (
     <Tabs value={currentTab}>
       {TabData.map(([label, dst]) => {
-        return <Tab label={label} key={dst} value={dst} to={dst} component={Link} />;
+        return (
+          <Tab label={label} key={dst} value={dst} to={dst} component={Link} />
+        );
       })}
     </Tabs>
   );

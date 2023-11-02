@@ -12,9 +12,9 @@ const Bandwidth: React.FC = () => {
       console.log("Got message from websocket: ", msg.data);
     },
 
-	onClose: () => {
+    onClose: () => {
       console.log("Closing websocket");
-	}
+    },
   });
   return (
     <div>

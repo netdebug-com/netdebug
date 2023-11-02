@@ -137,7 +137,7 @@ const Dns: React.FC = () => {
                 </TableCell>
                 <TableCell align="right">{format_ips(ips)}</TableCell>
                 <TableCell align="right">{dns_entry.ttl_sec}</TableCell>
-                <TableCell align="right">{dns_entry.rtt_usec/ 1000}</TableCell>
+                <TableCell align="right">{dns_entry.rtt_usec / 1000}</TableCell>
               </TableRow>
             ),
           )}
