@@ -8,7 +8,10 @@ use tokio::sync::mpsc::{channel, Sender};
 use crate::{owned_packet::OwnedParsedPacket, pcap::RawSocketWriter, utils::PerfMsgCheck};
 
 pub enum ProbeMessage {
-    SendProbe { packet: OwnedParsedPacket },
+    SendProbe {
+        packet: OwnedParsedPacket,
+        min_ttl: u8,
+    },
 }
 
 pub async fn spawn_raw_prober<R>(
@@ -23,8 +26,8 @@ where
         while let Some(msg) = rx.recv().await {
             let msg = msg.perf_check_get("spawn_raw_prober");
             match msg {
-                ProbeMessage::SendProbe { packet } => {
-                    if let Err(e) = tcp_inband_probe(&packet, &mut raw_sock) {
+                ProbeMessage::SendProbe { packet, min_ttl } => {
+                    if let Err(e) = tcp_inband_probe(&packet, &mut raw_sock, min_ttl) {
                         warn!("Problem running tcp_inband_probe: {}", e);
                     }
                 }
@@ -45,10 +48,11 @@ where
 pub fn tcp_inband_probe(
     packet: &OwnedParsedPacket,
     raw_sock: &mut dyn RawSocketWriter, // used with testing
+    min_ttl: u8,
 ) -> Result<(), Box<dyn Error>> {
     let l2 = packet.link.as_ref().unwrap();
     // build up probes
-    let probes: Vec<Vec<u8>> = (1..=PROBE_MAX_TTL)
+    let probes: Vec<Vec<u8>> = (min_ttl..=PROBE_MAX_TTL)
         .map(|ttl| {
             let builder = etherparse::PacketBuilder::ethernet2(l2.source, l2.destination);
             let ip_header = packet.ip.as_ref().unwrap();
@@ -112,7 +116,7 @@ pub mod test {
     use std::{net::IpAddr, str::FromStr};
 
     use super::*;
-    use etherparse::PacketBuilder;
+    use etherparse::{IpHeader, PacketBuilder};
 
     use crate::owned_packet::OwnedParsedPacket;
     use crate::pcap::MockRawSocketProber;
@@ -159,6 +163,13 @@ pub mod test {
         Box::new(OwnedParsedPacket::new(headers, pcap_header))
     }
 
+    fn get_v4_ttl(pkt: &PacketHeaders) -> Option<u8> {
+        match pkt.ip.as_ref().unwrap() {
+            IpHeader::Version4(iph, _) => Some(iph.time_to_live),
+            _ => None,
+        }
+    }
+
     #[tokio::test]
     async fn test_inband_tcp_probes() {
         let mut mock_raw_sock = MockRawSocketProber::new();
@@ -168,15 +179,44 @@ pub mod test {
             IpAddr::from_str("192.168.1.2").unwrap(),
         );
 
-        tcp_inband_probe(&packet, &mut mock_raw_sock).unwrap();
+        tcp_inband_probe(&packet, &mut mock_raw_sock, 1).unwrap();
 
         assert_eq!(mock_raw_sock.captured.len(), PROBE_MAX_TTL as usize);
 
         // now verify the last packet is what we think it should be
         let last_pkt =
             PacketHeaders::from_ethernet_slice(mock_raw_sock.captured.last().unwrap()).unwrap();
+        let first_pkt =
+            PacketHeaders::from_ethernet_slice(mock_raw_sock.captured.first().unwrap()).unwrap();
         // nth pkt should have a 16 byte payload
         assert_eq!(last_pkt.payload.len(), PROBE_MAX_TTL as usize);
+
+        assert_eq!(get_v4_ttl(&first_pkt), Some(1));
+        assert_eq!(get_v4_ttl(&last_pkt), Some(32));
         // TODO: more checks as needed, but if we got here, it's probably mostly working
+    }
+
+    #[tokio::test]
+    async fn test_inband_tcp_probes_min_ttl() {
+        let mut mock_raw_sock = MockRawSocketProber::new();
+        assert_eq!(mock_raw_sock.captured.len(), 0);
+        let packet = test_tcp_packet(
+            IpAddr::from_str("192.168.1.1").unwrap(),
+            IpAddr::from_str("192.168.1.2").unwrap(),
+        );
+
+        tcp_inband_probe(&packet, &mut mock_raw_sock, 5).unwrap();
+
+        assert_eq!(mock_raw_sock.captured.len(), PROBE_MAX_TTL as usize - 4);
+
+        // now verify the last packet is what we think it should be
+        let last_pkt =
+            PacketHeaders::from_ethernet_slice(mock_raw_sock.captured.last().unwrap()).unwrap();
+        let first_pkt =
+            PacketHeaders::from_ethernet_slice(mock_raw_sock.captured.first().unwrap()).unwrap();
+        // nth pkt should have a 16 byte payload
+        assert_eq!(last_pkt.payload.len(), PROBE_MAX_TTL as usize);
+        assert_eq!(get_v4_ttl(&first_pkt), Some(5));
+        assert_eq!(get_v4_ttl(&last_pkt), Some(32));
     }
 }
