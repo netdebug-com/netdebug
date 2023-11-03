@@ -16,14 +16,14 @@ use libconntrack_wasm::{
     ConnectionMeasurements, DnsTrackerEntry, IpProtocol, RateEstimator,
 };
 #[cfg(not(test))]
-use log::{debug, info, warn};
+use log::{debug, warn};
 use netstat2::ProtocolSocketInfo;
 use pb_conntrack_types::ConnectionStorageEntry;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
 
 #[cfg(test)]
-use std::{println as debug, println as info, println as warn}; // Workaround to use prinltn! for logs.
+use std::{println as debug, println as warn}; // Workaround to use prinltn! for logs.
 
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +32,7 @@ use crate::{
     dns_tracker::{DnsTrackerMessage, UDP_DNS_PORT},
     in_band_probe::ProbeMessage,
     owned_packet::OwnedParsedPacket,
+    prober_helper::ProberHelper,
     process_tracker::{ProcessTrackerEntry, ProcessTrackerMessage, ProcessTrackerSender},
     utils::{
         self, calc_rtt_ms, etherparse_ipheaders2ipaddr, packet_is_tcp_rst, timestamp_to_ms,
@@ -227,7 +228,7 @@ fn send_connection_storage_msg(
 pub struct ConnectionTracker<'a> {
     connections: EvictingHashMap<'a, ConnectionKey, Connection>,
     local_addrs: HashSet<IpAddr>,
-    prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
+    prober_helper: ProberHelper,
     storage_service_msg_tx: Option<mpsc::Sender<ConnectionStorageEntry>>,
     dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
     process_tx: Option<ProcessTrackerSender>,
@@ -265,7 +266,7 @@ impl<'a> ConnectionTracker<'a> {
                 },
             ),
             local_addrs,
-            prober_tx,
+            prober_helper: ProberHelper::new(prober_tx),
             storage_service_msg_tx,
             dns_tx: None,
             process_tx: None,
@@ -385,7 +386,7 @@ impl<'a> ConnectionTracker<'a> {
             }
             connection.update(
                 packet,
-                &mut self.prober_tx,
+                &mut self.prober_helper,
                 &key,
                 src_is_local,
                 &self.dns_tx,
@@ -749,7 +750,7 @@ impl Connection {
     fn update(
         &mut self,
         packet: Box<OwnedParsedPacket>,
-        prober_tx: &mut Sender<PerfMsgCheck<ProbeMessage>>,
+        prober_helper: &mut ProberHelper,
         key: &ConnectionKey,
         src_is_local: bool,
         dns_tx: &Option<mpsc::UnboundedSender<DnsTrackerMessage>>,
@@ -765,7 +766,7 @@ impl Connection {
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
                 if src_is_local {
-                    self.update_tcp_local(&packet, tcp, prober_tx);
+                    self.update_tcp_local(&packet, tcp, prober_helper);
                 } else {
                     self.update_tcp_remote(&packet, tcp);
                 }
@@ -843,7 +844,7 @@ impl Connection {
         &mut self,
         packet: &OwnedParsedPacket,
         tcp: &TcpHeader,
-        prober_tx: &mut Sender<PerfMsgCheck<ProbeMessage>>,
+        prober_helper: &mut ProberHelper,
     ) {
         // NOTE: we can't just use packet.payload.len() b/c we might have a partial capture
         let payload_len = match &packet.ip {
@@ -906,14 +907,23 @@ impl Connection {
             // this is the first time in the connection lifetime we sent some payload
             // spawn an inband probe
             if first_time && !self.close_has_started() {
-                // reset the probe state
-                self.probe_round =
-                    Some(ProbeRound::new(self.probe_report_summary.raw_reports.len()));
-                // tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock ).unwrap();
-                if let Err(e) = prober_tx.try_send(PerfMsgCheck::new(ProbeMessage::SendProbe {
-                    packet: packet.clone(),
-                })) {
-                    warn!("Problem sending to prober queue: {}", e);
+                let dst_ip = packet.get_src_dst_ips().unwrap().1;
+                if prober_helper.check_update_dst_ip(dst_ip) {
+                    // reset the probe state
+                    self.probe_round =
+                        Some(ProbeRound::new(self.probe_report_summary.raw_reports.len()));
+                    // tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock ).unwrap();
+                    let min_ttl = prober_helper.get_min_ttl();
+                    if let Err(e) =
+                        prober_helper
+                            .tx()
+                            .try_send(PerfMsgCheck::new(ProbeMessage::SendProbe {
+                                packet: packet.clone(),
+                                min_ttl,
+                            }))
+                    {
+                        warn!("Problem sending to prober queue: {}", e);
+                    }
                 }
             }
         }
@@ -1005,7 +1015,7 @@ impl Connection {
                                                 .insert(probe_id, HashSet::from([packet.clone()]));
                                         }
                                     } else {
-                                        info!("Looks like we got a dupACK but the probe_id is too big {} :: {:?}", probe_id, packet);
+                                        debug!("Looks like we got a dupACK but the probe_id is too big {} :: {:?}", probe_id, packet);
                                     }
                                 }
                             }

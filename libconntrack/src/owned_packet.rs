@@ -1,4 +1,8 @@
-use std::{collections::HashSet, error::Error, net::IpAddr};
+use std::{
+    collections::HashSet,
+    error::Error,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+};
 
 use chrono::{DateTime, Utc};
 use etherparse::{
@@ -164,6 +168,25 @@ impl OwnedParsedPacket {
                 return hash;
             }
             None => 0, // just give up, this packet didn't even have an l2 header!?
+        }
+    }
+
+    pub fn get_src_dst_ips(&self) -> Option<(IpAddr, IpAddr)> {
+        match &self.ip {
+            Some(iph) => {
+                match iph {
+                    IpHeader::Version4(v4hdr, _) => Some((
+                        IpAddr::V4(Ipv4Addr::from(v4hdr.source)),
+                        IpAddr::V4(Ipv4Addr::from(v4hdr.destination)),
+                    )),
+                    IpHeader::Version6(v6hdr, _) => Some((
+                        IpAddr::V6(Ipv6Addr::from(v6hdr.source)),
+                        IpAddr::V6(Ipv6Addr::from(v6hdr.destination)),
+                    )),
+                    //
+                }
+            }
+            _ => None,
         }
     }
 
@@ -652,5 +675,41 @@ mod test {
         let new_pkt = serde_json::from_str(&json).unwrap();
 
         assert_eq!(orig_pkt, new_pkt);
+    }
+
+    #[test]
+    fn test_get_src_dst_ips_v4() {
+        use std::str::FromStr;
+        let mut pkt_bytes: Vec<u8> = Vec::new();
+        etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
+            .ipv4([192, 168, 1, 1], [192, 168, 1, 2], 64)
+            .udp(1, 1)
+            .write(&mut pkt_bytes, &[])
+            .unwrap();
+        let pkt = OwnedParsedPacket::try_from_fake_time(pkt_bytes).unwrap();
+        assert_eq!(
+            pkt.get_src_dst_ips().unwrap().0,
+            IpAddr::from_str("192.168.1.1").unwrap()
+        );
+        assert_eq!(
+            pkt.get_src_dst_ips().unwrap().1,
+            IpAddr::from_str("192.168.1.2").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_get_src_dst_ips_v6() {
+        use std::str::FromStr;
+        let mut pkt_bytes: Vec<u8> = Vec::new();
+        let src = Ipv6Addr::from_str("2001:0db8::1").unwrap();
+        let dst = Ipv6Addr::from_str("2001:0db8::4242").unwrap();
+        etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
+            .ipv6(src.octets(), dst.octets(), 64)
+            .udp(1, 1)
+            .write(&mut pkt_bytes, &[])
+            .unwrap();
+        let pkt = OwnedParsedPacket::try_from_fake_time(pkt_bytes).unwrap();
+        assert_eq!(pkt.get_src_dst_ips().unwrap().0, IpAddr::V6(src));
+        assert_eq!(pkt.get_src_dst_ips().unwrap().1, IpAddr::V6(dst));
     }
 }

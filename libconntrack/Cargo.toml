@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 
 bytes = "1.5.0"
+common = { path = "../common" }
 common-wasm = { path = "../common/wasm" }             # TODO move this dir to the top level?
 chrono = { version = "0.4.26", features = ["serde"] }
 # use our own private upstream until they land our qtype=65/https patch
@@ -25,7 +26,7 @@ pb-conntrack-types = { path = "../protobuf/conntrack-types" }
 pb-storage-service = { path = "../protobuf/storage-service" }
 pretty_env_logger = "0.5.0"
 # PublicSufficeList - but statically includes official list from https://publicsuffix.org/
-psl = "2.1.4"   
+psl = "2.1.4"
 rand = "0.8.5"
 serde = "1.0.188"
 serde_with = { version = "3.3.0", features = ["chrono_0_4"] }
