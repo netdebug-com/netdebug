@@ -9,3 +9,6 @@ target
 **/chart*.js
 # Didn't know there's an autoformatter for markdown
 **/*.md
+**/.webpack
+**/netdebug_types.ts
+electron/out
