@@ -10,8 +10,6 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Paper from "@mui/material/Paper";
 
-import { headerStyle, periodic_with_sla } from "../utils";
-
 function format_ips(ips: string[]) {
   if (ips.length <= 1) {
     return <div> {ips.join(",")} </div>;
@@ -21,13 +19,7 @@ function format_ips(ips: string[]) {
         <summary>{ips.length} Addresses</summary>
         <ul>
           {ips.map((ip) => (
-            <li
-              style={{ listStyleType: "none", padding: "0", margin: "0" }}
-              key={ip}
-            >
-              {" "}
-              {ip}
-            </li>
+            <li key={ip}> {ip}</li>
           ))}
         </ul>
       </details>
@@ -48,8 +40,8 @@ const Dns: React.FC = () => {
   const [dnsEntries, setDnsEntries] = useState(
     new Map<string, DnsTrackerEntry>(),
   );
-  const min_time_between_requests_ms = 500;
-  const max_time_between_requests_ms = 1000;
+  const min_time_between_requests = 500;
+  const max_time_between_requests = 1000;
   const timeout_id = useRef(null);
   const last_send = useRef(null);
   const yellow_threshold = useRef(null);
@@ -69,14 +61,25 @@ const Dns: React.FC = () => {
         );
         console.log("Got a DumpDnsCache message!", typeof cache, cache);
         setDnsEntries(cache);
-        periodic_with_sla(
-          "DumpDnsCache",
-          timeout_id,
-          last_send,
-          min_time_between_requests_ms,
-          max_time_between_requests_ms,
-          sendRequest,
-        );
+        // check how long it's been since our last message and send now or later
+        // depending on our SLAs
+        const send_delta = performance.now() - last_send.current;
+        if (send_delta <= min_time_between_requests) {
+          timeout_id.current = setTimeout(
+            sendRequest,
+            min_time_between_requests - send_delta,
+          );
+        } else {
+          timeout_id.current = null;
+          sendRequest();
+          if (send_delta > max_time_between_requests) {
+            console.warn(
+              "DumpDnsCache reply delayed beyond SLA " +
+                max_time_between_requests +
+                "ms",
+            );
+          }
+        }
       }
     },
     onClose: () => {
@@ -84,12 +87,6 @@ const Dns: React.FC = () => {
     },
   });
 
-  /**
-   * Take as input a Map from IP -> DnsTrackerEntry and 
-   * re-index it to be backwards, e.g., a Map from each
-   * DnsTrackerEntry to the list of IPs that were looked up
-   * in that same query.  Easier for people to understand that way.
-   */
   function reindex_dns(
     dns_map: Map<string, DnsTrackerEntry>,
   ): Map<string, [DnsTrackerEntry, string[]]> {
@@ -167,17 +164,11 @@ const Dns: React.FC = () => {
     <TableContainer component={Paper}>
       <Table sx={{ minWidth: 650 }} aria-label="simple table">
         <TableHead>
-          <TableRow style={headerStyle}>
-            <TableCell sx={headerStyle}>Hostname</TableCell>
-            <TableCell sx={headerStyle} align="right">
-              IP(s)
-            </TableCell>
-            <TableCell sx={headerStyle} align="right">
-              TTL&nbsp;(secs)
-            </TableCell>
-            <TableCell sx={headerStyle} align="right">
-              RTT&nbsp;(millis)
-            </TableCell>
+          <TableRow>
+            <TableCell>Hostname</TableCell>
+            <TableCell align="right">IP(s)</TableCell>
+            <TableCell align="right">TTL&nbsp;(secs)</TableCell>
+            <TableCell align="right">RTT&nbsp;(millis)</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
@@ -187,7 +178,6 @@ const Dns: React.FC = () => {
               <TableRow
                 key={hostname}
                 sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
-                style={{ verticalAlign: "top" }}
               >
                 <TableCell component="th" scope="row">
                   {dns_entry.hostname}
