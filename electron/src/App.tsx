@@ -8,6 +8,7 @@ import Home from "./pages/Home";
 import Flows from "./pages/Flows";
 import Bandwidth from "./pages/Bandwidth";
 import Dns from "./pages/Dns";
+import Counters from "./pages/Counters";
 
 const WS_URL = "ws://localhost:33434/ws";
 
@@ -33,7 +34,7 @@ function App() {
           <Route path="/bandwidth" element={<Bandwidth />} />
           <Route path="/flows" element={<Flows />} />
           <Route path="/dns" element={<Dns />} />
-          <Route path="/counters" element={<h1> TODO COUNTERS </h1>} />
+          <Route path="/counters" element={<Counters />} />
         </Routes>
       </div>
     </HashRouter>
