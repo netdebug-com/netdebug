@@ -169,7 +169,7 @@ const Dns: React.FC = () => {
         <TableHead>
           <TableRow style={headerStyle}>
             <TableCell sx={headerStyle}>Hostname</TableCell>
-            <TableCell sx={headerStyle} align="right">
+            <TableCell sx={headerStyle} align="left">
               IP(s)
             </TableCell>
             <TableCell sx={headerStyle} align="right">
@@ -192,7 +192,7 @@ const Dns: React.FC = () => {
                 <TableCell component="th" scope="row">
                   {dns_entry.hostname}
                 </TableCell>
-                <TableCell align="right">{format_ips(ips)}</TableCell>
+                <TableCell align="left">{format_ips(ips)}</TableCell>
                 <TableCell align="right">{dns_entry.ttl_sec}</TableCell>
                 <TableCell align="right">
                   {calcStyleByRtt(dns_entry.rtt_usec)}
