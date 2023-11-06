@@ -18,12 +18,12 @@ impl ConnectionStorageHandler {
     pub async fn spawn_from_url(
         url: String,
         queue_size: usize,
-    ) -> mpsc::Sender<ConnectionStorageEntry> {
+    ) -> Result<mpsc::Sender<ConnectionStorageEntry>, tonic::transport::Error> {
         // FIXME: handle the errors instead of just blindly `unwrap()`'ing
-        ConnectionStorageHandler::spawn_from_channel(
-            Channel::from_shared(url).unwrap().connect().await.unwrap(),
-            queue_size,
-        )
+        let channel = Channel::from_shared(url).unwrap().connect().await?;
+        Ok(ConnectionStorageHandler::spawn_from_channel(
+            channel, queue_size,
+        ))
     }
 
     // This is used for testing where we can pass in an "in-memory" channel

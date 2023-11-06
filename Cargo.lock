@@ -239,7 +239,7 @@ version = "0.68.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "726e4313eb6ec35d2730258ad4e15b547ee75d6afaa1361a922e78e59b7d8078"
 dependencies = [
- "bitflags 2.4.0",
+ "bitflags 2.4.1",
  "cexpr",
  "clang-sys",
  "lazy_static",
@@ -250,7 +250,7 @@ dependencies = [
  "regex",
  "rustc-hash",
  "shlex",
- "syn 2.0.37",
+ "syn 2.0.38",
 ]
 
 [[package]]
@@ -1302,7 +1302,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "229004ebba9d1d5caf41623f1523b6d52abb47d9f6ab87f7e6fc992e3b854aef"
 dependencies = [
  "bindgen",
- "errno 0.3.3",
+ "errno 0.3.5",
  "libc",
 ]
 
@@ -2216,6 +2216,7 @@ dependencies = [
  "pb-conntrack-types",
  "pb-storage-service",
  "prost",
+ "prost-types",
  "rusqlite",
  "serde",
  "serde_json",

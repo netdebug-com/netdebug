@@ -551,16 +551,17 @@ pub fn connection_from_log(_file: &str) -> Result<Connection, Box<dyn Error>> {
 #[cfg(test)]
 mod test {
 
+    use common::test_utils::test_dir;
+
     use super::*;
     // FIXME: the log files on disk use a previous version of OwnedParsedPacket (in
     // particular, they still contain a pcap_header field), instead of a broken out
     // timestamp and len field.
-    use crate::connection::test::test_dir;
     #[test]
     #[ignore]
     fn validate_latency() {
         let test_log = r"tests/logs/annotated_connection1_localhost.log";
-        let connection = connection_from_log(test_dir(test_log).as_str()).unwrap();
+        let connection = connection_from_log(test_dir("libconntrack", test_log).as_str()).unwrap();
 
         let insights = analyze(&connection);
         assert!(insights
@@ -573,7 +574,7 @@ mod test {
     #[ignore]
     fn validate_latency_turkey() {
         let test_log = r"tests/logs/annotated_rob_linux_wifi_turkey.log";
-        let connection = connection_from_log(test_dir(test_log).as_str()).unwrap();
+        let connection = connection_from_log(test_dir("libconntrack", test_log).as_str()).unwrap();
 
         let insights = analyze(&connection);
         let last_hop = insights
@@ -590,7 +591,7 @@ mod test {
     #[ignore]
     fn validate_macos() {
         let test_log = r"tests/logs/annotated_macos_gregor.log";
-        let connection = connection_from_log(test_dir(test_log).as_str()).unwrap();
+        let connection = connection_from_log(test_dir("libconntrack", test_log).as_str()).unwrap();
 
         assert!(connection.user_agent.is_some());
 
@@ -624,7 +625,7 @@ mod test {
          *          --analyze-log ./webserver/tests/logs/annotated_macos_ed.log | grep appl ; done | sort -n -k 9
          */
         let test_log = r"tests/logs/annotated_macos_gregor.log";
-        let connection = connection_from_log(test_dir(test_log).as_str()).unwrap();
+        let connection = connection_from_log(test_dir("libconntrack", test_log).as_str()).unwrap();
 
         let insights = analyze(&connection);
         let spike = insights
