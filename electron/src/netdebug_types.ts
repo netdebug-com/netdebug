@@ -7,157 +7,141 @@ export type U8 = number;
  * * A (hopefuly useful) subset of all of the possible IP Protocols
  *  * /// use IpProtocol::*;
  *  * ///  assert_eq!(TCP, IpProtocol::from_wire(TCP.to_wire()));
- *
+ *  
  */
-export type IpProtocol =
-  | "ICMP"
-  | "TCP"
-  | "UDP"
-  | "ICMP6"
-  | {
-      Other: U8;
-    };
+export type IpProtocol = ("ICMP" | "TCP" | "UDP" | "ICMP6" | {
+    "Other": U8;
+});
 export type F64 = number;
-export type ProbeReportEntry =
-  | {
-      RouterReplyFound: {
-        ttl: U8;
-        out_timestamp_ms: F64;
-        rtt_ms: F64;
-        src_ip: string;
-        comment: string;
-      };
-    }
-  | {
-      NatReplyFound: {
-        ttl: U8;
-        out_timestamp_ms: F64;
-        rtt_ms: F64;
-        src_ip: string;
-        comment: string;
-      };
-    }
-  | {
-      NoReply: {
-        ttl: U8;
-        out_timestamp_ms: F64;
-        comment: string;
-      };
-    }
-  | {
-      NoOutgoing: {
-        ttl: U8;
-        comment: string;
-      };
-    }
-  | {
-      RouterReplyNoProbe: {
-        ttl: U8;
-        in_timestamp_ms: F64;
-        src_ip: string;
-        comment: string;
-      };
-    }
-  | {
-      NatReplyNoProbe: {
-        ttl: U8;
-        in_timestamp_ms: F64;
-        src_ip: string;
-        comment: string;
-      };
-    }
-  | {
-      EndHostReplyFound: {
-        ttl: U8;
-        out_timestamp_ms: F64;
-        rtt_ms: F64;
-        comment: string;
-      };
-    }
-  | {
-      EndHostNoProbe: {
-        ttl: U8;
-        in_timestamp_ms: F64;
-        comment: string;
-      };
+export type ProbeReportEntry = ({
+    "RouterReplyFound": {
+        "ttl": U8;
+        "out_timestamp_ms": F64;
+        "rtt_ms": F64;
+        "src_ip": string;
+        "comment": string;
     };
+} | {
+    "NatReplyFound": {
+        "ttl": U8;
+        "out_timestamp_ms": F64;
+        "rtt_ms": F64;
+        "src_ip": string;
+        "comment": string;
+    };
+} | {
+    "NoReply": {
+        "ttl": U8;
+        "out_timestamp_ms": F64;
+        "comment": string;
+    };
+} | {
+    "NoOutgoing": {
+        "ttl": U8;
+        "comment": string;
+    };
+} | {
+    "RouterReplyNoProbe": {
+        "ttl": U8;
+        "in_timestamp_ms": F64;
+        "src_ip": string;
+        "comment": string;
+    };
+} | {
+    "NatReplyNoProbe": {
+        "ttl": U8;
+        "in_timestamp_ms": F64;
+        "src_ip": string;
+        "comment": string;
+    };
+} | {
+    "EndHostReplyFound": {
+        "ttl": U8;
+        "out_timestamp_ms": F64;
+        "rtt_ms": F64;
+        "comment": string;
+    };
+} | {
+    "EndHostNoProbe": {
+        "ttl": U8;
+        "in_timestamp_ms": F64;
+        "comment": string;
+    };
+});
 export type U32 = number;
 export type ProbeRoundReport = {
-  probes: Record<U8, ProbeReportEntry>;
-  probe_round: U32;
-  application_rtt: F64 | null;
+    "probes": Record<U8, ProbeReportEntry>;
+    "probe_round": U32;
+    "application_rtt": (F64 | null);
 };
 export type ProbeReportSummaryNode = {
-  probe_type: ProbeReportEntry;
-  ttl: U8;
-  ip: string | null;
-  rtts: F64[];
-  comments: string[];
+    "probe_type": ProbeReportEntry;
+    "ttl": U8;
+    "ip": (string | null);
+    "rtts": (F64)[];
+    "comments": (string)[];
 };
 export type ProbeReportSummary = {
-  raw_reports: ProbeRoundReport[];
-  summary: Record<U8, ProbeReportSummaryNode[]>;
+    "raw_reports": (ProbeRoundReport)[];
+    "summary": Record<U8, (ProbeReportSummaryNode)[]>;
 };
 export type RateEstimator = {
-  alpha: F64;
-  estimate_rate_per_ns: F64 | null;
+    "alpha": F64;
+    "estimate_rate_per_ns": (F64 | null);
 };
 export type ConnectionMeasurements = {
-  local_hostname: string | null;
-  local_ip: string;
-  local_l4_port: U16;
-  remote_hostname: string | null;
-  remote_ip: string;
-  remote_l4_port: U16;
-  ip_proto: IpProtocol;
-  probe_report_summary: ProbeReportSummary;
-  user_annotation: string | null;
-  user_agent: string | null;
-  associated_apps: Record<U32, string | null> | null;
+    "local_hostname": (string | null);
+    "local_ip": string;
+    "local_l4_port": U16;
+    "remote_hostname": (string | null);
+    "remote_ip": string;
+    "remote_l4_port": U16;
+    "ip_proto": IpProtocol;
+    "probe_report_summary": ProbeReportSummary;
+    "user_annotation": (string | null);
+    "user_agent": (string | null);
+    "associated_apps": (Record<U32, (string | null)> | null);
 
-  /**
-   * Whether this connection has been (partially) closed. I.e., at least on FIN of RST ]
-   * was received.
-   */
-  close_has_started: boolean;
+    /**
+     * Whether this connection has been (partially) closed. I.e., at least on FIN of RST ]
+     * was received.
+     */
+    "close_has_started": boolean;
 
-  /**
-   * Whether this connection has completed the 4-way TCP teardown (2 FINs that were
-   * ACK'ed)
-   */
-  four_way_close_done: boolean;
-  start_tracking_time: string;
-  last_packet_time: string;
-  tx_byte_rate: RateEstimator;
-  tx_packet_rate: RateEstimator;
-  rx_byte_rate: RateEstimator;
-  rx_packet_rate: RateEstimator;
+    /**
+     * Whether this connection has completed the 4-way TCP teardown (2 FINs that were
+     * ACK'ed)
+     */
+    "four_way_close_done": boolean;
+    "start_tracking_time": string;
+    "last_packet_time": string;
+    "tx_byte_rate": RateEstimator;
+    "tx_packet_rate": RateEstimator;
+    "rx_byte_rate": RateEstimator;
+    "rx_packet_rate": RateEstimator;
 };
 export type I64 = number;
 export type DnsTrackerEntry = {
-  hostname: string;
-  created: string;
-  from_ptr_record: boolean;
-  rtt_usec?: I64;
-  ttl_sec?: I64;
+    "hostname": string;
+    "created": string;
+    "from_ptr_record": boolean;
+    "rtt_usec"?: I64;
+    "ttl_sec"?: I64;
 };
-export type AggregateCounterKind =
-  | {
-      DnsDstDomain: {
-        name: string;
-      };
-    }
-  | {
-      Application: {
-        name: string;
-      };
-    }
-  | "ConnectionTracker";
+export type AggregateCounterKind = ({
+    "DnsDstDomain": {
+        "name": string;
+    };
+} | {
+    "Application": {
+        "name": string;
+    };
+} | "ConnectionTracker");
 export type U64 = number;
 export type CounterBucket = {
-  sum: U64;
-  max: U64;
-  num_entries: U64;
+    "sum": U64;
+    "max": U64;
+    "num_entries": U64;
 };
 export type Usize = number;
 
@@ -177,38 +161,36 @@ export type Usize = number;
  *  * 3. Wrap is +1 from prev epoch: clear to the end, and from the beginnig to the new bucket
  *  * 4. Wrap is +2 or more from prev warp; clear everything
  *  *
- *
+ *  
  */
 export type BucketedTimeSeries = {
-  bucket_time_window: I64;
-  buckets: CounterBucket[];
-  num_buckets: Usize;
-  last_used_bucket: Usize;
+    "bucket_time_window": I64;
+    "buckets": (CounterBucket)[];
+    "num_buckets": Usize;
+    "last_used_bucket": Usize;
 
-  /**
-   * Identifies the time range of the buckets so two updates from different times that map to the
-   * same bucket don't get confused
-   */
-  last_num_wraps: Usize;
+    /**
+     * Identifies the time range of the buckets so two updates from different times that map to the
+     * same bucket don't get confused
+     */
+    "last_num_wraps": Usize;
 };
 export type AggregateCounter = {
-  kind: AggregateCounterKind;
-  counts: Record<string, BucketedTimeSeries>;
+    "kind": AggregateCounterKind;
+    "counts": Record<string, BucketedTimeSeries>;
 };
 export type TrafficCounters = {
-  send: AggregateCounter;
-  recv: AggregateCounter;
+    "send": AggregateCounter;
+    "recv": AggregateCounter;
 };
-export type GuiToServerMessages =
-  | {
-      DumpFlows: [];
-    }
-  | {
-      DumpDnsCache: [];
-    }
-  | {
-      DumpAggregateCounters: [];
-    }
-  | {
-      DumpStatCounters: [];
-    };
+export type GuiToServerMessages = ({
+    "DumpFlows": [];
+} | {
+    "DumpDnsCache": [];
+} | {
+    "DumpAggregateCounters": [];
+} | {
+    "DumpStatCounters": [];
+} | {
+    "DumpDnsAggregateCounters": [];
+});
