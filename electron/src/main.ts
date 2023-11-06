@@ -39,7 +39,11 @@ const createWindow = (): void => {
 };
 
 function spawn_desktop_binary(command: string) {
-  const args = ["--no-wasm-html-serving"];
+  const args = [
+    "--no-wasm-html-serving",
+    "--storage-server-url",
+    "http://localhost:50051",
+  ];
   const options: SpawnOptions = { stdio: "inherit" };
   desktopProcess = spawn(command, args, options);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -54,8 +58,7 @@ function spawn_desktop_binary(command: string) {
       );
     } else {
       console.warn(
-        "Desktop binary exited (crashed?) with: {}. Restarting",
-        code,
+        "Desktop binary exited (crashed?) with: " + code + ". Restarting",
       );
       spawn_desktop_binary(command);
     }

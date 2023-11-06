@@ -5,7 +5,9 @@ use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() {
-    let tx = ConnectionStorageHandler::spawn_from_url("http://[::1]:50051".to_string(), 10).await;
+    let tx = ConnectionStorageHandler::spawn_from_url("http://[::1]:50051".to_string(), 10)
+        .await
+        .unwrap();
     tx.send(ConnectionStorageEntry::default()).await.unwrap();
     tx.send(ConnectionStorageEntry::default()).await.unwrap();
     tx.send(ConnectionStorageEntry::default()).await.unwrap();

@@ -1588,31 +1588,6 @@ pub mod test {
         assert_eq!(ll_key, rl_key);
     }
 
-    /**
-     * Help tests find the testing directory - it's harder than it should be.
-     *
-     * If we invoke tests via 'cargo test', the base dir is netdebug/libconntrack
-     * but if we start it from the vscode debug IDE, it's netdebug
-     */
-
-    pub fn test_dir(f: &str) -> String {
-        use std::fs::metadata;
-        if metadata(f).is_ok() {
-            return f.to_string();
-        }
-        let p = Path::new("libconntrack").join(f);
-        if metadata(&p).is_ok() {
-            let p = p.into_os_string().to_str().unwrap().to_string();
-            return p;
-        } else {
-            let cwd = env::current_dir().unwrap();
-            panic!(
-                "Couldn't find a test_dir for {} from cwd={}",
-                f,
-                cwd.display()
-            );
-        }
-    }
 
     #[tokio::test]
     async fn connection_tracker_one_flow_outgoing() {
@@ -2324,53 +2299,53 @@ pub mod test {
         // Read the first 3 packets from the trace. I.e., just the handshake but no data.
         // ==> No probes are sent.
         let mut capture =
-            pcap::Capture::from_file(test_dir("tests/normal-conn-syn-and-fin.pcap")).unwrap();
-        let mut num_pks = 0;
-        while let Ok(pkt) = capture.next_packet() {
-            if num_pks >= 3 {
-                // just the 3-way handshake
-                break;
+                pcap::Capture::from_file(test_dir("tests/normal-conn-syn-and-fin.pcap")).unwrap();
+            let mut num_pks = 0;
+            while let Ok(pkt) = capture.next_packet() {
+                if num_pks >= 3 {
+                    // just the 3-way handshake
+                    break;
+                }
+                connection_tracker.add(OwnedParsedPacket::try_from(pkt).unwrap());
+                num_pks += 1;
             }
-            connection_tracker.add(OwnedParsedPacket::try_from(pkt).unwrap());
-            num_pks += 1;
-        }
 
-        assert_eq!(connection_tracker.connections.len(), 1);
+            assert_eq!(connection_tracker.connections.len(), 1);
 
-        // pause() halt updating of the tokio Instant timer.
-        tokio::time::pause();
-        // this sleep won't actually sleep but just advande the Instant timer
-        tokio::time::sleep(tokio::time::Duration::from_millis(TIME_WAIT_MS + 10)).await;
+            // pause() halt updating of the tokio Instant timer.
+            tokio::time::pause();
+            // this sleep won't actually sleep but just advande the Instant timer
+            tokio::time::sleep(tokio::time::Duration::from_millis(TIME_WAIT_MS + 10)).await;
 
-        // Create a packet from a different connection.
-        let mut pkt_unrelated_conn_raw: Vec<u8> = Vec::new();
-        etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
-            .ipv4([192, 168, 1, 238], [192, 168, 1, 2], 20)
-            .tcp(12345, 80, 42, 1024)
-            .write(&mut pkt_unrelated_conn_raw, &[])
-            .unwrap();
-        let pkt_unrelated_conn =
-            OwnedParsedPacket::try_from_fake_time(pkt_unrelated_conn_raw).unwrap();
-        let unrelated_conn_key = pkt_unrelated_conn
-            .clone()
-            .to_connection_key(&local_addrs)
-            .unwrap()
-            .0;
+            // Create a packet from a different connection.
+            let mut pkt_unrelated_conn_raw: Vec<u8> = Vec::new();
+            etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
+                .ipv4([192, 168, 1, 238], [192, 168, 1, 2], 20)
+                .tcp(12345, 80, 42, 1024)
+                .write(&mut pkt_unrelated_conn_raw, &[])
+                .unwrap();
+            let pkt_unrelated_conn =
+                OwnedParsedPacket::try_from_fake_time(pkt_unrelated_conn_raw).unwrap();
+            let unrelated_conn_key = pkt_unrelated_conn
+                .clone()
+                .to_connection_key(&local_addrs)
+                .unwrap()
+                .0;
 
-        // and put the packet into connection tracker. The previous connection should
-        // be evicted, but since the previous connection doesn't have any probes, it
-        // should not have been sent to the storage handler
-        connection_tracker.add(pkt_unrelated_conn);
-        assert_eq!(connection_tracker.connections.len(), 1);
-        match evict_rx.try_recv() {
-            Err(mpsc::error::TryRecvError::Empty) => (),
-            x => panic!("Expected to get an empty from evict_rx, got {:?}", x),
-        }
+            // and put the packet into connection tracker. The previous connection should
+            // be evicted, but since the previous connection doesn't have any probes, it
+            // should not have been sent to the storage handler
+            connection_tracker.add(pkt_unrelated_conn);
+            assert_eq!(connection_tracker.connections.len(), 1);
+            match evict_rx.try_recv() {
+                Err(mpsc::error::TryRecvError::Empty) => (),
+                x => panic!("Expected to get an empty from evict_rx, got {:?}", x),
+            }
 
-        // make sure we have the "unrelated" connection in the tracker
-        assert!(connection_tracker
-            .connections
-            .get_no_lru(&unrelated_conn_key)
+            // make sure we have the "unrelated" connection in the tracker
+            assert!(connection_tracker
+                .connections
+                .get_no_lru(&unrelated_conn_key)
             .is_some());
 
         tokio::time::resume();

@@ -555,7 +555,6 @@ mod test {
     // FIXME: the log files on disk use a previous version of OwnedParsedPacket (in
     // particular, they still contain a pcap_header field), instead of a broken out
     // timestamp and len field.
-    use crate::connection::test::test_dir;
     #[test]
     #[ignore]
     fn validate_latency() {

@@ -115,7 +115,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let args = args_clone;
         // Spawn a ConnectionTracker task
         let storage_service_msg_tx = if let Some(url) = args.storage_server_url {
-            Some(ConnectionStorageHandler::spawn_from_url(url, 1000).await)
+            Some(
+                ConnectionStorageHandler::spawn_from_url(url, 1000)
+                    .await
+                    .unwrap(),
+            )
         } else {
             None
         };
