@@ -2,12 +2,13 @@ use std::{
     collections::{HashMap, HashSet},
     process::ExitCode,
     rc::Rc,
+    time::Duration,
 };
 
 use clap::Parser;
 use itertools::Itertools;
-use log::{error, info, warn};
-use pb_conntrack_types::ConnectionStorageEntry;
+use log::{error, warn};
+use pb_conntrack_types::{ConnectionStorageEntry, ProbeType};
 use prost::Message;
 use rusqlite::{Connection, OpenFlags};
 
@@ -16,6 +17,8 @@ use rusqlite::{Connection, OpenFlags};
 struct Args {
     #[arg()]
     pub sqlite_filenames: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    pub list_only: bool,
 }
 
 type BoxError = Box<dyn std::error::Error>;
@@ -62,13 +65,12 @@ impl PathEntry {
     }
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
-    common::init::netdebug_init();
-    let args = Args::parse();
-    let mut graph: TheGraph = TheGraph::new();
-    for fname in &args.sqlite_filenames {
-        info!("Reading sqlite file: {}", fname);
-        let db = Connection::open_with_flags(fname, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+fn visit_all_connections<F: FnMut(&String, &ConnectionStorageEntry)>(
+    db_files: &Vec<String>,
+    mut visit: F,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for db_file in db_files {
+        let db = Connection::open_with_flags(db_file, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let mut stmt = db
             .prepare("SELECT saved_at, pb_storage_entry FROM connections")
             .expect("Could not prepare statement");
@@ -79,100 +81,113 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Ok((ts, ConnectionStorageEntry::decode(buf.as_slice())?))
             })?;
         for entry in entries {
-            let entry = entry?;
-            let (_ts, entry) = entry;
-            // FIXME: this ingores some legit IPs as well for now. But we'll survive
-            if entry.remote_ip.starts_with("192.168.") || entry.remote_ip.starts_with("fe80::") {
-                continue;
-            }
-            if entry.remote_ip.contains(":") {
-                // lets skip IPv6 for now
-                continue;
-            }
-            //println!("{:#?}", entry);
-            for probe_round in &entry.probe_rounds {
-                // probes in DB are not sorrted by TTL. Sort them
-                let mut probes_sorted = probe_round.probes.clone();
-                probes_sorted.sort_by_key(|x| x.outgoing_ttl);
-                let mut path_vec = Vec::new();
-                for probe in probes_sorted {
-                    use pb_conntrack_types::ProbeType::*;
-                    let mut path_entry = PathEntry::default();
-                    path_entry.dist = probe.outgoing_ttl as u8;
-                    path_entry.ip = probe.sender_ip.clone();
-                    match probe.probe_type() {
-                        EndHostReplyFound | EndHostReplyNoProbe | UnspecifiedProbeType => {
-                            path_entry.is_endhost = true;
-                            // For endhosts, probe.sender_ip is None. So we need to use
-                            // remote_ip
-                            path_entry.ip = Some(entry.remote_ip.clone());
-                        }
-                        _ => (),
-                    }
-                    if path_vec.is_empty() {
-                        path_vec.push(path_entry);
-                    } else {
-                        if path_vec.last().unwrap().is_endhost {
-                            // previous entry was an endhost. So this entry and all following ones
-                            // will also be dupACKs from the endhost. So, break the loop.
-                            break;
-                        } else {
-                            path_vec.push(path_entry);
-                        }
-                    }
-                }
-                // Find the last element in that path that has a sender IP. This is for cases where we
-                // don't see any more responses.
-                let mut last_idx_with_ip = 0;
-                for (idx, elem) in itertools::enumerate(&path_vec) {
-                    if elem.ip.is_some() {
-                        last_idx_with_ip = idx;
-                    }
-                }
-
-                // truncate the path.
-                // Then collapse conseutive unresponsive hops/routers.
-                let mut new_vec = path_vec[0..=last_idx_with_ip]
-                    .iter()
-                    // Dedup/collapse consecutive entries with matching IPs. At this stage this
-                    // we would expect that to be only for cases where a.ip == b.ip == None. I.e.,
-                    // unresponsive hosts. But maybe we sohuldn't assume and sanity check if the ip is not
-                    // None
-                    .dedup_by_with_count(|a, b| a.ip == b.ip)
-                    .map(|(cnt, elem)| {
-                        let mut elem = elem.clone();
-                        elem.count = cnt as u8;
-                        elem
-                    })
-                    .collect_vec();
-                // For each element in the path, find the predecessor and successor IPs.
-                let mut prev_ip = None;
-                for elem in &mut new_vec {
-                    elem.pred_ip = prev_ip;
-                    prev_ip = elem.ip.clone();
-                }
-                let mut succ_ip = None;
-                for elem in new_vec.iter_mut().rev() {
-                    elem.successor_ip = succ_ip;
-                    succ_ip = elem.ip.clone();
-                }
-                // hackery warning. lets compute the key we use for the node/PathEntry
-                for elem in &mut new_vec {
-                    elem.mkkey();
-                }
-                graph.add_path(&new_vec);
-
-                /*
-                println!("ORIG {}", foobar(&path_vec));
-                println!("MODI {}", foobar(&new_vec));
-                println!("----");
-                */
-            }
+            let (ts, entry) = entry?;
+            visit(&ts, &entry);
         }
     }
+    Ok(())
+}
+
+fn run(db_files: &Vec<String>) -> Result<TheGraph, Box<dyn std::error::Error>> {
+    common::init::netdebug_init();
+    let mut graph: TheGraph = TheGraph::new();
+    visit_all_connections(db_files, |_ts, connection| {
+        process_connection(&mut graph, connection);
+    })
+    .unwrap();
     graph.print_dot();
     graph.print_stats();
-    Ok(())
+    Ok(graph)
+}
+
+fn process_connection(graph: &mut TheGraph, entry: &ConnectionStorageEntry) {
+    // FIXME: this ingores some legit IPs as well for now. But we'll survive
+    if entry.remote_ip.starts_with("192.168.") || entry.remote_ip.starts_with("fe80::") {
+        return;
+    }
+    if entry.remote_ip.contains(":") {
+        // lets skip IPv6 for now
+        return;
+    }
+    //println!("{:#?}", entry);
+    for probe_round in &entry.probe_rounds {
+        // probes in DB are not sorrted by TTL. Sort them
+        let mut probes_sorted = probe_round.probes.clone();
+        probes_sorted.sort_by_key(|x| x.outgoing_ttl);
+        let mut path_vec = Vec::new();
+        for probe in probes_sorted {
+            use pb_conntrack_types::ProbeType::*;
+            let mut path_entry = PathEntry::default();
+            path_entry.dist = probe.outgoing_ttl as u8;
+            path_entry.ip = probe.sender_ip.clone();
+            match probe.probe_type() {
+                EndHostReplyFound | EndHostReplyNoProbe | UnspecifiedProbeType => {
+                    path_entry.is_endhost = true;
+                    // For endhosts, probe.sender_ip is None. So we need to use
+                    // remote_ip
+                    path_entry.ip = Some(entry.remote_ip.clone());
+                }
+                _ => (),
+            }
+            if path_vec.is_empty() {
+                path_vec.push(path_entry);
+            } else {
+                if path_vec.last().unwrap().is_endhost {
+                    // previous entry was an endhost. So this entry and all following ones
+                    // will also be dupACKs from the endhost. So, break the loop.
+                    break;
+                } else {
+                    path_vec.push(path_entry);
+                }
+            }
+        }
+        // Find the last element in that path that has a sender IP. This is for cases where we
+        // don't see any more responses.
+        let mut last_idx_with_ip = 0;
+        for (idx, elem) in itertools::enumerate(&path_vec) {
+            if elem.ip.is_some() {
+                last_idx_with_ip = idx;
+            }
+        }
+
+        // truncate the path.
+        // Then collapse conseutive unresponsive hops/routers.
+        let mut new_vec = path_vec[0..=last_idx_with_ip]
+            .iter()
+            // Dedup/collapse consecutive entries with matching IPs. At this stage this
+            // we would expect that to be only for cases where a.ip == b.ip == None. I.e.,
+            // unresponsive hosts. But maybe we sohuldn't assume and sanity check if the ip is not
+            // None
+            .dedup_by_with_count(|a, b| a.ip == b.ip)
+            .map(|(cnt, elem)| {
+                let mut elem = elem.clone();
+                elem.count = cnt as u8;
+                elem
+            })
+            .collect_vec();
+        // For each element in the path, find the predecessor and successor IPs.
+        let mut prev_ip = None;
+        for elem in &mut new_vec {
+            elem.pred_ip = prev_ip;
+            prev_ip = elem.ip.clone();
+        }
+        let mut succ_ip = None;
+        for elem in new_vec.iter_mut().rev() {
+            elem.successor_ip = succ_ip;
+            succ_ip = elem.ip.clone();
+        }
+        // hackery warning. lets compute the key we use for the node/PathEntry
+        for elem in &mut new_vec {
+            elem.mkkey();
+        }
+        graph.add_path(&new_vec);
+
+        /*
+        println!("ORIG {}", foobar(&path_vec));
+        println!("MODI {}", foobar(&new_vec));
+        println!("----");
+        */
+    }
 }
 
 pub struct NodeInfo<'a> {
@@ -342,11 +357,105 @@ impl TheGraph {
 }
 
 fn main() -> ExitCode {
-    match run() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            error!("{:?}", e);
-            ExitCode::FAILURE
+    let args = Args::parse();
+    if args.list_only {
+        list_db_contents(&args.sqlite_filenames);
+        ExitCode::SUCCESS
+    } else {
+        match run(&args.sqlite_filenames) {
+            Ok(_graph) => ExitCode::SUCCESS,
+            Err(e) => {
+                error!("{:?}", e);
+                ExitCode::FAILURE
+            }
         }
+    }
+}
+
+fn list_db_contents(db_files: &Vec<String>) {
+    visit_all_connections(db_files, |_ts, connection| {
+        let mut found_endhost = false;
+        for probe_round in &connection.probe_rounds {
+            println!(
+                "Connection: {:?} ({}:{}) --> {:?} ({}:{})",
+                connection.local_hostname,
+                connection.local_ip,
+                connection.local_port,
+                connection.remote_hostname,
+                connection.remote_ip,
+                connection.remote_port
+            );
+            // probes in DB are not sorrted by TTL. Sort them
+            let mut probes_sorted = probe_round.probes.clone();
+            probes_sorted.sort_by_key(|x| x.outgoing_ttl);
+
+            for probe in &probes_sorted {
+                let rtt = match (&probe.in_timestamp, &probe.out_timestamp) {
+                    (None, None) | (None, Some(_)) | (Some(_), None) => String::from(" "),
+                    (Some(in_ts), Some(out_ts)) => {
+                        format!("{:?}", protobuf_timestamp_delta(&in_ts, &out_ts))
+                    }
+                };
+                let ip = if let Some(ip) = probe.sender_ip.clone() {
+                    ip
+                } else if probe.probe_type() == ProbeType::EndHostReplyFound {
+                    connection.remote_ip.clone()
+                } else {
+                    "-".to_string()
+                };
+                let probe_type = probe.probe_type().as_str_name();
+                if probe.probe_type() == ProbeType::EndHostReplyFound {
+                    // continue many end-host probes on the same line
+                    if found_endhost {
+                        print!(" {}", rtt);
+                    } else {
+                        found_endhost = true;
+                        print!(
+                            "      TTL {:2}: {} {} {}",
+                            probe.outgoing_ttl, probe_type, ip, rtt,
+                        );
+                    }
+                } else {
+                    println!(
+                        "      TTL {:2}: {} {} {}",
+                        probe.outgoing_ttl, probe_type, ip, rtt,
+                    );
+                }
+            }
+            println!(""); // end with an empty line
+            println!("----------------------------------------------");
+        }
+    })
+    .unwrap();
+}
+
+/**
+ * COmpute the delta between two protobuf/prost timestamps and return it.
+ * Try very hard not to do any of the math ourselves
+ */
+fn protobuf_timestamp_delta(
+    in_ts: &prost_types::Timestamp,
+    out_ts: &prost_types::Timestamp,
+) -> Duration {
+    let in_duration =
+        Duration::from_secs(in_ts.seconds as u64) + Duration::from_nanos(in_ts.nanos as u64);
+    let out_duration =
+        Duration::from_secs(out_ts.seconds as u64) + Duration::from_nanos(out_ts.nanos as u64);
+    in_duration - out_duration
+}
+
+#[cfg(test)]
+mod test {
+    use common::test_utils::test_dir;
+
+    use crate::run;
+
+    const TEST_DATA_SIMPLE: &str = "tests/test_input_connections.sqlite3";
+    #[test]
+    fn test_simple_graph() {
+        let test_files = vec![test_dir("storge_server", TEST_DATA_SIMPLE)];
+        let graph = run(&test_files).unwrap();
+        assert_eq!(graph.edges.len(), 55);
+        assert_eq!(graph.nodes.len(), 52);
     }
 }

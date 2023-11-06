@@ -77,15 +77,13 @@ impl WebServerContext {
                 context.pcap_device.clone(),
             );
             // Spawn a ConnectionTracker task
-            let storage_service_future = if let Some(url) = storage_server_url {
-                Some(ConnectionStorageHandler::spawn_from_url(url, 1000))
-            } else {
-                None
-            };
             tokio::spawn(async move {
                 info!("Launching the connection tracker (single instance for now)");
-                let storage_service_msg_tx = if let Some(future) = storage_service_future {
-                    Some(future.await)
+                let storage_service_msg_tx = if let Some(url) = storage_server_url {
+                    match ConnectionStorageHandler::spawn_from_url(url, 1000).await {
+                        Ok(server) => Some(server),
+                        Err(e) => panic!("Problem connecting to the storage server: {}", e),
+                    }
                 } else {
                     None
                 };

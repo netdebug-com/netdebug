@@ -1538,10 +1538,9 @@ impl Connection {
 #[cfg(test)]
 pub mod test {
     use core::panic;
-    use std::env;
-    use std::path::Path;
     use std::str::FromStr;
 
+    use common::test_utils::test_dir;
     use tokio::sync::mpsc::channel;
     use tokio::sync::mpsc::error::TryRecvError;
 
@@ -1588,32 +1587,6 @@ pub mod test {
         assert_eq!(ll_key, rl_key);
     }
 
-    /**
-     * Help tests find the testing directory - it's harder than it should be.
-     *
-     * If we invoke tests via 'cargo test', the base dir is netdebug/libconntrack
-     * but if we start it from the vscode debug IDE, it's netdebug
-     */
-
-    pub fn test_dir(f: &str) -> String {
-        use std::fs::metadata;
-        if metadata(f).is_ok() {
-            return f.to_string();
-        }
-        let p = Path::new("libconntrack").join(f);
-        if metadata(&p).is_ok() {
-            let p = p.into_os_string().to_str().unwrap().to_string();
-            return p;
-        } else {
-            let cwd = env::current_dir().unwrap();
-            panic!(
-                "Couldn't find a test_dir for {} from cwd={}",
-                f,
-                cwd.display()
-            );
-        }
-    }
-
     #[tokio::test]
     async fn connection_tracker_one_flow_outgoing() {
         let storage_service_client = None;
@@ -1632,7 +1605,7 @@ pub mod test {
 
         let mut capture =
             // NOTE: this capture has no FINs so contracker will not remove it
-            pcap::Capture::from_file(test_dir("tests/simple_websocket_cleartxt_out_probes.pcap"))
+            pcap::Capture::from_file(test_dir("libconntack", "tests/simple_websocket_cleartxt_out_probes.pcap"))
                 .unwrap();
         // take all of the packets in the capture and pipe them into the connection tracker
         while let Ok(pkt) = capture.next_packet() {
@@ -1696,6 +1669,7 @@ pub mod test {
 
         let mut connection_key: Option<ConnectionKey> = None;
         let mut capture = pcap::Capture::from_file(test_dir(
+            "libconntrack",
             // NOTE: this capture has no FINs so contracker will not remove it
             "tests/simple_websocket_cleartext_remote_probe_replies.pcap",
         ))
@@ -1848,8 +1822,11 @@ pub mod test {
             128,
         );
 
-        let mut capture =
-            pcap::Capture::from_file(test_dir("tests/simple_clear_text_with_fins.pcap")).unwrap();
+        let mut capture = pcap::Capture::from_file(test_dir(
+            "libconntrack",
+            "tests/simple_clear_text_with_fins.pcap",
+        ))
+        .unwrap();
         // take all of the packets in the capture and pipe them into the connection tracker
         let mut conn_key = None;
         while let Ok(pkt) = capture.next_packet() {
@@ -1923,7 +1900,7 @@ pub mod test {
             128,
         );
 
-        let mut capture = pcap::Capture::from_file(test_dir(pcap_file)).unwrap();
+        let mut capture = pcap::Capture::from_file(test_dir("libconntrack", pcap_file)).unwrap();
         // take all of the packets in the capture and pipe them into the connection tracker
         let mut conn_key = None;
         while let Ok(pkt) = capture.next_packet() {
@@ -1966,6 +1943,7 @@ pub mod test {
 
         let mut connection_key: Option<ConnectionKey> = None;
         let mut capture = pcap::Capture::from_file(test_dir(
+            "libconntrack",
             // NOTE: this capture has no FINs so contracker will not remove it
             "tests/aws-sfc-to-turkey-psh-dup-ack-sack-ones-stream.pcap",
         ))
@@ -2239,8 +2217,11 @@ pub mod test {
             128,
         );
 
-        let mut capture =
-            pcap::Capture::from_file(test_dir("tests/normal-conn-syn-and-fin.pcap")).unwrap();
+        let mut capture = pcap::Capture::from_file(test_dir(
+            "libconntrack",
+            "tests/normal-conn-syn-and-fin.pcap",
+        ))
+        .unwrap();
         let mut packets = Vec::new();
         while let Ok(pkt) = capture.next_packet() {
             packets.push(OwnedParsedPacket::try_from(pkt).unwrap());
@@ -2323,8 +2304,11 @@ pub mod test {
 
         // Read the first 3 packets from the trace. I.e., just the handshake but no data.
         // ==> No probes are sent.
-        let mut capture =
-            pcap::Capture::from_file(test_dir("tests/normal-conn-syn-and-fin.pcap")).unwrap();
+        let mut capture = pcap::Capture::from_file(test_dir(
+            "libconntrack",
+            "tests/normal-conn-syn-and-fin.pcap",
+        ))
+        .unwrap();
         let mut num_pks = 0;
         while let Ok(pkt) = capture.next_packet() {
             if num_pks >= 3 {

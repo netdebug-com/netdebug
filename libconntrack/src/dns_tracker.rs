@@ -707,14 +707,13 @@ pub fn make_dns_ptr_lookup_request(
 
 #[cfg(test)]
 mod test {
+    use common::test_utils::test_dir;
     use dns_parser::QueryType;
     use etherparse::TransportHeader;
     use tokio::sync::mpsc::channel;
 
     use crate::{
-        connection::{test::test_dir, ConnectionTracker},
-        owned_packet::OwnedParsedPacket,
-        pcap::MockRawSocketProber,
+        connection::ConnectionTracker, owned_packet::OwnedParsedPacket, pcap::MockRawSocketProber,
     };
 
     use super::*;
@@ -802,7 +801,8 @@ mod test {
             IpAddr::from_str("192.168.1.103").unwrap(),
             IpAddr::from_str("2600:1700:5b20:4e10:3529:39f:19de:6434").unwrap(),
         ]);
-        let mut capture = pcap::Capture::from_file(test_dir("tests/dns_traces.pcap")).unwrap();
+        let mut capture =
+            pcap::Capture::from_file(test_dir("libconntrack", "tests/dns_traces.pcap")).unwrap();
         // grab each packet and dump it into the dns tracker
         while let Ok(pkt) = capture.next_packet() {
             let pkt = OwnedParsedPacket::try_from(pkt).unwrap();
@@ -833,7 +833,11 @@ mod test {
         use std::fs::File;
 
         let mut dns_tracker = DnsTracker::new(10);
-        let input = File::open(test_dir("tests/windows_get_dnsclientcache.txt")).unwrap();
+        let input = File::open(test_dir(
+            "libconntrack",
+            "tests/windows_get_dnsclientcache.txt",
+        ))
+        .unwrap();
         assert!(dns_tracker.load_windows_dns_cache(input).is_ok());
         assert_eq!(dns_tracker.reverse_map.len(), 24); // from the test data
     }
@@ -891,20 +895,23 @@ mod test {
             .unwrap();
 
         // dump all the packets from the trace into the connection tracker; they will send all to DNS
-        let mut capture = pcap::Capture::from_file(test_dir("tests/lost_dns.pcap")).unwrap();
+        let mut capture =
+            pcap::Capture::from_file(test_dir("libconntrack", "tests/lost_dns.pcap")).unwrap();
         while let Ok(pkt) = capture.next_packet() {
             let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
             connection_tracker.add(owned_pkt);
         }
         // NOTE that 'tests/lost_dns.ips_all' includes IPs that we don't see in DNS!
-        let addrs = BufReader::new(File::open(test_dir("tests/lost_dns.ips_all")).unwrap())
-            .lines()
-            .map(|s| IpAddr::from_str(s.unwrap().as_str()).unwrap())
-            .collect::<Vec<IpAddr>>();
-        let working_addrs = BufReader::new(File::open(test_dir("tests/lost_dns.ips")).unwrap())
-            .lines()
-            .map(|s| IpAddr::from_str(s.unwrap().as_str()).unwrap())
-            .collect::<HashSet<IpAddr>>();
+        let addrs =
+            BufReader::new(File::open(test_dir("libconntrack", "tests/lost_dns.ips_all")).unwrap())
+                .lines()
+                .map(|s| IpAddr::from_str(s.unwrap().as_str()).unwrap())
+                .collect::<Vec<IpAddr>>();
+        let working_addrs =
+            BufReader::new(File::open(test_dir("libconntrack", "tests/lost_dns.ips")).unwrap())
+                .lines()
+                .map(|s| IpAddr::from_str(s.unwrap().as_str()).unwrap())
+                .collect::<HashSet<IpAddr>>();
         // make sure everything parsed properly
         let (stats_tx, mut stats_rx) = mpsc::unbounded_channel();
         dns_tx
