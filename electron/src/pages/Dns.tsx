@@ -85,7 +85,7 @@ const Dns: React.FC = () => {
   });
 
   /**
-   * Take as input a Map from IP -> DnsTrackerEntry and 
+   * Take as input a Map from IP -> DnsTrackerEntry and
    * re-index it to be backwards, e.g., a Map from each
    * DnsTrackerEntry to the list of IPs that were looked up
    * in that same query.  Easier for people to understand that way.
