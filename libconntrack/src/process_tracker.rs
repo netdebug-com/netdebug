@@ -86,7 +86,6 @@ impl ProcessTracker {
         mut self,
         update_frequency: Duration,
     ) -> (ProcessTrackerSender, JoinHandle<()>) {
-        #[cfg(windows)]
         {
             let tx = self.tx.clone();
             let _join_pid2process_loop =
@@ -303,7 +302,6 @@ impl ProcessTracker {
  * This can take a long time to run .. seconds even, so run in a diff
  * task/thread and async post the data back to the main ProcessTracker
  */
-#[cfg(windows)]
 async fn run_pid2process_loop(update_frequency: Duration, tx: ProcessTrackerSender) {
     use chrono::Utc;
 
@@ -328,6 +326,33 @@ async fn run_pid2process_loop(update_frequency: Duration, tx: ProcessTrackerSend
             tokio::time::sleep(delta.to_std().unwrap()).await;
         }
     }
+}
+
+#[cfg(not(windows))]
+fn make_pid2process() -> Result<HashMap<u32, String>, Box<dyn std::error::Error>> {
+    use libproc::libproc::proc_pid;
+    use libproc::processes::pids_by_type;
+    use libproc::processes::ProcFilter;
+    use log::trace;
+    let mut ret = HashMap::new();
+
+    let pids = pids_by_type(ProcFilter::All)?;
+    for pid in pids {
+        // awesome libproc API. returns pids as u32 but then wants a i32 for the name function :-(
+        match proc_pid::name(pid as i32) {
+            Ok(proc_name) => {
+                ret.insert(pid, proc_name);
+            }
+            Err(err_str) => {
+                // TODO: On MacOS we fail look up process names for processes not owned by
+                // the current user. While we could use a uid filter for `pids_by_type` I think
+                // it's better to do it this way since the process might be run as root in which
+                // case we'd want to be able to map non-root processes.
+                trace!("Failed to lookup process name for pid {}: {}", pid, err_str);
+            }
+        }
+    }
+    Ok(ret)
 }
 
 #[cfg(windows)]
@@ -469,7 +494,6 @@ mod test {
      * Any system will have some threads; just make sure we get non-garbage data
      * and make sure we find this process in it
      */
-    #[cfg(windows)]
     #[test]
     fn test_make_pid2process() {
         let my_pid = std::process::id();
