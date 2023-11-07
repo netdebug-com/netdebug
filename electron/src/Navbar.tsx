@@ -29,7 +29,7 @@ export default function MyTabs() {
   const routeMatch = useRouteMatch(paths);
   const currentTab = routeMatch?.pattern?.path;
   return (
-    <Tabs value={currentTab}>
+    <Tabs sx={{ marginBottom: 1 }} value={currentTab}>
       {TabData.map(([label, dst]) => {
         return (
           <Tab label={label} key={dst} value={dst} to={dst} component={Link} />

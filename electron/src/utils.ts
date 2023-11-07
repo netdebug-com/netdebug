@@ -25,9 +25,21 @@ function periodic_with_sla(
 
 // External style sheets are for loser...
 const headerStyle = {
-  backgroundColor: "#110099",
-  color: "white",
+  // Looks like MUI has a color palette and we can refer to these
+  // colors :-)
+  // https://mui.com/material-ui/customization/palette/
+  backgroundColor: "primary.main",
+  color: "primary.contrastText",
   fontWeight: "bold",
 };
 
-export { periodic_with_sla, headerStyle };
+// Re-use the header style but a width
+// See https://mui.com/system/getting-started/the-sx-prop/#sizing
+// For an explanation of what the width means exactly.
+// But values < 1.0 are translated into percent (0.5 -> 50%)
+// Otherwise the unit is `px`
+function headerStyleWithWidth(width: number) {
+  return { ...headerStyle, width: width, minWidth: width };
+}
+
+export { periodic_with_sla, headerStyle, headerStyleWithWidth };
