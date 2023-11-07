@@ -10,7 +10,7 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Paper from "@mui/material/Paper";
 
-import { headerStyle, periodic_with_sla } from "../utils";
+import { headerStyle, headerStyleWithWidth, periodic_with_sla } from "../utils";
 
 function format_ips(ips: string[]) {
   if (ips.length <= 1) {
@@ -62,12 +62,12 @@ const Dns: React.FC = () => {
 
     onMessage: (msg) => {
       const data = JSON.parse(msg.data);
-      console.log("Got message from websocket: ", typeof data, data);
+      console.debug("Got message from websocket: ", typeof data, data);
       if ("DumpDnsCache" in data) {
         const cache = new Map<string, DnsTrackerEntry>(
           Object.entries(data.DumpDnsCache),
         );
-        console.log("Got a DumpDnsCache message!", typeof cache, cache);
+        console.debug("Got a DumpDnsCache message!", typeof cache, cache);
         setDnsEntries(cache);
         periodic_with_sla(
           "DumpDnsCache",
@@ -118,7 +118,7 @@ const Dns: React.FC = () => {
   }, []);
 
   const sendRequest = () => {
-    console.log("Sending DNS request");
+    console.debug("Sending DNS request");
     sendMessage(
       JSON.stringify({
         DumpDnsCache: [],
@@ -168,14 +168,14 @@ const Dns: React.FC = () => {
       <Table sx={{ minWidth: 650 }} aria-label="simple table">
         <TableHead>
           <TableRow style={headerStyle}>
-            <TableCell sx={headerStyle}>Hostname</TableCell>
-            <TableCell sx={headerStyle} align="left">
+            <TableCell sx={headerStyleWithWidth(0.5)}>Hostname</TableCell>
+            <TableCell sx={headerStyleWithWidth(0.3)} align="left">
               IP(s)
             </TableCell>
-            <TableCell sx={headerStyle} align="right">
+            <TableCell sx={headerStyleWithWidth(0.1)} align="right">
               TTL&nbsp;(secs)
             </TableCell>
-            <TableCell sx={headerStyle} align="right">
+            <TableCell sx={headerStyleWithWidth(0.1)} align="right">
               RTT&nbsp;(millis)
             </TableCell>
           </TableRow>
