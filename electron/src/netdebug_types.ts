@@ -113,8 +113,8 @@ export type ConnectionMeasurements = {
      * ACK'ed)
      */
     "four_way_close_done": boolean;
-    "start_tracking_time": string;
-    "last_packet_time": string;
+    "start_tracking_time_ms": F64;
+    "last_packet_time_ms": F64;
     "tx_byte_rate": RateEstimator;
     "tx_packet_rate": RateEstimator;
     "rx_byte_rate": RateEstimator;

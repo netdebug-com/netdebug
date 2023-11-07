@@ -1,9 +1,10 @@
 // check how long it's been since our last message and send now or later
 
 import { MutableRefObject } from "react";
+import { RateEstimator } from "./netdebug_types";
 
 // depending on our SLAs
-function periodic_with_sla(
+export function periodic_with_sla(
   label: string,
   timeout_id: MutableRefObject<NodeJS.Timeout>,
   last_send: MutableRefObject<number>,
@@ -23,8 +24,30 @@ function periodic_with_sla(
   }
 }
 
+export function rateEstimatorPrettyRate(
+  rate: RateEstimator,
+  unitSuffix: string,
+): string {
+  if (rate.estimate_rate_per_ns === null) {
+    return "None";
+  }
+  const per_sec = rate.estimate_rate_per_ns * 1e9;
+  const opts = {
+    maximumFractionDigits: 1,
+  };
+  if (per_sec > 1e9) {
+    return (per_sec / 1e9).toLocaleString(undefined, opts) + " G" + unitSuffix;
+  } else if (per_sec > 1e6) {
+    return (per_sec / 1e6).toLocaleString(undefined, opts) + " M" + unitSuffix;
+  } else if (per_sec > 1e3) {
+    return (per_sec / 1e3).toLocaleString(undefined, opts) + " K" + unitSuffix;
+  } else {
+    return per_sec.toLocaleString(undefined, opts) + " " + unitSuffix;
+  }
+}
+
 // External style sheets are for loser...
-const headerStyle = {
+export const headerStyle = {
   // Looks like MUI has a color palette and we can refer to these
   // colors :-)
   // https://mui.com/material-ui/customization/palette/
@@ -38,8 +61,6 @@ const headerStyle = {
 // For an explanation of what the width means exactly.
 // But values < 1.0 are translated into percent (0.5 -> 50%)
 // Otherwise the unit is `px`
-function headerStyleWithWidth(width: number) {
+export function headerStyleWithWidth(width: number) {
   return { ...headerStyle, width: width, minWidth: width };
 }
-
-export { periodic_with_sla, headerStyle, headerStyleWithWidth };

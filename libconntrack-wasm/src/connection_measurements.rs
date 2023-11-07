@@ -1,5 +1,6 @@
 use std::{collections::HashMap, net::IpAddr};
 
+use chrono::serde::ts_milliseconds;
 use chrono::{DateTime, Utc};
 use common_wasm::ProbeReportSummary;
 use serde::{Deserialize, Serialize};
@@ -36,9 +37,11 @@ pub struct ConnectionMeasurements {
     /// ACK'ed)
     pub four_way_close_done: bool,
     // TODO: add local_syn, remote_syn IP and TCP options
-    #[type_def(type_of = "String")]
+    #[serde(with = "ts_milliseconds", rename = "start_tracking_time_ms")]
+    #[type_def(type_of = "f64")]
     pub start_tracking_time: DateTime<Utc>, // time tracker: first saw a packet
-    #[type_def(type_of = "String")]
+    #[type_def(type_of = "f64")]
+    #[serde(with = "ts_milliseconds", rename = "last_packet_time_ms")]
     pub last_packet_time: DateTime<Utc>, // time tracker: last saw a packet
     pub tx_byte_rate: RateEstimator,
     pub tx_packet_rate: RateEstimator,
