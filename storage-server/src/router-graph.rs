@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use itertools::Itertools;
 use log::{error, warn};
 use pb_conntrack_types::{ConnectionStorageEntry, ProbeType};
@@ -14,11 +14,35 @@ use rusqlite::{Connection, OpenFlags};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
+#[command(propagate_version = true)]
 struct Args {
+    #[command(subcommand)]
+    command: CliCommands,
+    // TODO: couldn't figure out how to mix arg() options with subcommand
+    // so I've moved the files into each subcommand
+}
+
+#[derive(Debug, Subcommand)]
+enum CliCommands {
+    List(ListCmd),
+    Stats(StatsCmd),
+    Dot(DotCmd),
+}
+#[derive(Debug, Parser)]
+struct ListCmd {
     #[arg()]
     pub sqlite_filenames: Vec<String>,
-    #[arg(long, default_value_t = false)]
-    pub list_only: bool,
+}
+#[derive(Debug, Parser)]
+struct StatsCmd {
+    #[arg()]
+    pub sqlite_filenames: Vec<String>,
+}
+
+#[derive(Debug, Parser)]
+struct DotCmd {
+    #[arg()]
+    pub sqlite_filenames: Vec<String>,
 }
 
 type BoxError = Box<dyn std::error::Error>;
@@ -358,18 +382,92 @@ impl TheGraph {
 
 fn main() -> ExitCode {
     let args = Args::parse();
-    if args.list_only {
-        list_db_contents(&args.sqlite_filenames);
-        ExitCode::SUCCESS
-    } else {
-        match run(&args.sqlite_filenames) {
+    match args.command {
+        CliCommands::List(sub_args) => {
+            list_db_contents(&sub_args.sqlite_filenames);
+            ExitCode::SUCCESS
+        }
+        CliCommands::Stats(sub_args) => {
+            compute_stats(&sub_args.sqlite_filenames);
+            ExitCode::SUCCESS
+        }
+        CliCommands::Dot(sub_args) => match run(&sub_args.sqlite_filenames) {
             Ok(_graph) => ExitCode::SUCCESS,
             Err(e) => {
                 error!("{:?}", e);
                 ExitCode::FAILURE
             }
-        }
+        },
     }
+}
+
+fn compute_stats(db_files: &Vec<String>) {
+    let mut num_flows = 0;
+    let mut flows_with_routers = 0;
+    let mut flows_with_weird = 0;
+    let mut flows_with_busted_endhost = 0;
+    visit_all_connections(db_files, |_ts, connection| {
+        num_flows += 1;
+        let mut found_routers = false;
+        let mut found_weird = false;
+        let mut busted_endhost_check1 = false;
+        let mut busted_endhost_check2 = false;
+        for probe_round in &connection.probe_rounds {
+            let mut probes_sorted = probe_round.probes.clone();
+            probes_sorted.sort_by_key(|x| x.outgoing_ttl);
+            for probe in &probes_sorted {
+                use ProbeType::*;
+                // did we get a reply from a router or NAT?
+                match probe.probe_type() {
+                    RouterReplyFound | RouterReplyNoProbe | NatReplyFound | NatReplyNoProbe => {
+                        found_routers = true
+                    }
+                    _ => (),
+                }
+                if probe.comment.is_some() {
+                    found_weird = true;
+                }
+                if busted_endhost_check1 {
+                    if probe.probe_type() != ProbeType::NoReply {
+                        busted_endhost_check2 = false; // doesn't match the pattern
+                    }
+                }
+                if probe.outgoing_ttl == 1 && probe.probe_type() == ProbeType::EndHostReplyFound {
+                    // busted endhost has a signature in two parts;
+                    // first hop is an endhost (!?)
+                    busted_endhost_check1 = true;
+                    busted_endhost_check2 = true;
+                }
+            }
+        }
+        if found_routers {
+            flows_with_routers += 1;
+        }
+        if found_weird {
+            flows_with_weird += 1;
+        }
+        if busted_endhost_check1 && busted_endhost_check2 {
+            flows_with_busted_endhost += 1;
+        }
+    })
+    .unwrap();
+
+    println!("Number of flows: {}", num_flows);
+    println!(
+        "... with routers: {} :: {}%",
+        flows_with_routers,
+        100 * flows_with_routers / num_flows
+    );
+    println!(
+        "... with weird comments {} :: {}%",
+        flows_with_weird,
+        100 * flows_with_weird / num_flows
+    );
+    println!(
+        "... with busted endhost {} :: {}%",
+        flows_with_busted_endhost,
+        100 * flows_with_busted_endhost / num_flows
+    );
 }
 
 fn list_db_contents(db_files: &Vec<String>) {
