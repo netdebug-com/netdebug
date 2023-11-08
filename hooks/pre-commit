@@ -22,7 +22,7 @@ fi
 npx prettier -c . 
 result=$?
 if [[ ${result} -ne 0 ]] ; then
-    printred ' There are some code style issues, run `cargo fmt` first.'
+    printred ' There are some code style issues, run `npx prettier -w .` first.'
     exit 1
 fi
 
