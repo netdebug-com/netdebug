@@ -1,0 +1,7 @@
+# see https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+#
+# Github uses this file to identify default reviewers
+
+**/* @netdebug-com/netdebug-devs
+
