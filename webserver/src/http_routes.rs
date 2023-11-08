@@ -2,7 +2,7 @@ use std::fs;
 use std::net::SocketAddr;
 
 use crate::context::{Context, LoginInfo, COOKIE_LOGIN_NAME};
-use crate::webtest;
+use crate::{desktop_websocket, webtest};
 use warp::http::StatusCode;
 use warp::{cookie::cookie, Filter, Reply};
 
@@ -21,7 +21,8 @@ pub async fn make_webserver_http_routes(
     let login = make_login_route(&context).with(warp::log("login"));
     let webtest = make_webtest_route(&context).with(warp::log("webtest"));
     let webclient = make_webclient_route(&wasm_root).with(warp::log("webclient"));
-    let ws = make_ws_route(&context).with(warp::log("websocket"));
+    let webclient_ws = make_webclient_ws_route(&context).with(warp::log("websocket"));
+    let desktop_ws = make_desktop_ws_route(&context).with(warp::log("websocket"));
     let static_path = warp::path("static")
         .and(warp::fs::dir(format!("{}/static", html_root)))
         .with(warp::log("static"));
@@ -35,7 +36,8 @@ pub async fn make_webserver_http_routes(
     // this is the order that the filters try to match; it's important that
     // it's in this order to make sure the cookie auth works right
     let routes = webtest
-        .or(ws)
+        .or(desktop_ws)
+        .or(webclient_ws)
         .or(webclient)
         .or(static_path)
         .or(root)
@@ -44,7 +46,7 @@ pub async fn make_webserver_http_routes(
     routes
 }
 
-fn make_ws_route(
+fn make_webclient_ws_route(
     context: &Context,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::path("ws")
@@ -52,7 +54,17 @@ fn make_ws_route(
         .and(warp::header("user-agent"))
         .and(warp::ws())
         .and(warp::filters::addr::remote())
-        .and_then(websocket)
+        .and_then(webclient_websocket_handler)
+}
+fn make_desktop_ws_route(
+    context: &Context,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    warp::path("desktop")
+        .and(with_context(&context))
+        .and(warp::header("user-agent"))
+        .and(warp::ws())
+        .and(warp::filters::addr::remote())
+        .and_then(desktop_websocket_handler)
 }
 
 fn make_login_route(
@@ -200,7 +212,7 @@ async fn login_handler(
     }
 }
 
-pub async fn websocket(
+pub async fn webclient_websocket_handler(
     context: Context,
     user_agent: String,
     ws: warp::ws::Ws,
@@ -211,6 +223,16 @@ pub async fn websocket(
     }))
 }
 
+pub async fn desktop_websocket_handler(
+    context: Context,
+    user_agent: String,
+    ws: warp::ws::Ws,
+    addr: Option<SocketAddr>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    Ok(ws.on_upgrade(move |websocket| {
+        desktop_websocket::handle_desktop_websocket(context, user_agent, websocket, addr)
+    }))
+}
 /*
 
 Can't figure out how to make this work - let's just serve without passwd check the webclient
