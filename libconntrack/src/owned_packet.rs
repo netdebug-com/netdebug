@@ -13,6 +13,21 @@ use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
 
 use crate::connection::ConnectionKey;
 
+/// Errors when trying to create a `ConnectionKey` from a OwnedParsedPacket
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionKeyError {
+    /// Neither src nor dst IPs are a local IP. A common case for this is
+    /// multicast or broadcast traffic received. Esp. bonjour/mDns which
+    /// used DNS-over-multicast is a frequent offender
+    NoLocalAddr,
+    /// The packet contained no (usable) L3 and/or L4 header. Or it was an ICMP type
+    /// we are not handling.
+    IgnoredPacket,
+    /// The packet was in ICMP message of a type we handle but we failed to parse/
+    /// extract the inner packet.
+    IcmpInnerPacketError,
+}
+
 /**
  * This is like an etherparse::PacketHeader struct, but is 'owned'
  * in that there are no references/external life times.
@@ -199,19 +214,24 @@ impl OwnedParsedPacket {
      * generate the ConnectionKey for the *encapsulated* packet, not the outer packet
      *
      * This will let us match ICMP Unreachables back to the flows that sent them.
+     *
+     * On success it returns an `Ok(ConnectionKey, src_is_local)`. `src_is_local` is
+     * a boolean indicating if the `src_ip` of the packet was local or remote
      */
     pub fn to_connection_key(
         &self,
         local_addrs: &HashSet<IpAddr>,
-    ) -> Option<(ConnectionKey, bool)> {
+    ) -> Result<(ConnectionKey, bool), ConnectionKeyError> {
         let (local_ip, remote_ip, source_is_local) = match &self.ip {
             Some(IpHeader::Version4(ip4, _)) => {
                 let source_ip = IpAddr::from(ip4.source);
                 let dest_ip = IpAddr::from(ip4.destination);
                 if local_addrs.contains(&source_ip) {
                     (source_ip, dest_ip, true)
-                } else {
+                } else if local_addrs.contains(&dest_ip) {
                     (dest_ip, source_ip, false)
+                } else {
+                    return Err(ConnectionKeyError::NoLocalAddr);
                 }
             }
             Some(IpHeader::Version6(ip6, _)) => {
@@ -219,15 +239,19 @@ impl OwnedParsedPacket {
                 let dest_ip = IpAddr::from(ip6.destination);
                 if local_addrs.contains(&source_ip) {
                     (source_ip, dest_ip, true)
-                } else {
+                } else if local_addrs.contains(&dest_ip) {
                     (dest_ip, source_ip, false)
+                } else {
+                    return Err(ConnectionKeyError::NoLocalAddr);
                 }
             }
-            None => return None, // if there's no IP layer, just return None
+            // if there's no IP layer, just return None
+            None => return Err(ConnectionKeyError::IgnoredPacket),
         };
         use etherparse::TransportHeader::*;
         match &self.transport {
-            None => None, // no l4 protocol --> don't track this flow
+            // no l4 protocol --> don't track this flow
+            None => Err(ConnectionKeyError::IgnoredPacket),
             Some(Tcp(tcp)) => {
                 let (local_l4_port, remote_l4_port) = if source_is_local {
                     (tcp.source_port, tcp.destination_port)
@@ -239,7 +263,7 @@ impl OwnedParsedPacket {
                 // which side is 'local'/matches the webserver
                 // if src_ip == dst_ip, tie break which is local by l4 port order
                 if local_ip != remote_ip || local_l4_port < remote_l4_port {
-                    Some((
+                    Ok((
                         ConnectionKey {
                             local_ip,
                             remote_ip,
@@ -250,7 +274,7 @@ impl OwnedParsedPacket {
                         source_is_local,
                     ))
                 } else {
-                    Some((
+                    Ok((
                         ConnectionKey {
                             local_ip,
                             remote_ip,
@@ -268,7 +292,7 @@ impl OwnedParsedPacket {
                 } else {
                     (udp.destination_port, udp.source_port)
                 };
-                Some((
+                Ok((
                     ConnectionKey {
                         local_ip,
                         remote_ip,
@@ -288,21 +312,21 @@ impl OwnedParsedPacket {
         &self,
         icmp4: &etherparse::Icmpv4Header,
         local_addrs: &HashSet<IpAddr>,
-    ) -> Option<(ConnectionKey, bool)> {
+    ) -> Result<(ConnectionKey, bool), ConnectionKeyError> {
         use etherparse::Icmpv4Type::*;
         match &icmp4.icmp_type {
             Unknown {
                 type_u8: _,
                 code_u8: _,
                 bytes5to8: _,
-            } => None,
-            EchoReply(_) => None,
+            } => Err(ConnectionKeyError::IgnoredPacket),
+            EchoReply(_) => Err(ConnectionKeyError::IgnoredPacket),
             DestinationUnreachable(_d) => self.to_icmp_payload_connection_key(local_addrs),
-            Redirect(_) | EchoRequest(_) => None,
+            Redirect(_) | EchoRequest(_) => Err(ConnectionKeyError::IgnoredPacket),
             TimeExceeded(_) => self.to_icmp_payload_connection_key(local_addrs),
-            ParameterProblem(_) => None,
-            TimestampRequest(_) => None,
-            TimestampReply(_) => None,
+            ParameterProblem(_) => Err(ConnectionKeyError::IgnoredPacket),
+            TimestampRequest(_) => Err(ConnectionKeyError::IgnoredPacket),
+            TimestampReply(_) => Err(ConnectionKeyError::IgnoredPacket),
         }
     }
 
@@ -315,7 +339,7 @@ impl OwnedParsedPacket {
     fn to_icmp_payload_connection_key(
         &self,
         local_addrs: &HashSet<IpAddr>,
-    ) -> Option<(ConnectionKey, bool)> {
+    ) -> Result<(ConnectionKey, bool), ConnectionKeyError> {
         match OwnedParsedPacket::from_partial_embedded_ip_packet(
             &self.payload,
             DateTime::<Utc>::UNIX_EPOCH,
@@ -323,12 +347,12 @@ impl OwnedParsedPacket {
         ) {
             Err(e) => {
                 warn!("Unparsed packet: {} : {:?}", e, self.payload);
-                None
+                Err(ConnectionKeyError::IcmpInnerPacketError)
             }
             Ok((owned, _full_packet)) => {
                 // ignore if we parsed the full packet - doesn't matter for key
                 match owned.to_connection_key(local_addrs) {
-                    Some((key, _src_is_local)) => {
+                    Ok((key, _src_is_local)) => {
                         // TODO: I can't convince myself there isn't a bug
                         // here if the src actually sources an ICMP message
                         // rather than just receives it.. maybe add a test?
@@ -336,14 +360,14 @@ impl OwnedParsedPacket {
                         // ICMP reply seen at the src should be either from
                         // the remote or for a connection we're not tracking
                         // e.g., like a locally running `ping`
-                        Some((key, false))
+                        Ok((key, false))
                     }
-                    None => {
+                    Err(_) => {
                         warn!(
                             "Failed to parse a key out of an embedded ICMP pkt: {:?}",
                             self
                         );
-                        None
+                        Err(ConnectionKeyError::IcmpInnerPacketError)
                     }
                 }
             }
@@ -354,7 +378,7 @@ impl OwnedParsedPacket {
         &self,
         icmp6: &etherparse::Icmpv6Header,
         local_addrs: &HashSet<IpAddr>,
-    ) -> Option<(ConnectionKey, bool)> {
+    ) -> Result<(ConnectionKey, bool), ConnectionKeyError> {
         match icmp6.icmp_type {
             etherparse::Icmpv6Type::ParameterProblem(_)
             | etherparse::Icmpv6Type::TimeExceeded(_)
@@ -367,9 +391,9 @@ impl OwnedParsedPacket {
                 type_u8: _,
                 code_u8: _,
                 bytes5to8: _,
-            } => None,
-            etherparse::Icmpv6Type::EchoRequest(_) => None,
-            etherparse::Icmpv6Type::EchoReply(_) => None,
+            } => Err(ConnectionKeyError::IgnoredPacket),
+            etherparse::Icmpv6Type::EchoRequest(_) => Err(ConnectionKeyError::IgnoredPacket),
+            etherparse::Icmpv6Type::EchoReply(_) => Err(ConnectionKeyError::IgnoredPacket),
         }
     }
 
@@ -712,4 +736,84 @@ mod test {
         assert_eq!(pkt.get_src_dst_ips().unwrap().0, IpAddr::V6(src));
         assert_eq!(pkt.get_src_dst_ips().unwrap().1, IpAddr::V6(dst));
     }
+
+    #[test]
+    fn test_to_connection_key_v4() {
+        use std::str::FromStr;
+        let mut pkt_bytes: Vec<u8> = Vec::new();
+        etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
+            .ipv4([192, 168, 1, 1], [192, 168, 1, 2], 64)
+            .udp(123, 443)
+            .write(&mut pkt_bytes, &[])
+            .unwrap();
+        let pkt = OwnedParsedPacket::try_from_fake_time(pkt_bytes).unwrap();
+
+        let local_addrs = HashSet::from_iter([IpAddr::from_str("192.168.1.1").unwrap()]);
+        let (conn_key, src_is_local) = pkt.to_connection_key(&local_addrs).unwrap();
+        assert!(src_is_local);
+        assert_eq!(conn_key.ip_proto, etherparse::ip_number::UDP);
+        assert_eq!(conn_key.local_l4_port, 123);
+        assert_eq!(conn_key.remote_l4_port, 443);
+        assert_eq!(conn_key.local_ip, IpAddr::from_str("192.168.1.1").unwrap());
+        assert_eq!(conn_key.remote_ip, IpAddr::from_str("192.168.1.2").unwrap());
+
+        // Now in reverse
+        let local_addrs = HashSet::from_iter([IpAddr::from_str("192.168.1.2").unwrap()]);
+        let (conn_key, src_is_local) = pkt.to_connection_key(&local_addrs).unwrap();
+        assert!(!src_is_local);
+        assert_eq!(conn_key.ip_proto, etherparse::ip_number::UDP);
+        assert_eq!(conn_key.local_l4_port, 443);
+        assert_eq!(conn_key.remote_l4_port, 123);
+        assert_eq!(conn_key.local_ip, IpAddr::from_str("192.168.1.2").unwrap());
+        assert_eq!(conn_key.remote_ip, IpAddr::from_str("192.168.1.1").unwrap());
+
+        // Neither IP is local
+        let local_addrs = HashSet::from_iter([IpAddr::from_str("192.168.255.255").unwrap()]);
+        assert_eq!(
+            pkt.to_connection_key(&local_addrs),
+            Err(ConnectionKeyError::NoLocalAddr)
+        );
+    }
+
+    #[test]
+    fn test_to_connection_key_v6() {
+        use std::str::FromStr;
+        let mut pkt_bytes: Vec<u8> = Vec::new();
+        let src = Ipv6Addr::from_str("2001:0db8::1").unwrap();
+        let dst = Ipv6Addr::from_str("2001:0db8::4242").unwrap();
+        etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
+            .ipv6(src.octets(), dst.octets(), 64)
+            .tcp(123, 443, 4242 /* seq_no */, 65535 /* window */)
+            .write(&mut pkt_bytes, &[])
+            .unwrap();
+        let pkt = OwnedParsedPacket::try_from_fake_time(pkt_bytes).unwrap();
+
+        let local_addrs = HashSet::from_iter([IpAddr::V6(src)]);
+        let (conn_key, src_is_local) = pkt.to_connection_key(&local_addrs).unwrap();
+        assert!(src_is_local);
+        assert_eq!(conn_key.ip_proto, etherparse::ip_number::TCP);
+        assert_eq!(conn_key.local_l4_port, 123);
+        assert_eq!(conn_key.remote_l4_port, 443);
+        assert_eq!(conn_key.local_ip, IpAddr::V6(src));
+        assert_eq!(conn_key.remote_ip, IpAddr::V6(dst));
+
+        // Now in reverse
+        let local_addrs = HashSet::from_iter([IpAddr::V6(dst)]);
+        let (conn_key, src_is_local) = pkt.to_connection_key(&local_addrs).unwrap();
+        assert!(!src_is_local);
+        assert_eq!(conn_key.ip_proto, etherparse::ip_number::TCP);
+        assert_eq!(conn_key.local_l4_port, 443);
+        assert_eq!(conn_key.remote_l4_port, 123);
+        assert_eq!(conn_key.local_ip, IpAddr::V6(dst));
+        assert_eq!(conn_key.remote_ip, IpAddr::V6(src));
+
+        // Neither IP is local
+        let local_addrs = HashSet::from_iter([IpAddr::from_str("2001:0db8::123:456").unwrap()]);
+        assert_eq!(
+            pkt.to_connection_key(&local_addrs),
+            Err(ConnectionKeyError::NoLocalAddr)
+        );
+    }
+
+    // TODO: add tests for ICMP packets and to_connection_key() !!
 }

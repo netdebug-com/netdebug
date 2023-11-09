@@ -7,8 +7,10 @@ use std::{
 
 use chrono::{DateTime, Duration, Utc};
 use common_wasm::{
-    analysis_messages::AnalysisInsights, evicting_hash_map::EvictingHashMap, ProbeId,
-    ProbeReportEntry, ProbeReportSummary, ProbeRoundReport, PROBE_MAX_TTL,
+    analysis_messages::AnalysisInsights,
+    evicting_hash_map::EvictingHashMap,
+    timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units},
+    ProbeId, ProbeReportEntry, ProbeReportSummary, ProbeRoundReport, PROBE_MAX_TTL,
 };
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{
@@ -31,7 +33,7 @@ use crate::{
     analyze::analyze,
     dns_tracker::{DnsTrackerMessage, UDP_DNS_PORT},
     in_band_probe::ProbeMessage,
-    owned_packet::OwnedParsedPacket,
+    owned_packet::{ConnectionKeyError, OwnedParsedPacket},
     prober_helper::ProberHelper,
     process_tracker::{ProcessTrackerEntry, ProcessTrackerMessage, ProcessTrackerSender},
     utils::{
@@ -238,6 +240,19 @@ pub struct ConnectionTracker<'a> {
     dequeue_delay_stats_us: AggregateCounter,
     // used to track traffic grouped by, e.g., DNS destination
     aggregate_traffic_counters: HashMap<AggregateCounterKind, TrafficCounters>,
+    /// Trackes number of successfully parsed packets. I.e., packets from
+    /// which we could extract a ConnectionKey
+    sucessfully_parsed_packets: StatHandle,
+    /// Tracks packet that we ignored (couldn't extract connection key). Either didn't have
+    /// L3 and/or L4 header or unhandled ICMP.
+    no_conn_key_packets: StatHandle,
+    /// Tracks ICMP packets (of type we handle) from which we failed to extract the inner
+    /// packet's ConnectionKey
+    icmp_extract_failed_packet: StatHandle,
+    /// Number of parsed packets for which neither the src nor the dst IP was local. This
+    /// could either by multicast traffic (Apple's mDNS/bonjour say hello). Or we got the wrong
+    /// IPs from the interface or the IP of the interface changed.
+    not_local_packets: StatHandle,
 }
 impl<'a> ConnectionTracker<'a> {
     pub fn new(
@@ -246,6 +261,7 @@ impl<'a> ConnectionTracker<'a> {
         local_addrs: HashSet<IpAddr>,
         prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
         max_queue_size: usize,
+        mut stats: ExportedStatRegistry,
     ) -> ConnectionTracker<'a> {
         let (tx, rx) = tokio::sync::mpsc::channel(max_queue_size);
         let storage_service_msg_tx_clone = storage_service_msg_tx.clone();
@@ -278,6 +294,18 @@ impl<'a> ConnectionTracker<'a> {
                 AggregateCounterKind::ConnectionTracker,
                 TrafficCounters::new(),
             )]),
+            sucessfully_parsed_packets: stats.add_stat(
+                "succesfully_parsed",
+                Units::Packets,
+                [StatType::COUNT],
+            ),
+            no_conn_key_packets: stats.add_stat("no_conn_key", Units::Packets, [StatType::COUNT]),
+            icmp_extract_failed_packet: stats.add_stat(
+                "icmp_extract_failed",
+                Units::Packets,
+                [StatType::COUNT],
+            ),
+            not_local_packets: stats.add_stat("not_local", Units::Packets, [StatType::COUNT]),
         }
     }
 
@@ -359,65 +387,71 @@ impl<'a> ConnectionTracker<'a> {
 
     pub fn add(&mut self, packet: Box<OwnedParsedPacket>) {
         let mut needs_dns_and_process_lookup = false;
-        if let Some((key, src_is_local)) = packet.to_connection_key(&self.local_addrs) {
-            let connection = match self.connections.get_mut(&key) {
-                Some(connection) => connection,
-                None => {
-                    if packet_is_tcp_rst(&packet) {
-                        debug!("Not creating a new connection entry on RST");
-                        return;
+        match packet.to_connection_key(&self.local_addrs) {
+            Ok((key, src_is_local)) => {
+                self.sucessfully_parsed_packets.bump();
+                let connection = match self.connections.get_mut(&key) {
+                    Some(connection) => connection,
+                    None => {
+                        if packet_is_tcp_rst(&packet) {
+                            debug!("Not creating a new connection entry on RST");
+                            return;
+                        }
+                        // else create the state and look it up again
+                        self.new_connection(key.clone());
+                        needs_dns_and_process_lookup = true;
+                        self.connections.get_mut(&key).unwrap()
                     }
-                    // else create the state and look it up again
-                    self.new_connection(key.clone());
-                    needs_dns_and_process_lookup = true;
-                    self.connections.get_mut(&key).unwrap()
-                }
-            };
-            for group in &connection.aggregate_groups {
-                if let Some(counters) = self.aggregate_traffic_counters.get_mut(group) {
-                    counters.update_bytes(src_is_local, packet.len as u64);
-                } else {
-                    warn!(
+                };
+                for group in &connection.aggregate_groups {
+                    if let Some(counters) = self.aggregate_traffic_counters.get_mut(group) {
+                        counters.update_bytes(src_is_local, packet.len as u64);
+                    } else {
+                        warn!(
                             "Group counters out of sync between connection {} and tracker: missing {:?}", 
                             connection.connection_key,
                             group
                         );
-                }
-            }
-            connection.update(
-                packet,
-                &mut self.prober_helper,
-                &key,
-                src_is_local,
-                &self.dns_tx,
-            );
-            if needs_dns_and_process_lookup {
-                // only new connections that we don't immediately tear down need DNS lookups
-                if let Some(dns_tx) = self.dns_tx.as_mut() {
-                    // ask the DNS tracker to async message us the remote DNS name
-                    if let Err(e) = dns_tx.send(DnsTrackerMessage::Lookup {
-                        ip: key.remote_ip,
-                        key: key.clone(),
-                        tx: self.tx.clone(),
-                    }) {
-                        warn!("Failed to send a Lookup message to the DNS Tracker: {}", e);
                     }
                 }
-                if let Some(process_tx) = self.process_tx.as_mut() {
-                    if let Err(e) =
-                        process_tx.try_send(PerfMsgCheck::new(ProcessTrackerMessage::LookupOne {
+                connection.update(
+                    packet,
+                    &mut self.prober_helper,
+                    &key,
+                    src_is_local,
+                    &self.dns_tx,
+                );
+                if needs_dns_and_process_lookup {
+                    // only new connections that we don't immediately tear down need DNS lookups
+                    if let Some(dns_tx) = self.dns_tx.as_mut() {
+                        // ask the DNS tracker to async message us the remote DNS name
+                        if let Err(e) = dns_tx.send(DnsTrackerMessage::Lookup {
+                            ip: key.remote_ip,
                             key: key.clone(),
                             tx: self.tx.clone(),
-                        }))
-                    {
-                        warn!(
-                            "Failed to send a Lookup message to the Process Tracker: {}",
-                            e
-                        );
+                        }) {
+                            warn!("Failed to send a Lookup message to the DNS Tracker: {}", e);
+                        }
+                    }
+                    if let Some(process_tx) = self.process_tx.as_mut() {
+                        if let Err(e) = process_tx.try_send(PerfMsgCheck::new(
+                            ProcessTrackerMessage::LookupOne {
+                                key: key.clone(),
+                                tx: self.tx.clone(),
+                            },
+                        )) {
+                            warn!(
+                                "Failed to send a Lookup message to the Process Tracker: {}",
+                                e
+                            );
+                        }
                     }
                 }
+                self.evict_old_connections();
             }
-            self.evict_old_connections();
+            Err(ConnectionKeyError::IcmpInnerPacketError) => self.icmp_extract_failed_packet.bump(),
+            Err(ConnectionKeyError::IgnoredPacket) => self.no_conn_key_packets.bump(),
+            Err(ConnectionKeyError::NoLocalAddr) => self.not_local_packets.bump(),
         }
         // if we got here, the packet didn't have enough info to be called a 'connection'
         // just return and move on for now
@@ -1601,6 +1635,7 @@ pub mod test {
             local_addrs,
             mock_prober.tx.clone(),
             128,
+            ExportedStatRegistry::new("conn_tracker", Instant::now()),
         );
 
         let mut capture =
@@ -1665,6 +1700,7 @@ pub mod test {
             local_addrs.clone(),
             mock_prober.tx.clone(),
             128,
+            ExportedStatRegistry::new("conn_tracker", Instant::now()),
         );
 
         let mut connection_key: Option<ConnectionKey> = None;
@@ -1732,6 +1768,7 @@ pub mod test {
             local_addrs.clone(),
             mock_prober.tx.clone(),
             128,
+            ExportedStatRegistry::new("conn_tracker", Instant::now()),
         );
 
         let probe = OwnedParsedPacket::try_from_fake_time(TEST_PROBE.to_vec()).unwrap();
@@ -1820,6 +1857,7 @@ pub mod test {
             local_addrs.clone(),
             mock_prober.tx.clone(),
             128,
+            ExportedStatRegistry::new("conn_tracker", Instant::now()),
         );
 
         let mut capture = pcap::Capture::from_file(test_dir(
@@ -1898,6 +1936,7 @@ pub mod test {
             local_addrs.clone(),
             mock_prober.tx.clone(),
             128,
+            ExportedStatRegistry::new("conn_tracker", Instant::now()),
         );
 
         let mut capture = pcap::Capture::from_file(test_dir("libconntrack", pcap_file)).unwrap();
@@ -1939,6 +1978,7 @@ pub mod test {
             local_addrs.clone(),
             mock_prober.tx.clone(),
             128,
+            ExportedStatRegistry::new("conn_tracker", Instant::now()),
         );
 
         let mut connection_key: Option<ConnectionKey> = None;
@@ -2090,6 +2130,7 @@ pub mod test {
             local_addrs,
             raw_sock.tx.clone(),
             128,
+            ExportedStatRegistry::new("conn_tracker", Instant::now()),
         );
         connection_tracker.add(remote_rst);
         assert_eq!(connection_tracker.connections.len(), 0);
@@ -2115,6 +2156,7 @@ pub mod test {
             local_addrs,
             mock_prober.tx.clone(),
             128,
+            ExportedStatRegistry::new("conn_tracker", Instant::now()),
         );
         let remote_ip = IpAddr::from_str("52.53.155.175").unwrap();
         let test_hostname = "test-hostname.example.com".to_string();
@@ -2196,6 +2238,7 @@ pub mod test {
             local_addrs,
             mock_prober.tx.clone(),
             128,
+            ExportedStatRegistry::new("conn_tracker", Instant::now()),
         );
         connection_tracker.add(wrapping_pkt);
         assert_eq!(connection_tracker.connections.len(), 1);
@@ -2215,6 +2258,7 @@ pub mod test {
             local_addrs.clone(),
             mock_prober.tx.clone(),
             128,
+            ExportedStatRegistry::new("conn_tracker", Instant::now()),
         );
 
         let mut capture = pcap::Capture::from_file(test_dir(
@@ -2300,6 +2344,7 @@ pub mod test {
             local_addrs.clone(),
             mock_prober.tx.clone(),
             128,
+            ExportedStatRegistry::new("conn_tracker", Instant::now()),
         );
 
         // Read the first 3 packets from the trace. I.e., just the handshake but no data.
@@ -2377,6 +2422,7 @@ pub mod test {
             local_addrs,
             raw_sock.tx.clone(),
             128,
+            ExportedStatRegistry::new("conn_tracker", Instant::now()),
         );
         connection_tracker.set_process_tracker(process_tx);
         connection_tracker.add(remote_rst);

@@ -708,6 +708,7 @@ pub fn make_dns_ptr_lookup_request(
 #[cfg(test)]
 mod test {
     use common::test_utils::test_dir;
+    use common_wasm::timeseries_stats::ExportedStatRegistry;
     use dns_parser::QueryType;
     use etherparse::TransportHeader;
     use tokio::sync::mpsc::channel;
@@ -885,6 +886,7 @@ mod test {
             local_addrs,
             mock_prober.tx.clone(),
             128,
+            ExportedStatRegistry::new("conn_tracker", std::time::Instant::now()),
         );
         connection_tracker.set_dns_tracker(dns_tx.clone());
         dns_tx

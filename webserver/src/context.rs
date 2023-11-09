@@ -1,6 +1,7 @@
 use std::{collections::HashSet, error::Error, net::IpAddr, sync::Arc};
 
 use clap::Parser;
+use common_wasm::timeseries_stats::{ExportedStatRegistry, SuperRegistry};
 use log::info;
 use pwhash::{sha512_crypt, HashSetup};
 use rand::{distributions::Alphanumeric, Rng};
@@ -30,6 +31,7 @@ pub struct WebServerContext {
     // communications channel to the connection_tracker
     // TODO: make a pool for multi-threading
     pub connection_tracker: ConnectionTrackerSender,
+    pub counter_registries: Arc<Vec<ExportedStatRegistry>>,
 }
 
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
@@ -64,6 +66,8 @@ impl WebServerContext {
         }
         let local_addrs = local_ips.clone();
 
+        let mut counter_registries = SuperRegistry::new(std::time::Instant::now());
+        let conn_track_counter = counter_registries.new_registry("conn_track");
         // create a connection tracker
         //
         let (tx, rx) = tokio::sync::mpsc::channel(MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
@@ -76,6 +80,7 @@ impl WebServerContext {
             local_ips: local_ips,
             connection_tracker: tx.clone(),
             max_connections_per_tracker: args.max_connections_per_tracker,
+            counter_registries: Arc::new(counter_registries.registries()),
         };
 
         // TODO Spawn lots for multi-processing
@@ -107,6 +112,7 @@ impl WebServerContext {
                     local_addrs,
                     prober_tx,
                     MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
+                    conn_track_counter,
                 );
                 connection_tracker.set_tx_rx(tx, rx);
                 let _ret: () = connection_tracker.rx_loop().await;
@@ -245,6 +251,7 @@ pub mod test {
             local_ips: HashSet::new(),
             connection_tracker: tx,
             max_connections_per_tracker: 4096,
+            counter_registries: Arc::new(Vec::new()),
         }))
     }
 }

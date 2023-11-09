@@ -685,7 +685,7 @@ impl CounterProvider for ExportedStat {
 /// keep track of all stats created from it and it implemented `CounterProvider` to
 /// query the counters from all contained `ExportedStats`.
 ///
-/// ExportedStatRegistry internally used `Arc` so it's safe and easy to clone the
+/// ExportedStatRegistry internally uses `Arc` so it's safe and easy to clone the
 /// registry. The cloned registry will contain the same set of counters.
 ///
 /// Note that the locking granularity is for the whole `ExportedStatRegistry`. I.e.,
@@ -871,6 +871,10 @@ impl StatHandle {
     pub fn add_value(&mut self, value: u64) {
         self.add_value_with_time(value, Instant::now());
     }
+
+    pub fn bump(&mut self) {
+        self.add_value_with_time(1, Instant::now());
+    }
 }
 
 /// A thread-safe representation of an ExportedStat to track time durations
@@ -914,8 +918,8 @@ impl SuperRegistry {
         registry
     }
 
-    pub fn registries(&self) -> Vec<ExportedStatRegistry> {
-        self.registries.clone()
+    pub fn registries(self) -> Vec<ExportedStatRegistry> {
+        self.registries
     }
 }
 
