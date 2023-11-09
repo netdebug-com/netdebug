@@ -1,3 +1,4 @@
+mod topology_client;
 mod websocket;
 
 use chrono::Duration;
@@ -18,6 +19,8 @@ use std::{collections::HashSet, error::Error, net::IpAddr, sync::Arc};
 use tokio::sync::mpsc::UnboundedSender;
 use warp::Filter;
 use websocket::websocket_handler;
+
+use crate::topology_client::TopologyServerConnection;
 
 type SharedExportedStatRegistries = Arc<Vec<ExportedStatRegistry>>;
 
@@ -53,6 +56,10 @@ pub struct Args {
     /// The URL of the GRPC storage server. E.g., http://localhost:50051
     #[arg(long, default_value=None)]
     pub storage_server_url: Option<String>,
+
+    /// The URL of the Topology Server. E.g., http://localhost:50051
+    #[arg(long, default_value=None)]
+    pub topology_server_url: Option<String>,
 }
 
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
@@ -69,6 +76,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<PerfMsgCheck<ConnectionTrackerMsg>>(
         MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
     );
+
+    let _topology_tx = if let Some(url) = &args.topology_server_url {
+        Some(TopologyServerConnection::spawn(
+            url.clone(),
+            MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
+            std::time::Duration::from_secs(30),
+        ))
+    } else {
+        None
+    };
 
     let devices = libconntrack::pcap::find_interesting_pcap_interfaces(&args.pcap_device)?;
     let local_addrs = devices
