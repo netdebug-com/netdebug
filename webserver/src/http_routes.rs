@@ -27,7 +27,7 @@ pub async fn make_webserver_http_routes(
     let webtest = make_webtest_route(&context).with(warp::log("webtest"));
     let webclient = make_webclient_route(&wasm_root).with(warp::log("webclient"));
     let webclient_ws = make_webclient_ws_route(&context).with(warp::log("websocket"));
-    let desktop_ws = make_desktop_ws_route(&context).with(warp::log("websocket"));
+    let desktop_ws = make_desktop_ws_route(&context).with(warp::log("desktop_ws"));
     let static_path = warp::path("static")
         .and(warp::fs::dir(format!("{}/static", html_root)))
         .with(warp::log("static"));

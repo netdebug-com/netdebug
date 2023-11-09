@@ -7,10 +7,12 @@ use futures_util::stream::SplitSink;
 use futures_util::StreamExt;
 use libconntrack::try_send_async;
 use libconntrack::utils::PerfMsgCheck;
-use log::warn;
+use log::{info, warn};
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio_tungstenite::tungstenite::handshake::client::generate_key;
+use tokio_tungstenite::tungstenite::http::Request;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
@@ -23,16 +25,25 @@ pub enum TopologyServerMessage {
 }
 
 pub type TopologyServerSender = Sender<PerfMsgCheck<TopologyServerMessage>>;
+pub type TopologyServerReceiver = Receiver<PerfMsgCheck<TopologyServerMessage>>;
 
+/// A local agent to manage all of the state around talking to the topology server
 const DEFAULT_FIRST_RETRY_TIME_MS: u64 = 100;
 pub struct TopologyServerConnection {
+    /// WebSocket url to topology server, e.g., ws://localhost:3030
     url: String,
+    /// A copy of the tx queue to send to us, in case others need it
     tx: TopologyServerSender,
-    rx: Receiver<PerfMsgCheck<TopologyServerMessage>>,
+    rx: TopologyServerReceiver,
     buffer_size: usize,
+    /// If we fail to connect, when we next will try to connect; exponential back off
     retry_time: Duration,
+    /// If we fail to connect, the max time we will wait between connections
     max_retry_time: Duration,
+    /// A cache of the hello message from the server which includes
+    /// The public IP of this machine (e.g., a MyIP service) and the user-agent
     server_hello: Option<(IpAddr, String)>,
+    /// A list of local agents that are waiting for the hello message info, e.g., the local IP
     waiting_for_hello: Vec<Sender<PerfMsgCheck<(IpAddr, String)>>>,
 }
 
@@ -73,14 +84,36 @@ impl TopologyServerConnection {
 
     async fn rx_loop(mut self) {
         // connect ala https://github.com/snapview/tokio-tungstenite/blob/master/examples/client.rs
+
         loop {
-            let (write, mut read) = match connect_async(&self.url).await {
-                Ok((ws_stream, _)) => {
+            // Intentionally panic here if we got a bad URL
+            let url = url::Url::parse(&self.url).expect(format!("Bad url! {}", &self.url).as_str());
+            // need to generate a custom request because we need to set the User-Agent for our webserver
+            let req = Request::builder()
+                .method("GET")
+                .header("Host", url.authority())
+                .header("User-Agent", "NetDebug Desktop version x.y.z")
+                .header("Connection", "Upgrade")
+                .header("Upgrade", "websocket")
+                .header("Sec-WebSocket-Version", "13")
+                .header("Sec-WebSocket-Key", generate_key())
+                .uri(self.url.clone())
+                .body(())
+                .unwrap();
+            let (ws_write, mut ws_read) = match connect_async(req).await {
+                Ok((ws_stream, response)) => {
+                    info!(
+                        "Connected to the topology server {} :: {:?}",
+                        self.url, response
+                    );
                     self.retry_time = Duration::from_millis(DEFAULT_FIRST_RETRY_TIME_MS);
                     ws_stream.split()
                 }
+                // From https://docs.rs/tungstenite/latest/tungstenite/error/enum.Error.html
+                // none of the error types we can get back from this connection attempt are fatal, so
+                // always retry.
                 Err(e) => {
-                    self.retry_time = std::cmp::max(self.retry_time * 2, self.max_retry_time); // capped exponential backoff
+                    self.retry_time = std::cmp::min(self.retry_time * 2, self.max_retry_time); // capped exponential backoff
                     warn!(
                         "Failed to connect to TopologyServer {} : retrying in {:?} :: {}",
                         self.url, self.retry_time, e
@@ -89,7 +122,7 @@ impl TopologyServerConnection {
                     continue;
                 }
             };
-            let ws_tx = self.spawn_ws_writer(write).await;
+            let ws_tx = self.spawn_ws_writer(ws_write).await;
             // send an initial hello to start the connection
             if let Err(e) = ws_tx.send(DesktopToTopologyServer::Hello).await {
                 warn!("Failed to send hello to TopologyServer: {}", e);
@@ -97,7 +130,7 @@ impl TopologyServerConnection {
             // now wait for internal users to send traffic to us as well as the topology server to send us messages
             loop {
                 tokio::select! {
-                    ws_msg = read.next() => {
+                    ws_msg = ws_read.next() => {
                         match ws_msg {
                             Some(Ok(ws_msg)) => self.handle_ws_msg(ws_msg).await,
                             Some(Err(e)) => {

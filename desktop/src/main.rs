@@ -57,7 +57,7 @@ pub struct Args {
     #[arg(long, default_value=None)]
     pub storage_server_url: Option<String>,
 
-    /// The URL of the Topology Server. E.g., http://localhost:50051
+    /// The URL of the Topology Server. E.g., ws://localhost:3030
     #[arg(long, default_value=None)]
     pub topology_server_url: Option<String>,
 }
