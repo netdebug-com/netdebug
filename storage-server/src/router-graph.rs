@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    io::Write,
     process::ExitCode,
     rc::Rc,
     time::Duration,
@@ -112,15 +113,91 @@ fn visit_all_connections<F: FnMut(&String, &ConnectionStorageEntry)>(
     Ok(())
 }
 
-fn run(db_files: &Vec<String>) -> Result<TheGraph, Box<dyn std::error::Error>> {
+/**
+ * Only call the underlying visit function for ConnectionStorageEntry without weird runs (e.g., with comments) or
+ * and if it contains at least one router and does not have a 'busted' endhost
+ *
+ * Call 'reject' on any that don't pass this criteria
+ */
+
+fn filter_weird_and_routerless_connections<F: FnMut(&String, &ConnectionStorageEntry)>(
+    ts: &String,
+    connection: &ConnectionStorageEntry,
+    mut visit: F,
+) {
+    let mut found_routers = false;
+    let mut found_weird = false;
+    let mut busted_endhost_check1 = false;
+    let mut busted_endhost_check2 = false;
+    for probe_round in &connection.probe_rounds {
+        let mut probes_sorted = probe_round.probes.clone();
+        probes_sorted.sort_by_key(|x| x.outgoing_ttl);
+        for probe in &probes_sorted {
+            use ProbeType::*;
+            // did we get a reply from a router or NAT?
+            match probe.probe_type() {
+                RouterReplyFound | RouterReplyNoProbe | NatReplyFound | NatReplyNoProbe => {
+                    found_routers = true
+                }
+                _ => (),
+            }
+            if probe.comment.is_some() {
+                found_weird = true;
+            }
+            if busted_endhost_check1 {
+                if probe.probe_type() != ProbeType::NoReply {
+                    busted_endhost_check2 = false; // doesn't match the pattern
+                }
+            }
+            if probe.outgoing_ttl == 1 && probe.probe_type() == ProbeType::EndHostReplyFound {
+                // busted endhost has a signature in two parts;
+                // first hop is an endhost (!?)
+                busted_endhost_check1 = true;
+                busted_endhost_check2 = true;
+            }
+        }
+    }
+    if found_weird || (busted_endhost_check1 && busted_endhost_check2) || !found_routers {
+        warn!(
+            "Rejecting conneciton with bad data: {} -> {:?}:{}",
+            connection.local_port, connection.remote_hostname, connection.remote_port
+        );
+    } else {
+        visit(ts, connection);
+    }
+}
+
+fn run_dot(
+    db_files: &Vec<String>,
+    no_filter: bool,
+    print_graph: bool,
+    print_stats: bool,
+) -> Result<TheGraph, Box<dyn std::error::Error>> {
     common::init::netdebug_init();
     let mut graph: TheGraph = TheGraph::new();
-    visit_all_connections(db_files, |_ts, connection| {
-        process_connection(&mut graph, connection);
-    })
-    .unwrap();
-    graph.print_dot();
-    graph.print_stats();
+    if no_filter {
+        visit_all_connections(db_files, |_ts, connection| {
+            process_connection(&mut graph, connection);
+        })
+        .unwrap();
+    } else {
+        visit_all_connections(db_files, |ts, connection| {
+            filter_weird_and_routerless_connections(
+                ts,
+                connection,
+                |_ts: &String, connection: &ConnectionStorageEntry| {
+                    process_connection(&mut graph, connection);
+                },
+            );
+        })
+        .unwrap();
+    }
+    if print_graph {
+        graph.print_dot(&mut std::io::stdout()).unwrap();
+    }
+    if print_stats {
+        graph.print_stats();
+    }
     Ok(graph)
 }
 
@@ -311,7 +388,7 @@ impl TheGraph {
         }
     }
 
-    pub fn print_dot(&mut self) {
+    pub fn print_dot<W: Write>(&mut self, mut writer: W) -> Result<(), std::io::Error> {
         // In order to keep the graph a bit more manageble for now, we find nodes we want to skip
         // We start at a node with no successor and follow it back towards to origin. Any node
         // with exactly one incoming and one outgoing edge is added to the list of skipped nodes.
@@ -343,8 +420,8 @@ impl TheGraph {
             idx += 1;
         }
         let to_skip_set: HashSet<NodeKey> = HashSet::from_iter(to_skip.iter().cloned());
-        println!("digraph foobar {{");
-        println!(r#"rankdir="LR""#);
+        write!(writer, "digraph foobar {{")?;
+        write!(writer, r#"rankdir="LR""#)?;
         for (key, entry) in &self.nodes {
             if to_skip_set.contains(key) {
                 continue;
@@ -361,7 +438,7 @@ impl TheGraph {
             } else {
                 ""
             };
-            println!(r#"    "{}" {}"#, key, attr_str);
+            write!(writer, r#"    "{}" {}"#, key, attr_str)?;
         }
         for edge in &self.edges {
             if to_skip_set.contains(&edge.0) || to_skip_set.contains(&edge.1) {
@@ -376,7 +453,8 @@ impl TheGraph {
             // the endhosts/probe targets towards the probing machine. I felt that this makes the dot layout somewhat better
             println!(r#"    "{}" -> "{}" {}"#, edge.1, edge.0, attr_str);
         }
-        println!("}}");
+        write!(writer, "}}")?;
+        Ok(())
     }
 }
 
@@ -391,13 +469,15 @@ fn main() -> ExitCode {
             compute_stats(&sub_args.sqlite_filenames);
             ExitCode::SUCCESS
         }
-        CliCommands::Dot(sub_args) => match run(&sub_args.sqlite_filenames) {
-            Ok(_graph) => ExitCode::SUCCESS,
-            Err(e) => {
-                error!("{:?}", e);
-                ExitCode::FAILURE
+        CliCommands::Dot(sub_args) => {
+            match run_dot(&sub_args.sqlite_filenames, false, false, false) {
+                Ok(_graph) => ExitCode::SUCCESS,
+                Err(e) => {
+                    error!("{:?}", e);
+                    ExitCode::FAILURE
+                }
             }
-        },
+        }
     }
 }
 
@@ -546,14 +626,14 @@ fn protobuf_timestamp_delta(
 mod test {
     use common::test_utils::test_dir;
 
-    use crate::run;
+    use crate::run_dot;
 
     const TEST_DATA_SIMPLE: &str = "tests/test_input_connections.sqlite3";
     #[test]
     fn test_simple_graph() {
         let test_files = vec![test_dir("storge_server", TEST_DATA_SIMPLE)];
-        let graph = run(&test_files).unwrap();
-        assert_eq!(graph.edges.len(), 55);
-        assert_eq!(graph.nodes.len(), 52);
+        let graph = run_dot(&test_files, false, false, false).unwrap();
+        assert_eq!(graph.edges.len(), 48);
+        assert_eq!(graph.nodes.len(), 46);
     }
 }
