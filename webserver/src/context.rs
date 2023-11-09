@@ -45,7 +45,16 @@ impl WebServerContext {
                     // if we're not in production mode, just capture
                     // loopback traffic.
                     // TODO: 'lo' is linux specific - lookup for non-Linux
-                    lookup_pcap_device_by_name(&"lo".to_string())?
+                    let loopback_if_name = match std::env::consts::OS {
+                        "linux" =>"lo",
+                        "windows" => "\\Device\\NPF_Loopback",
+                        "macos" => "lo0",
+                        _unknown => panic!(
+                            "Unsupported OS type \"{}\" ; don't know loopback interface name; specify manually", 
+                            _unknown),
+
+                    }.to_string();
+                    lookup_pcap_device_by_name(&loopback_if_name)?
                 }
             }
         };
