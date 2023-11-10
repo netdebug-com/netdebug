@@ -108,6 +108,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // launch the connection tracker as a tokio::task in the background
     let args_clone = args.clone();
     let connection_manager_tx = tx.clone();
+
+    let conn_track_counters = counter_registries.new_registry("conn_tracker");
     let _connection_tracker_task = tokio::spawn(async move {
         let raw_sock =
             libconntrack::pcap::bind_writable_pcap_by_name(devices[0].name.clone()).unwrap();
@@ -129,6 +131,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             local_addrs,
             prober_tx,
             MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
+            conn_track_counters,
         );
         connection_tracker.set_tx_rx(connection_manager_tx, rx);
         connection_tracker.set_dns_tracker(dns_tx_clone);

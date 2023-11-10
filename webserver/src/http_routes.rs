@@ -1,8 +1,12 @@
 use std::fs;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use crate::context::{Context, LoginInfo, COOKIE_LOGIN_NAME};
 use crate::{desktop_websocket, webtest};
+use common_wasm::timeseries_stats::{
+    CounterProvider, CounterProviderWithTimeUpdate, ExportedStatRegistry,
+};
 use warp::http::StatusCode;
 use warp::{cookie::cookie, Filter, Reply};
 
@@ -17,6 +21,7 @@ pub async fn make_webserver_http_routes(
     // cache these so we don't need a lock every time to access
     let wasm_root = context.read().await.wasm_root.clone();
     let html_root = context.read().await.html_root.clone();
+    let counter_registries = context.read().await.counter_registries.clone();
 
     let login = make_login_route(&context).with(warp::log("login"));
     let webtest = make_webtest_route(&context).with(warp::log("webtest"));
@@ -33,17 +38,33 @@ pub async fn make_webserver_http_routes(
     // default where we direct people with no auth cookie to get one
     let login_form = make_login_form_route(&context, &html_root).with(warp::log("login"));
 
+    let counters = make_counter_routes(counter_registries).with(warp::log("counters"));
+
     // this is the order that the filters try to match; it's important that
     // it's in this order to make sure the cookie auth works right
     let routes = webtest
         .or(desktop_ws)
         .or(webclient_ws)
+        .or(counters)
         .or(webclient)
         .or(static_path)
         .or(root)
         .or(login)
         .or(login_form);
     routes
+}
+
+pub fn make_counter_routes(
+    registries: Arc<Vec<ExportedStatRegistry>>,
+) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    // FIXME: Should we put this route behind the loging? Probably yes.
+    warp::path!("counters" / "get_counters").map(move || {
+        // IndexMap iterates over entries in insertion order
+        let mut map = indexmap::IndexMap::<String, u64>::new();
+        registries.update_time();
+        registries.append_counters(&mut map);
+        serde_json::to_string_pretty(&map).unwrap()
+    })
 }
 
 fn make_webclient_ws_route(
