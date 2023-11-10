@@ -12,7 +12,7 @@ use futures_util::{
     SinkExt, StreamExt,
 };
 use libconntrack::{
-    connection::{ConnectionTrackerMsg, ConnectionTrackerSender},
+    connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
     dns_tracker::DnsTrackerMessage,
     perf_check,
     process_tracker::ProcessTrackerSender,

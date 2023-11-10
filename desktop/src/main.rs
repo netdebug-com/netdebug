@@ -6,8 +6,8 @@ use common_wasm::timeseries_stats::{
     CounterProvider, CounterProviderWithTimeUpdate, ExportedStatRegistry, SuperRegistry,
 };
 use libconntrack::{
-    connection::{ConnectionTracker, ConnectionTrackerMsg, ConnectionTrackerSender},
     connection_storage_handler::ConnectionStorageHandler,
+    connection_tracker::{ConnectionTracker, ConnectionTrackerMsg, ConnectionTrackerSender},
     dns_tracker::{DnsTracker, DnsTrackerMessage},
     in_band_probe::spawn_raw_prober,
     process_tracker::{ProcessTracker, ProcessTrackerSender},

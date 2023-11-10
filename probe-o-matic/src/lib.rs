@@ -4,7 +4,7 @@ use etherparse::{
     TransportHeader,
 };
 use libconntrack::{
-    connection::{ConnectionTrackerMsg, ConnectionTrackerReceiver},
+    connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerReceiver},
     owned_packet::OwnedParsedPacket,
     pcap::RawSocketWriter,
 };

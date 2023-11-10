@@ -12,7 +12,8 @@ use std::{println as debug, println as warn};
 use tokio::sync::mpsc::channel;
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 
-use crate::connection::{ConnectionKey, ConnectionTrackerMsg, ConnectionTrackerSender};
+use crate::connection::ConnectionKey;
+use crate::connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender};
 use crate::utils::{make_perf_check_stats, PerfCheckStats, PerfMsgCheck};
 use crate::{perf_check, try_send_async, try_send_sync};
 

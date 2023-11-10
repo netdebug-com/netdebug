@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use libconntrack::{
-    connection::{ConnectionTracker, ConnectionTrackerSender},
     connection_storage_handler::ConnectionStorageHandler,
+    connection_tracker::{ConnectionTracker, ConnectionTrackerSender},
     in_band_probe::spawn_raw_prober,
     pcap::{bind_writable_pcap, lookup_pcap_device_by_name},
 };

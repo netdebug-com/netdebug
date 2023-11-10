@@ -16,7 +16,8 @@ use chrono::{DateTime, Duration, Utc};
 use libconntrack_wasm::DnsTrackerEntry;
 
 use crate::{
-    connection::{ConnectionKey, ConnectionTrackerMsg, ConnectionTrackerSender},
+    connection::ConnectionKey,
+    connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
     try_send_sync,
     utils::PerfMsgCheck,
 };
@@ -714,7 +715,8 @@ mod test {
     use tokio::sync::mpsc::channel;
 
     use crate::{
-        connection::ConnectionTracker, owned_packet::OwnedParsedPacket, pcap::MockRawSocketProber,
+        connection_tracker::ConnectionTracker, owned_packet::OwnedParsedPacket,
+        pcap::MockRawSocketProber,
     };
 
     use super::*;

@@ -4,7 +4,7 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 use crate::{
-    connection::{ConnectionTrackerMsg, ConnectionTrackerSender},
+    connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
     in_band_probe::ProbeMessage,
     perf_check,
     utils::PerfMsgCheck,
