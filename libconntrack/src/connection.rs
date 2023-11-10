@@ -9,7 +9,7 @@ use chrono::{DateTime, Duration, Utc};
 use common_wasm::{
     analysis_messages::AnalysisInsights,
     evicting_hash_map::EvictingHashMap,
-    timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units},
+    timeseries_stats::{ExportedStatRegistry, StatHandle, StatHandleDuration, StatType, Units},
     ProbeId, ProbeReportEntry, ProbeReportSummary, ProbeRoundReport, PROBE_MAX_TTL,
 };
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
@@ -253,6 +253,9 @@ pub struct ConnectionTracker<'a> {
     /// could either by multicast traffic (Apple's mDNS/bonjour say hello). Or we got the wrong
     /// IPs from the interface or the IP of the interface changed.
     not_local_packets: StatHandle,
+    /// The time difference between the packet timestamp (from libpcap) to the current wall
+    /// time.
+    pcap_to_wall_delay: StatHandleDuration,
 }
 impl<'a> ConnectionTracker<'a> {
     pub fn new(
@@ -306,6 +309,11 @@ impl<'a> ConnectionTracker<'a> {
                 [StatType::COUNT],
             ),
             not_local_packets: stats.add_stat("not_local", Units::Packets, [StatType::COUNT]),
+            pcap_to_wall_delay: stats.add_duration_stat(
+                "pcap_to_walltime_delay",
+                Units::Microseconds,
+                [StatType::AVG, StatType::MAX],
+            ),
         }
     }
 
@@ -420,6 +428,7 @@ impl<'a> ConnectionTracker<'a> {
                     &key,
                     src_is_local,
                     &self.dns_tx,
+                    self.pcap_to_wall_delay.clone(),
                 );
                 if needs_dns_and_process_lookup {
                     // only new connections that we don't immediately tear down need DNS lookups
@@ -788,8 +797,12 @@ impl Connection {
         key: &ConnectionKey,
         src_is_local: bool,
         dns_tx: &Option<mpsc::UnboundedSender<DnsTrackerMessage>>,
+        mut pcap_to_wall_delay: StatHandleDuration,
     ) {
         self.last_packet_time = Utc::now();
+        let pcap_wall_dt = (Utc::now() - packet.timestamp).abs();
+        pcap_to_wall_delay.add_duration_value(pcap_wall_dt.to_std().unwrap());
+        self.last_packet_instant = tokio::time::Instant::now();
         if src_is_local {
             self.tx_byte_rate.new_sample(packet.len as usize);
             self.tx_packet_rate.new_sample(1);

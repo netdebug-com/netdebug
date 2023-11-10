@@ -131,7 +131,7 @@ pub fn blocking_pcap_loop(
     let mut capture = Capture::from_device(device)?
         .buffer_size(64_000_000) // try to prevent any packet loss
         .snaplen(512)
-        .timeout(1000) // for macos, so it doesn't get stuck
+        .immediate_mode(true)
         .open()?;
     // only capture/probe traffic to the webserver
     if let Some(filter_rule) = filter_rule {
