@@ -645,7 +645,7 @@ impl<'a> ConnectionTracker<'a> {
             .get(&AggregateCounterKind::ConnectionTracker)
             .unwrap() // unwrap is ok b/c we should always have this counter
             .clone();
-        let now = Instant::now();
+        let now = Utc::now();
         // force send and recv counters to be up to date with now and time sync'd
         traffic_counters.send.update_with_time(0, now);
         traffic_counters.recv.update_with_time(0, now);
