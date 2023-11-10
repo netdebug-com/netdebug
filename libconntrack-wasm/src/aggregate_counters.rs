@@ -1,8 +1,6 @@
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, time::Duration};
 
+use chrono::{DateTime, Utc};
 use common_wasm::timeseries_stats::{BucketIndex, BucketedTimeSeries};
 use serde::{Deserialize, Serialize};
 use typescript_type_def::TypeDef;
@@ -14,10 +12,10 @@ pub enum AggregateCounterKind {
     ConnectionTracker,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AggregateCounter {
     pub kind: AggregateCounterKind,
-    pub counts: HashMap<String, BucketedTimeSeries>, // "label" --> "BucketedTimeSeries"
+    pub counts: HashMap<String, BucketedTimeSeries<DateTime<Utc>>>, // "label" --> "BucketedTimeSeries"
 }
 
 /**
@@ -37,10 +35,10 @@ impl AggregateCounter {
     }
 
     pub fn update(&mut self, count: u64) {
-        self.update_with_time(count, Instant::now())
+        self.update_with_time(count, Utc::now())
     }
 
-    pub fn update_with_time(&mut self, count: u64, now: Instant) {
+    pub fn update_with_time(&mut self, count: u64, now: DateTime<Utc>) {
         for ts in &mut self.counts.values_mut() {
             ts.add_value(count, now);
         }
@@ -77,7 +75,7 @@ impl std::fmt::Display for AggregateCounter {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TrafficCounters {
     pub send: AggregateCounter,
     pub recv: AggregateCounter,

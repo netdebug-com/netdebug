@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -8,6 +9,39 @@ use std::{
     time::{Duration, Instant},
 };
 use typescript_type_def::TypeDef;
+
+/// Helper trait for TimeSources (e.g., `Instant` or `DataTime`) that can be used as
+/// the internal clock for BucketedTimeSeries.
+pub trait TimeSource {
+    /// Calculate `a - b` as a `std::time::Duration`. Return 0 if the duration would
+    /// be negative
+    fn sub(a: Self, b: Self) -> std::time::Duration;
+
+    /// Return the current time
+    fn now() -> Self;
+}
+
+impl TimeSource for Instant {
+    fn sub(a: Instant, b: Instant) -> std::time::Duration {
+        a - b
+    }
+
+    fn now() -> Instant {
+        return Instant::now();
+    }
+}
+
+impl TimeSource for DateTime<Utc> {
+    fn sub(a: DateTime<Utc>, b: DateTime<Utc>) -> std::time::Duration {
+        // we replicate the logic for `std::time::Instant`: if the difference would be
+        // negative, we return 0.
+        (a - b).to_std().unwrap_or_default()
+    }
+
+    fn now() -> DateTime<Utc> {
+        return Utc::now();
+    }
+}
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
 pub struct CounterBucket {
@@ -60,11 +94,15 @@ pub type BucketIndex = usize;
  * 3. Wrap is +1 from prev epoch: clear to the end, and from the beginnig to the new bucket
  * 4. Wrap is +2 or more from prev warp; clear everything
  *
+ * `BucketedTimeSeries`
  */
 
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
-pub struct BucketedTimeSeries {
+pub struct BucketedTimeSeries<TS>
+where
+    TS: TimeSource + Clone + Copy,
+{
     /**
      * Instant can't be serialized and has no default, so we can't just skip it.  But we can
      * make it an Option<Instant> which has a default and just panic if someone tries to update
@@ -73,8 +111,8 @@ pub struct BucketedTimeSeries {
      * A bit fugly, but I'm moving on to bigger things.
      */
     #[serde(skip)]
-    pub created_time: Option<Instant>,
-    #[type_def(type_of = "i64")]
+    pub created_time: Option<TS>,
+    #[type_def(type_of = "u64")]
     #[serde_as(as = "serde_with::DurationMicroSeconds<u64>")]
     pub bucket_time_window: Duration,
     pub buckets: Vec<CounterBucket>,
@@ -84,22 +122,26 @@ pub struct BucketedTimeSeries {
     /// same bucket don't get confused
     pub last_num_wraps: BucketIndex, // the number of times the counter has wrapped
 }
-impl BucketedTimeSeries {
+
+impl<TS> BucketedTimeSeries<TS>
+where
+    TS: TimeSource + Clone + Copy,
+{
     /**
      * Create a new BucketedTimeSeries
      */
-    pub fn new(bucket_time_window: Duration, num_buckets: usize) -> BucketedTimeSeries {
-        BucketedTimeSeries::new_with_create_time(Instant::now(), bucket_time_window, num_buckets)
+    pub fn new(bucket_time_window: Duration, num_buckets: usize) -> BucketedTimeSeries<TS> {
+        BucketedTimeSeries::new_with_create_time(TS::now(), bucket_time_window, num_buckets)
     }
 
     /**
      * Like `BucketedTimeSeries::new()` but we can specify the start time; useful for deterministic testing
      */
     pub fn new_with_create_time(
-        created_time: Instant,
+        created_time: TS,
         bucket_time_window: Duration,
         num_buckets: usize,
-    ) -> BucketedTimeSeries {
+    ) -> BucketedTimeSeries<TS> {
         BucketedTimeSeries {
             created_time: Some(created_time),
             // store Duration in Micros for faster calcs
@@ -111,19 +153,20 @@ impl BucketedTimeSeries {
         }
     }
 
-    pub fn add_value(&mut self, value: u64, now: Instant) {
+    pub fn add_value(&mut self, value: u64, now: TS) {
         let idx = self.update_buckets(now);
         self.buckets[idx].add(value);
     }
 
     /// Update and rotate the buckets up to `now`. Return the bucket index that
     /// `now` points tp
-    pub fn update_buckets(&mut self, now: Instant) -> usize {
+    pub fn update_buckets(&mut self, now: TS) -> usize {
         // how much time from system start?
-        let offset_time = (now
-            - self
-                .created_time
-                .expect("Can't updated a serialized BucketedTimeSeries"))
+        let offset_time = TS::sub(
+            now,
+            self.created_time
+                .expect("Can't updated a serialized BucketedTimeSeries"),
+        )
         .as_micros();
         // break that down by the time series time window
         // thought about storing bucket_time_window as micros to avoid the conversion here but was premature optimization
@@ -292,7 +335,7 @@ pub struct MultilevelTimeseries {
     window_sizes: Vec<Duration>,
     /// The BicketedTiemSeries corresponding to the window sizes,
     /// `assert_eq!(levels.len(), windos_sizes.len())
-    levels: Vec<BucketedTimeSeries>,
+    levels: Vec<BucketedTimeSeries<Instant>>,
     /// An additional CounterBucket where we track the count for all time
     all_time: CounterBucket,
     /// The most recent datapoint
@@ -928,7 +971,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn time_series_basic() {
+    fn time_series_basic_instant() {
         let create_time = Instant::now();
         let mut ts =
             BucketedTimeSeries::new_with_create_time(create_time, Duration::from_secs(1), 2);
@@ -954,7 +997,33 @@ mod test {
     }
 
     #[test]
-    fn time_series_harder() {
+    fn time_series_basic_utc() {
+        let create_time = DateTime::<Utc>::now();
+        let mut ts =
+            BucketedTimeSeries::new_with_create_time(create_time, Duration::from_secs(1), 2);
+        assert_eq!(ts.get_sum(), 0);
+        // add 1 'right away'
+        ts.add_value(1, create_time);
+        assert_eq!(ts.get_sum(), 1);
+        assert_eq!(ts.buckets[0].sum, 1);
+        // add 2, 1 second after 'right away'
+        ts.add_value(2, create_time + Duration::from_secs(1));
+        assert_eq!(ts.buckets[1].sum, 2);
+        assert_eq!(ts.get_sum(), 3);
+        // add 3, 2 second after 'right away'; this should create a new wrap and clear the first bucket
+        ts.add_value(3, create_time + Duration::from_secs(2));
+        assert_eq!(ts.buckets[0].sum, 3);
+        assert_eq!(ts.get_sum(), 5);
+        assert_eq!(ts.last_num_wraps, 1);
+        // add 4, 7 seconds after 'right away'; this should clear the time series as the new wrap > old wrap +1
+        ts.add_value(4, create_time + Duration::from_secs(7));
+        assert_eq!(ts.buckets[1].sum, 4);
+        assert_eq!(ts.get_sum(), 4);
+        assert_eq!(ts.last_num_wraps, 3);
+    }
+
+    #[test]
+    fn time_series_harder_instant() {
         // thanks to Gregor for showing this test fails
         let create_time = Instant::now();
         let mut ts =
@@ -969,7 +1038,23 @@ mod test {
         assert_eq!(ts.get_sum(), 2);
     }
 
-    fn get_bucket_values(ts: &BucketedTimeSeries) -> Vec<u64> {
+    #[test]
+    fn time_series_harder_utc() {
+        // thanks to Gregor for showing this test fails
+        let create_time = DateTime::<Utc>::now();
+        let mut ts =
+            BucketedTimeSeries::new_with_create_time(create_time, Duration::from_secs(1), 8);
+        assert_eq!(ts.get_sum(), 0);
+        // add 1 'right away'
+        ts.add_value(1, create_time);
+        assert_eq!(ts.get_sum(), 1);
+        assert_eq!(ts.buckets[0].sum, 1);
+        // add 2, 12 second after 'right away', so it should wrap, clear the full counter and be just '2'
+        ts.add_value(2, create_time + Duration::from_secs(12));
+        assert_eq!(ts.get_sum(), 2);
+    }
+
+    fn get_bucket_values<TS: TimeSource + Copy + Clone>(ts: &BucketedTimeSeries<TS>) -> Vec<u64> {
         let mut ret = Vec::new();
         for b in &ts.buckets {
             ret.push(b.sum);

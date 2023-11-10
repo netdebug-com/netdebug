@@ -128,61 +128,6 @@ export type DnsTrackerEntry = {
     "rtt_usec"?: I64;
     "ttl_sec"?: I64;
 };
-export type AggregateCounterKind = ({
-    "DnsDstDomain": {
-        "name": string;
-    };
-} | {
-    "Application": {
-        "name": string;
-    };
-} | "ConnectionTracker");
-export type U64 = number;
-export type CounterBucket = {
-    "sum": U64;
-    "max": U64;
-    "num_entries": U64;
-};
-export type Usize = number;
-
-/**
- * * BucketedTimeSeries.
- *  * Roughly inspired by https://github.com/facebook/folly/blob/main/folly/stats/BucketedTimeSeries.h
- *  *
- *  * This allows us to track values across a sliding time window. E.g., number of bytes in the
- *  * last minute.
- *  *
- *  * Store the data in a circulate buffer of counters (the 'time window') and clear parts
- *  * of the time window on update.  How much we clear depends on how far apart the new
- *  * update is relative to the last update.
- *  *
- *  * 1. Same wrap + bucker : clear nothing
- *  * 2. Same wrap + later bucket: clear up to the new bucket (including the new bucket index)
- *  * 3. Wrap is +1 from prev epoch: clear to the end, and from the beginnig to the new bucket
- *  * 4. Wrap is +2 or more from prev warp; clear everything
- *  *
- *  
- */
-export type BucketedTimeSeries = {
-    "bucket_time_window": I64;
-    "buckets": (CounterBucket)[];
-    "num_buckets": Usize;
-    "last_used_bucket": Usize;
-
-    /**
-     * Identifies the time range of the buckets so two updates from different times that map to the
-     * same bucket don't get confused
-     */
-    "last_num_wraps": Usize;
-};
-export type AggregateCounter = {
-    "kind": AggregateCounterKind;
-    "counts": Record<string, BucketedTimeSeries>;
-};
-export type TrafficCounters = {
-    "send": AggregateCounter;
-    "recv": AggregateCounter;
-};
 export type GuiToServerMessages = ({
     "DumpFlows": [];
 } | {
