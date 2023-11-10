@@ -57,7 +57,7 @@ const Dns: React.FC = () => {
 
   const { sendMessage } = useWebSocket(WS_URL, {
     onOpen: () => {
-      console.log("WebSocket connection established.");
+      console.debug("WebSocket connection established.");
     },
 
     onMessage: (msg) => {
@@ -67,7 +67,7 @@ const Dns: React.FC = () => {
         const cache = new Map<string, DnsTrackerEntry>(
           Object.entries(data.DumpDnsCache),
         );
-        console.debug("Got a DumpDnsCache message!", typeof cache, cache);
+        console.debug("Got a DumpDnsCache message!", typeof cache);
         setDnsEntries(cache);
         periodic_with_sla(
           "DumpDnsCache",
@@ -79,8 +79,13 @@ const Dns: React.FC = () => {
         );
       }
     },
+
+    onError: () => {
+      alert("Error connecting to websocket");
+    },
+
     onClose: () => {
-      console.log("Closing websocket");
+      console.debug("Closing websocket");
     },
   });
 

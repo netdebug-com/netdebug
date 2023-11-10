@@ -63,6 +63,12 @@ function spawn_desktop_binary(command: string) {
       spawn_desktop_binary(command);
     }
   });
+  desktopProcess.on("error", (err) => {
+    console.error("Failed to spawn background process:", err);
+  });
+  desktopProcess.on("spawn", () => {
+    console.log("Successfully spawned background process");
+  });
 }
 
 // This method will be called when Electron has finished
