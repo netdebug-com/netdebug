@@ -34,6 +34,8 @@ use crate::{
     utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, timestamp_to_ms, PerfMsgCheck},
 };
 
+const MAX_BURST_RATE_TIME_WINDOW_MILLIS: u64 = 10;
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ConnectionKey {
     pub local_ip: IpAddr,
@@ -195,6 +197,43 @@ pub struct Connection {
 }
 
 impl Connection {
+    pub(crate) fn new(key: ConnectionKey, ts: DateTime<Utc>) -> Connection {
+        let burst_rate_time_window =
+            std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS);
+        Connection {
+            connection_key: key.clone(),
+            local_syn: None,
+            remote_syn: None,
+            local_seq: None,
+            local_ack: None,
+            remote_ack: None,
+            local_data: None,
+            probe_round: None,
+            local_fin_seq: None,
+            remote_fin_seq: None,
+            remote_rst: false,
+            local_rst: false,
+            probe_report_summary: ProbeReportSummary::new(),
+            user_annotation: None,
+            user_agent: None,
+            associated_apps: None,
+            start_tracking_time: ts,
+            last_packet_time: ts,
+            last_packet_instant: tokio::time::Instant::now(),
+            remote_hostname: None,
+            avg_rate: BidirectionalRate {
+                rx: AverageRate::new(),
+                tx: AverageRate::new(),
+            },
+            max_burst_rate: BidirectionalRate {
+                rx: MaxBurstRate::new(burst_rate_time_window),
+                tx: MaxBurstRate::new(burst_rate_time_window),
+            },
+            // all connections are part of the connection tracker counter group
+            aggregate_groups: HashSet::from([AggregateCounterKind::ConnectionTracker]),
+        }
+    }
+
     pub(crate) fn update(
         &mut self,
         packet: Box<OwnedParsedPacket>,
