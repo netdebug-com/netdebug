@@ -6,7 +6,13 @@ use common_wasm::ProbeReportSummary;
 use serde::{Deserialize, Serialize};
 use typescript_type_def::TypeDef;
 
-use crate::{IpProtocol, RateEstimator};
+use crate::IpProtocol;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
+pub struct RxTxRate {
+    pub rx: Option<f64>,
+    pub tx: Option<f64>,
+}
 
 /***
  * The `struct ConnectionMeasurements` contains only the derived connection state
@@ -15,7 +21,7 @@ use crate::{IpProtocol, RateEstimator};
  * privacy sensitive (e.g., packet payloads) except IP addresses.
  */
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
 pub struct ConnectionMeasurements {
     pub local_hostname: Option<String>,
     #[type_def(type_of = "String")]
@@ -43,8 +49,8 @@ pub struct ConnectionMeasurements {
     #[type_def(type_of = "f64")]
     #[serde(with = "ts_milliseconds", rename = "last_packet_time_ms")]
     pub last_packet_time: DateTime<Utc>, // time tracker: last saw a packet
-    pub tx_byte_rate: RateEstimator,
-    pub tx_packet_rate: RateEstimator,
-    pub rx_byte_rate: RateEstimator,
-    pub rx_packet_rate: RateEstimator,
+    pub avg_byte_rate: RxTxRate,
+    pub avg_packet_rate: RxTxRate,
+    pub max_burst_byte_rate: RxTxRate,
+    pub max_burst_packet_rate: RxTxRate,
 }

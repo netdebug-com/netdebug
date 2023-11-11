@@ -1,7 +1,6 @@
 // check how long it's been since our last message and send now or later
 
 import { MutableRefObject } from "react";
-import { RateEstimator } from "./netdebug_types";
 
 // depending on our SLAs
 export function periodic_with_sla(
@@ -24,25 +23,24 @@ export function periodic_with_sla(
   }
 }
 
-export function rateEstimatorPrettyRate(
-  rate: RateEstimator,
+export function prettyPrintSiUnits(
+  x: number | null,
   unitSuffix: string,
 ): string {
-  if (rate.estimate_rate_per_ns === null) {
+  if (x === null) {
     return "None";
   }
-  const per_sec = rate.estimate_rate_per_ns * 1e9;
   const opts = {
     maximumFractionDigits: 1,
   };
-  if (per_sec > 1e9) {
-    return (per_sec / 1e9).toLocaleString(undefined, opts) + " G" + unitSuffix;
-  } else if (per_sec > 1e6) {
-    return (per_sec / 1e6).toLocaleString(undefined, opts) + " M" + unitSuffix;
-  } else if (per_sec > 1e3) {
-    return (per_sec / 1e3).toLocaleString(undefined, opts) + " K" + unitSuffix;
+  if (x > 1e9) {
+    return (x / 1e9).toLocaleString(undefined, opts) + " G" + unitSuffix;
+  } else if (x > 1e6) {
+    return (x / 1e6).toLocaleString(undefined, opts) + " M" + unitSuffix;
+  } else if (x > 1e3) {
+    return (x / 1e3).toLocaleString(undefined, opts) + " K" + unitSuffix;
   } else {
-    return per_sec.toLocaleString(undefined, opts) + " " + unitSuffix;
+    return x.toLocaleString(undefined, opts) + " " + unitSuffix;
   }
 }
 

@@ -12,7 +12,7 @@ import {
   headerStyle,
   headerStyleWithWidth,
   periodic_with_sla,
-  rateEstimatorPrettyRate,
+  prettyPrintSiUnits,
 } from "../utils";
 import TableContainer from "@mui/material/TableContainer";
 import Paper from "@mui/material/Paper";
@@ -190,10 +190,10 @@ const Flows: React.FC = () => {
                   <TableRow key={getUniqueConnKey(conn)}>
                     <TableCell>{app}</TableCell>
                     <TableCell align="right">
-                      {rateEstimatorPrettyRate(conn.tx_byte_rate, "Bytes/s")}
+                      {prettyPrintSiUnits(conn.avg_byte_rate.tx, "Bytes/s")}
                     </TableCell>
                     <TableCell align="right">
-                      {rateEstimatorPrettyRate(conn.rx_byte_rate, "Bytes/s")}
+                      {prettyPrintSiUnits(conn.avg_byte_rate.tx, "Bytes/s")}
                     </TableCell>
                     <TableCell>{renderedKey}</TableCell>
                   </TableRow>

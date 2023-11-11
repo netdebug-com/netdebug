@@ -12,7 +12,8 @@ use common_wasm::{
 
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{
-    aggregate_counters::AggregateCounterKind, DnsTrackerEntry, IpProtocol, RateEstimator,
+    aggregate_counters::AggregateCounterKind, AverageRate, BidirectionalRate, DnsTrackerEntry,
+    IpProtocol, MaxBurstRate, RateCalculator, RxTxRate,
 };
 #[cfg(not(test))]
 use log::{debug, warn};
@@ -187,13 +188,12 @@ pub struct Connection {
     pub user_agent: Option<String>, // when created via a web request, store the user-agent header
     pub associated_apps: Option<HashMap<u32, Option<String>>>, // PID --> ProcessName, if we know it
     pub remote_hostname: Option<String>, // the FQDN of the remote host, if we know it
-    pub tx_byte_rate: RateEstimator,
-    pub tx_packet_rate: RateEstimator,
-    pub rx_byte_rate: RateEstimator,
-    pub rx_packet_rate: RateEstimator,
+    pub avg_rate: BidirectionalRate<AverageRate>,
+    pub max_burst_rate: BidirectionalRate<MaxBurstRate>,
     // which counter groups does this flow belong to, e.g., "google.com" and "chrome"
     pub aggregate_groups: HashSet<AggregateCounterKind>,
 }
+
 impl Connection {
     pub(crate) fn update(
         &mut self,
@@ -204,17 +204,14 @@ impl Connection {
         dns_tx: &Option<mpsc::UnboundedSender<DnsTrackerMessage>>,
         mut pcap_to_wall_delay: StatHandleDuration,
     ) {
-        self.last_packet_time = Utc::now();
+        self.last_packet_time = packet.timestamp;
         let pcap_wall_dt = (Utc::now() - packet.timestamp).abs();
         pcap_to_wall_delay.add_duration_value(pcap_wall_dt.to_std().unwrap());
         self.last_packet_instant = tokio::time::Instant::now();
-        if src_is_local {
-            self.tx_byte_rate.new_sample(packet.len as usize);
-            self.tx_packet_rate.new_sample(1);
-        } else {
-            self.rx_byte_rate.new_sample(packet.len as usize);
-            self.rx_packet_rate.new_sample(1);
-        }
+        self.avg_rate
+            .add_packet_with_time(src_is_local, packet.len as u64, packet.timestamp);
+        self.max_burst_rate
+            .add_packet_with_time(src_is_local, packet.len as u64, packet.timestamp);
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
                 if src_is_local {
@@ -967,10 +964,22 @@ impl Connection {
             }
         }
         libconntrack_wasm::ConnectionMeasurements {
-            tx_byte_rate: self.tx_byte_rate.clone(),
-            tx_packet_rate: self.tx_packet_rate.clone(),
-            rx_byte_rate: self.rx_byte_rate.clone(),
-            rx_packet_rate: self.rx_packet_rate.clone(),
+            avg_byte_rate: RxTxRate {
+                rx: self.avg_rate.rx.get_byte_rate(),
+                tx: self.avg_rate.tx.get_byte_rate(),
+            },
+            avg_packet_rate: RxTxRate {
+                rx: self.avg_rate.rx.get_packet_rate(),
+                tx: self.avg_rate.tx.get_packet_rate(),
+            },
+            max_burst_byte_rate: RxTxRate {
+                rx: self.max_burst_rate.rx.get_byte_rate(),
+                tx: self.max_burst_rate.tx.get_byte_rate(),
+            },
+            max_burst_packet_rate: RxTxRate {
+                rx: self.max_burst_rate.rx.get_packet_rate(),
+                tx: self.max_burst_rate.tx.get_packet_rate(),
+            },
             local_hostname: Some("localhost".to_string()),
             local_ip: self.connection_key.local_ip.clone(),
             local_l4_port: self.connection_key.local_l4_port,
