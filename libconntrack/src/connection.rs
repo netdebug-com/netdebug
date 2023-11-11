@@ -1180,4 +1180,159 @@ pub mod test {
         let probe_id = Connection::is_probe_heuristic(true, &probe32).unwrap();
         assert_eq!(probe_id, 32);
     }
+
+    // Create a DateTime that's in the past. This should help uncover cases where our
+    // logic uses Utc::now() directly instead of using packet timestamps
+    fn mk_start_time() -> DateTime<Utc> {
+        DateTime::<Utc>::from_timestamp(1699559714, 123456).unwrap() // 2023-11-10
+    }
+
+    fn dur_micros(dt_micros: i64) -> chrono::Duration {
+        chrono::Duration::microseconds(dt_micros)
+    }
+
+    fn mk_packet(
+        src_is_local: bool,
+        timestamp: DateTime<Utc>,
+        payload_len: usize,
+    ) -> Box<OwnedParsedPacket> {
+        let mut pkt_bytes: Vec<u8> = Vec::new();
+        let local_mac = [1, 2, 3, 4, 5, 6];
+        let remote_mac = [7, 8, 9, 10, 11, 12];
+        let local_ip: [u8; 4] = [192, 168, 1, 1];
+        let remote_ip: [u8; 4] = [192, 168, 1, 2];
+        let local_port = 123;
+        let remote_port = 443;
+        let payload: Vec<u8> = vec![42u8; payload_len];
+
+        if src_is_local {
+            etherparse::PacketBuilder::ethernet2(local_mac, remote_mac)
+                .ipv4(local_ip, remote_ip, 64)
+                .udp(local_port, remote_port)
+                .write(&mut pkt_bytes, &payload)
+                .unwrap();
+        } else {
+            etherparse::PacketBuilder::ethernet2(remote_mac, local_mac)
+                .ipv4(remote_ip, local_ip, 64)
+                .udp(remote_port, local_port)
+                .write(&mut pkt_bytes, &payload)
+                .unwrap();
+        }
+        assert_eq!(pkt_bytes.len(), 14 + 20 + 8 + payload_len);
+        let pkt_headers = etherparse::PacketHeaders::from_ethernet_slice(&pkt_bytes).unwrap();
+        Box::new(OwnedParsedPacket::from_headers_and_ts(
+            pkt_headers,
+            timestamp,
+            pkt_bytes.len() as u32,
+        ))
+    }
+
+    /// Helper struct with all the stuff we need to call `Connection::update()`
+    struct Helper {
+        _prober_txrx: (
+            mpsc::Sender<PerfMsgCheck<ProbeMessage>>,
+            mpsc::Receiver<PerfMsgCheck<ProbeMessage>>,
+        ),
+        prober_helper: ProberHelper,
+        pcap_to_wall_delay: StatHandleDuration,
+        local_addrs: HashSet<IpAddr>,
+    }
+
+    impl Helper {
+        fn new(local_addrs: HashSet<IpAddr>) -> Helper {
+            use common_wasm::timeseries_stats::ExportedStatRegistry;
+            use common_wasm::timeseries_stats::StatType;
+            use common_wasm::timeseries_stats::Units;
+            let mut registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
+            let prober_txrx = mpsc::channel(4096);
+            let prober_tx = prober_txrx.0.clone();
+            Helper {
+                _prober_txrx: prober_txrx,
+                prober_helper: ProberHelper::new(prober_tx),
+                pcap_to_wall_delay: registry.add_duration_stat(
+                    "pcap_to_wall_delay",
+                    Units::Microseconds,
+                    [StatType::AVG],
+                ),
+                local_addrs,
+            }
+        }
+
+        fn update_conn(&mut self, conn: &mut Connection, pkt: Box<OwnedParsedPacket>) {
+            let (key, src_is_local) = pkt.to_connection_key(&self.local_addrs).unwrap();
+            conn.update(
+                pkt,
+                &mut self.prober_helper,
+                &key,
+                src_is_local,
+                &None,
+                self.pcap_to_wall_delay.clone(),
+            )
+        }
+    }
+
+    #[test]
+    pub fn test_rate_calculation() {
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.1").unwrap()]);
+        let mut helper = Helper::new(local_addrs.clone());
+
+        let t0 = mk_start_time();
+        let pkt = mk_packet(true, t0, 100);
+        let (key, _) = pkt.to_connection_key(&local_addrs).unwrap();
+        let mut conn = Connection::new(key, t0);
+
+        let conn_measurement = conn.to_connection_measurements(None);
+        assert_eq!(conn_measurement.avg_byte_rate.rx, None);
+        assert_eq!(conn_measurement.avg_byte_rate.tx, None);
+        assert_eq!(conn_measurement.avg_packet_rate.rx, None);
+        assert_eq!(conn_measurement.avg_packet_rate.tx, None);
+        assert_eq!(conn_measurement.max_burst_byte_rate.rx, None);
+        assert_eq!(conn_measurement.max_burst_byte_rate.tx, None);
+        assert_eq!(conn_measurement.max_burst_packet_rate.rx, None);
+        assert_eq!(conn_measurement.max_burst_packet_rate.tx, None);
+
+        helper.update_conn(&mut conn, pkt);
+
+        for dt in 1..=15 {
+            let pkt = mk_packet(true, t0 + dur_micros(dt * 1000), 100);
+            helper.update_conn(&mut conn, pkt);
+        }
+        let conn_meas = conn.to_connection_measurements(None);
+        // 16 packets, 142 bytes each over 15ms
+        assert_eq!(conn_meas.avg_byte_rate.tx.unwrap(), 16. * 142. / 0.015);
+        // 16 packets over 15ms
+        assert_eq!(conn_meas.avg_packet_rate.tx.unwrap(), 16. / 0.015);
+        assert_eq!(conn_meas.avg_byte_rate.rx, None);
+        assert_eq!(conn_meas.avg_packet_rate.rx, None);
+
+        // One 142 byte packet per ms ==> 142KB/s
+        assert_eq!(conn_meas.max_burst_byte_rate.tx.unwrap(), 142e3);
+        assert_eq!(conn_meas.max_burst_packet_rate.tx.unwrap(), 1000.);
+        assert_eq!(conn_meas.max_burst_byte_rate.rx, None);
+        assert_eq!(conn_meas.max_burst_packet_rate.rx, None);
+
+        //-----------
+        // Lets receive some bytes too
+        // 24 packets in 11.5 ms
+        let t1 = t0 + dur_micros(30_000);
+        for dt in 1..=24 {
+            let pkt = mk_packet(false, t1 + dur_micros(dt * 500), 200);
+            helper.update_conn(&mut conn, pkt);
+        }
+        let conn_meas = conn.to_connection_measurements(None);
+
+        // Average TX rate is unchanged since no more packets were received
+        assert_eq!(conn_meas.avg_byte_rate.tx.unwrap(), 16. * 142. / 0.015);
+        assert_eq!(conn_meas.avg_packet_rate.tx.unwrap(), 16. / 0.015);
+        // 24 packets, 242 bytes each over 12.5ms
+        assert_eq!(conn_meas.avg_byte_rate.rx.unwrap(), 24. * 242. / 0.0115);
+        assert_eq!(conn_meas.avg_packet_rate.rx.unwrap(), 24. / 0.0115);
+
+        // Burst TX rate is unchanged
+        assert_eq!(conn_meas.max_burst_byte_rate.tx.unwrap(), 142e3);
+        assert_eq!(conn_meas.max_burst_packet_rate.tx.unwrap(), 1000.);
+        // One 242 byte packet per 0.5ms ==> 484KB/s
+        assert_eq!(conn_meas.max_burst_byte_rate.rx.unwrap(), 484e3);
+        assert_eq!(conn_meas.max_burst_packet_rate.rx.unwrap(), 2000.);
+    }
 }
