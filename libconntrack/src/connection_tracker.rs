@@ -14,7 +14,7 @@ use common_wasm::{
 
 use libconntrack_wasm::{
     aggregate_counters::{AggregateCounter, AggregateCounterKind, TrafficCounters},
-    ConnectionMeasurements, RateEstimator,
+    AverageRate, BidirectionalRate, ConnectionMeasurements, MaxBurstRate,
 };
 #[cfg(not(test))]
 use log::{debug, warn};
@@ -43,6 +43,8 @@ const MAX_ENTRIES_TO_EVICT: usize = 10;
 /// If a connection has not seen any packets in this many milliseconds, the connection is
 /// evicted. This is done regardless of the connection is open or closed.
 const TIME_WAIT_MS: u64 = 60_000;
+
+const MAX_BURST_RATE_TIME_WINDOW_MILLIS: u64 = 10;
 
 pub type ConnectionTrackerSender = Sender<PerfMsgCheck<ConnectionTrackerMsg>>;
 pub type ConnectionTrackerReceiver = Receiver<PerfMsgCheck<ConnectionTrackerMsg>>;
@@ -385,6 +387,8 @@ impl<'a> ConnectionTracker<'a> {
 
     fn new_connection(&mut self, key: ConnectionKey) {
         let now = Utc::now();
+        let burst_rate_time_window =
+            std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS);
         let connection = Connection {
             connection_key: key.clone(),
             local_syn: None,
@@ -406,10 +410,14 @@ impl<'a> ConnectionTracker<'a> {
             last_packet_time: now,
             last_packet_instant: tokio::time::Instant::now(),
             remote_hostname: None,
-            tx_byte_rate: RateEstimator::new(),
-            rx_byte_rate: RateEstimator::new(),
-            tx_packet_rate: RateEstimator::new(),
-            rx_packet_rate: RateEstimator::new(),
+            avg_rate: BidirectionalRate {
+                rx: AverageRate::new(),
+                tx: AverageRate::new(),
+            },
+            max_burst_rate: BidirectionalRate {
+                rx: MaxBurstRate::new(burst_rate_time_window),
+                tx: MaxBurstRate::new(burst_rate_time_window),
+            },
             // all connections are part of the connection tracker counter group
             aggregate_groups: HashSet::from([AggregateCounterKind::ConnectionTracker]),
         };

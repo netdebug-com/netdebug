@@ -1,6 +1,5 @@
 mod bandwidth_graph;
 mod dns_tracker;
-mod flow_tracker;
 mod stat_counters;
 mod tabs;
 mod utils;
@@ -8,7 +7,6 @@ use std::{sync::Arc, time::Duration};
 
 use bandwidth_graph::BandwidthGraph;
 use dns_tracker::DnsTracker;
-use flow_tracker::FlowTracker;
 use stat_counters::StatCounters;
 use tabs::{Tab, Tabs, TabsContext};
 use web_sys::{MessageEvent, WebSocket};
@@ -91,13 +89,12 @@ fn init_tabs(ws: WebSocket) -> Result<Tabs, JsValue> {
         .collect();
     let mut tabs = Vec::new();
     tabs.push(BandwidthGraph::new());
-    tabs.push(FlowTracker::new());
     tabs.push(DnsTracker::new());
     tabs.push(StatCounters::new());
     tabs.extend(test_tabs);
     let tabs = Arc::new(std::sync::Mutex::new(TabsContext::new(
         tabs,
-        flow_tracker::FLOW_TRACKER_TAB.to_string(),
+        dns_tracker::DNS_TRACKER_TAB.to_string(),
     )));
     let tabs_clone = tabs.clone();
     tabs.lock().unwrap().construct(tabs_clone, ws.clone())?;
@@ -115,9 +112,7 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, tabs: Tabs) -> Result<(), J
             use desktop_common::ServerToGuiMessages::*;
             match msg {
                 VersionCheck(ver) => handle_version_check(ver),
-                DumpFlowsReply(flows) => {
-                    flow_tracker::handle_dumpflows_reply(flows, ws.clone(), tabs.clone())
-                }
+                DumpFlowsReply(_) => todo!(),
                 DumpDnsCache(cache) => dns_tracker::handle_dump_dns_cache_reply(cache, ws, tabs),
                 DumpAggregateCountersReply(counters) => {
                     bandwidth_graph::handle_aggregate_counters(counters, ws, tabs)

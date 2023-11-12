@@ -219,7 +219,7 @@ impl Display for AverageRate {
 /// time interval (`time_window`). E.g., if `time_window == 10ms` then it will track
 /// maximum rate for 10ms bursts.
 /// Note that packet and byte rates are tracked independently
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MaxBurstRate {
     ts: Option<BucketedTimeSeries<DateTime<Utc>>>,
     time_window: std::time::Duration,
@@ -288,145 +288,45 @@ impl Display for MaxBurstRate {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, PartialOrd, TypeDef)]
-pub struct RateEstimator {
-    alpha: f64,
-    estimate_rate_per_ns: Option<f64>,
-    #[serde(skip)] // Instant doesn't serde, so skip serializing the time
-    last_sample: Option<std::time::Instant>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BidirectionalRate<RC>
+where
+    RC: RateCalculator,
+{
+    pub rx: RC,
+    pub tx: RC,
 }
 
-// probably sane for most applications
-const DEFAULT_ALPHA: f64 = 0.1;
-
-impl RateEstimator {
-    pub fn new() -> RateEstimator {
-        RateEstimator::with_alpha(DEFAULT_ALPHA)
-    }
-    pub fn with_alpha(alpha: f64) -> RateEstimator {
-        RateEstimator {
-            alpha,
-            estimate_rate_per_ns: None,
-            last_sample: None,
-        }
-    }
-
-    /**
-     * Add a new sample to the estimate with the current time
-     */
-    pub fn new_sample(&mut self, count: usize) {
-        self.new_sample_with_time(count, std::time::Instant::now())
-    }
-
-    /**
-     * Add a new sample the estimate with a known time
-     */
-    pub fn new_sample_with_time(&mut self, count: usize, now: std::time::Instant) {
-        if let Some(last_sample) = self.last_sample {
-            // low pass filter; could keep this as a rational, but seems fine for now
-            if now == last_sample {
-                // warn!("Ignoring (effectively infinite) sample with zero duration (now == last_sample)");
-                // silently ignore this as we don't know where to log to in the WASM shared code case :-(
-                return;
-            }
-            let time_delta = now - last_sample;
-            self.new_sample_with_duration(count, time_delta);
+impl<RC> BidirectionalRate<RC>
+where
+    RC: RateCalculator,
+{
+    pub fn add_packet_with_time(&mut self, is_tx: bool, bytes: u64, now: DateTime<Utc>) {
+        if is_tx {
+            self.tx.add_packet_with_time(bytes, now);
         } else {
-            // ignore first sample, just store the time
-            self.last_sample = Some(now);
+            self.rx.add_packet_with_time(bytes, now);
         }
-    }
-
-    /**
-     * Add a new sample to the estimate with a known duration
-     *
-     * Mostly used for testing, but use this when we've already calculated the duration
-     * from the last event
-     *
-     * Will panic!() if called without a previous estimate
-     */
-    fn new_sample_with_duration(&mut self, count: usize, time_delta: std::time::Duration) {
-        let instant_rate = count as f64 / (time_delta.as_nanos() as f64);
-        if let Some(old_estimate) = self.estimate_rate_per_ns {
-            self.estimate_rate_per_ns =
-                Some(instant_rate * self.alpha + (1.0 - self.alpha) * old_estimate);
-        } else {
-            // the instant estimate becomes the full initial estimate
-            self.estimate_rate_per_ns = Some(instant_rate);
-        }
-        if let Some(last_sample) = self.last_sample {
-            self.last_sample = Some(last_sample + time_delta);
-        } else {
-            panic!("Can't call RateEstimator::new_sample_with_duration() as the first sample");
-        }
-    }
-
-    pub fn has_estimate(&self) -> bool {
-        self.estimate_rate_per_ns.is_some()
-    }
-
-    /**
-     * Get the current rate estimate with best precision
-     *
-     * will return None if we don't have at least two samples
-     */
-    pub fn get_rate(&self) -> Option<(f64, std::time::Duration)> {
-        if let Some(estimate) = self.estimate_rate_per_ns {
-            Some((estimate, std::time::Duration::from_nanos(1)))
-        } else {
-            None
-        }
-    }
-
-    /**
-     * Get current rate estimate in "per seconds"
-     */
-    pub fn get_rate_per_second(&self) -> Option<f64> {
-        match self.estimate_rate_per_ns {
-            Some(estimate) => Some(estimate * 1e9),
-            None => None,
-        }
-    }
-
-    /**
-     * Use the SI definitions of Mega (Mega = 1e6), not the compute binary
-     * approximations (e.g., Mega = 2^20)
-     */
-    pub fn get_pretty_rate_per_second(&self, units: &str) -> String {
-        pretty_print_si_units(self.get_rate_per_second(), units)
     }
 }
 
-impl Eq for RateEstimator {}
-
-/**
- * Rust doesn't like to autoimplement Ord for anything with floats
- */
-impl Ord for RateEstimator {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match self.partial_cmp(other) {
-            Some(o) => o,
-            None => {
-                match (self.estimate_rate_per_ns, other.estimate_rate_per_ns) {
-                    (None, None) => std::cmp::Ordering::Equal,
-                    (None, Some(_)) => std::cmp::Ordering::Less,
-                    (Some(_), None) => std::cmp::Ordering::Greater,
-                    (Some(e1), Some(e2)) => {
-                        if e1 > e2 {
-                            std::cmp::Ordering::Greater
-                        } else {
-                            std::cmp::Ordering::Less // don't care about equals in this case
-                        }
-                    }
-                }
-            }
-        }
+impl<RC> Display for BidirectionalRate<RC>
+where
+    RC: RateCalculator,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "RX: {} -- TX: {}",
+            self.rx.to_pretty_string(),
+            self.tx.to_pretty_string()
+        )?;
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
 
     use super::*;
     #[test]
@@ -512,53 +412,11 @@ mod test {
     }
 
     #[test]
-    fn rate_estimator() {
-        let mut rate = RateEstimator::new();
-        rate.new_sample(10); // this is ignored, only used to start the timer
-        assert_eq!(rate.get_rate_per_second(), None);
-        rate.new_sample_with_duration(10, Duration::from_secs(1));
-        let (estimate, duration) = rate.get_rate().unwrap();
-        assert_eq!(duration, Duration::from_nanos(1));
-        let test_estimate = 10.0 / 1e9; // 1s == 1e9 ns
-        let epsilon = 1e-9;
-        // floating point math can only ever be 'close enough'
-        assert!((test_estimate - estimate).abs() < epsilon);
-        // now update the estimate one last time and make sure it tracks properly
-        rate.new_sample_with_duration(50, Duration::from_secs(1));
-        let (estimate, duration) = rate.get_rate().unwrap();
-        assert_eq!(duration, Duration::from_nanos(1));
-        assert!(estimate > test_estimate)
-    }
-
-    #[test]
-    #[should_panic]
-    fn rate_estimator_panic() {
-        let mut rate = RateEstimator::new();
-        rate.new_sample_with_duration(10, Duration::from_secs(1));
-    }
-
-    #[test]
     fn test_pretty_print_si_units() {
         assert_eq!(pretty_print_si_units(Some(23e9), "Foo/s"), "23.00 GFoo/s");
         assert_eq!(pretty_print_si_units(Some(42e6), "Foo/s"), "42.00 MFoo/s");
         assert_eq!(pretty_print_si_units(Some(1.1e3), "Foo/s"), "1.10 KFoo/s");
         assert_eq!(pretty_print_si_units(Some(789.0), "Foo/s"), "789.00 Foo/s");
         assert_eq!(pretty_print_si_units(None, "Foo/s"), "None");
-    }
-
-    #[test]
-    fn rate_estimator_pretty() {
-        for (time, test_str) in [
-            (Duration::from_nanos(1), "2.00 GHz"),
-            (Duration::from_micros(1), "2.00 MHz"),
-            (Duration::from_millis(1), "2.00 KHz"),
-            (Duration::from_secs(1), "2.00 Hz"),
-        ] {
-            let mut test_rate = RateEstimator::new();
-            test_rate.new_sample(10); // this count will be ignored, just the time
-                                      // a rate of 2 every nano second (1e-9) is 2GHz
-            test_rate.new_sample_with_duration(2, time);
-            assert_eq!(test_str, test_rate.get_pretty_rate_per_second("Hz"));
-        }
     }
 }

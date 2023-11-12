@@ -85,9 +85,9 @@ export type ProbeReportSummary = {
     "raw_reports": (ProbeRoundReport)[];
     "summary": Record<U8, (ProbeReportSummaryNode)[]>;
 };
-export type RateEstimator = {
-    "alpha": F64;
-    "estimate_rate_per_ns": (F64 | null);
+export type RxTxRate = {
+    "rx": (F64 | null);
+    "tx": (F64 | null);
 };
 export type ConnectionMeasurements = {
     "local_hostname": (string | null);
@@ -115,10 +115,10 @@ export type ConnectionMeasurements = {
     "four_way_close_done": boolean;
     "start_tracking_time_ms": F64;
     "last_packet_time_ms": F64;
-    "tx_byte_rate": RateEstimator;
-    "tx_packet_rate": RateEstimator;
-    "rx_byte_rate": RateEstimator;
-    "rx_packet_rate": RateEstimator;
+    "avg_byte_rate": RxTxRate;
+    "avg_packet_rate": RxTxRate;
+    "max_burst_byte_rate": RxTxRate;
+    "max_burst_packet_rate": RxTxRate;
 };
 export type I64 = number;
 export type DnsTrackerEntry = {
