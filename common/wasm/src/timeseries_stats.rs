@@ -293,6 +293,21 @@ where
         }
     }
 
+    fn bucket_iter(&self) -> BucketIterator {
+        BucketIterator {
+            buckets: &self.buckets,
+            returned_cnt: 0,
+            idx: self.last_used_bucket + 1,
+        }
+    }
+
+    pub fn export_sum(&self) -> ExportedBuckets {
+        ExportedBuckets {
+            bucket_time_window: self.bucket_time_window,
+            buckets: self.bucket_iter().map(|bucket| bucket.sum).collect_vec(),
+        }
+    }
+
     /***
      * Convert the data in the buckets into a time series of the format
      * that chartjs expected, e.g.,
@@ -319,6 +334,43 @@ where
             })
             .collect()
     }
+}
+
+struct BucketIterator<'a> {
+    buckets: &'a Vec<CounterBucket>,
+    returned_cnt: usize,
+    idx: usize,
+}
+
+impl<'a> Iterator for BucketIterator<'a> {
+    type Item = CounterBucket;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx == self.buckets.len() {
+            self.idx = 0;
+        }
+        if self.returned_cnt == self.buckets.len() {
+            None
+        } else {
+            self.idx += 1;
+            self.returned_cnt += 1;
+            Some(self.buckets[self.idx - 1])
+        }
+    }
+}
+
+/// A small helper struct that represents an exported (i.e., serde serialized)
+/// `BucketedTimeSeries`. One instance of this will represent either the `max`, `sum`,
+/// or `num_entries` values.
+/// The buckets will be in-order. I.e., `buckets[0]` is the oldest bucket, and
+/// `buckets[buckets.len()-1]` is the newest.
+#[serde_as]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, TypeDef)]
+pub struct ExportedBuckets {
+    #[type_def(type_of = "u64")]
+    #[serde_as(as = "serde_with::DurationMicroSeconds<u64>")]
+    pub bucket_time_window: Duration,
+    pub buckets: Vec<u64>,
 }
 
 /**
@@ -1075,10 +1127,14 @@ mod test {
         ts.add_value(3, create_time + 2 * dt);
         ts.add_value(4, create_time + 3 * dt);
         assert_eq!(get_bucket_values(&ts), &[1, 2, 3, 4]);
+        assert_eq!(ts.export_sum().buckets, &[1, 2, 3, 4]);
         ts.add_value(5, create_time + 4 * dt);
         assert_eq!(get_bucket_values(&ts), &[5, 2, 3, 4]);
+        assert_eq!(ts.export_sum().buckets, &[2, 3, 4, 5]);
         ts.add_value(6, create_time + 5 * dt);
         assert_eq!(get_bucket_values(&ts), &[5, 6, 3, 4]);
+        assert_eq!(ts.export_sum().buckets, &[3, 4, 5, 6]);
+        assert_eq!(ts.export_sum().bucket_time_window, Duration::from_secs(1));
     }
 
     #[test]
@@ -1114,9 +1170,11 @@ mod test {
         ts.add_value(6, create_time + 5 * dt);
         ts.add_value(7, create_time + 6 * dt);
         assert_eq!(get_bucket_values(&ts), &[5, 6, 7, 4]);
+        assert_eq!(ts.export_sum().buckets, &[4, 5, 6, 7]);
 
         ts.add_value(8, create_time + 8 * dt);
         assert_eq!(get_bucket_values(&ts), &[8, 6, 7, 0]);
+        assert_eq!(ts.export_sum().buckets, &[6, 7, 0, 8]);
     }
 
     #[test]
