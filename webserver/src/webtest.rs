@@ -29,7 +29,8 @@ use warp::ws::{self, WebSocket};
 use crate::context::Context;
 use futures_util::{stream::SplitStream, SinkExt, StreamExt};
 use libconntrack::{
-    connection::{ConnectionKey, ConnectionTrackerMsg, ConnectionTrackerSender},
+    connection::ConnectionKey,
+    connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
     utils::PerfMsgCheck,
 };
 use log::{debug, info, warn};

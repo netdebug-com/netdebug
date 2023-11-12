@@ -1,6 +1,6 @@
 use clap::Parser;
 use lib_probe_o_matic::*;
-use libconntrack::connection::ConnectionTrackerMsg;
+use libconntrack::connection_tracker::ConnectionTrackerMsg;
 use libconntrack::pcap::{find_interesting_pcap_interfaces, run_blocking_pcap_loop_in_thread};
 use libconntrack::utils::PerfMsgCheck;
 use log::{error, info, warn};
