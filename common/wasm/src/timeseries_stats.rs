@@ -293,6 +293,12 @@ where
         }
     }
 
+    /// Check if we've seen at least one full window (i.e., `num_bucket * time_per_bucket`) of
+    /// data-points.
+    pub fn full_window_seen(&self) -> bool {
+        self.last_num_wraps != 0
+    }
+
     fn bucket_iter(&self) -> BucketIterator {
         BucketIterator {
             buckets: &self.buckets,
