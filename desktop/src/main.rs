@@ -82,6 +82,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             url.clone(),
             MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
             std::time::Duration::from_secs(30),
+            counter_registries.new_registry("topology_server_connection"),
         ))
     } else {
         None
