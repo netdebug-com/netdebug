@@ -120,7 +120,8 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, tabs: Tabs) -> Result<(), J
                 DumpStatCountersReply(counter_map) => {
                     stat_counters::handle_dump_stat_counters_reply(counter_map, ws, tabs)
                 }
-                DumpDnsAggregateCountersReply(_) => todo!(), // TODO for now, need to figure out UI changes
+                DumpDnsAggregateCountersReply(_) => todo!(),
+                WhatsMyIpReply { ip: _ } => todo!(), // TODO for now, need to figure out UI changes
             }
         }
         Err(e) => {

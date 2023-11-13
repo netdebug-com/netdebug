@@ -17,6 +17,7 @@ use libconntrack::{
 use log::info;
 use std::{collections::HashSet, error::Error, net::IpAddr, sync::Arc};
 use tokio::sync::mpsc::UnboundedSender;
+use topology_client::TopologyServerSender;
 use warp::Filter;
 use websocket::websocket_handler;
 
@@ -58,8 +59,8 @@ pub struct Args {
     pub storage_server_url: Option<String>,
 
     /// The URL of the Topology Server. E.g., ws://localhost:3030
-    #[arg(long, default_value=None)]
-    pub topology_server_url: Option<String>,
+    #[arg(long, default_value = "ws://localhost:3030/desktop")]
+    pub topology_server_url: String,
 }
 
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
@@ -77,16 +78,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
     );
 
-    let _topology_tx = if let Some(url) = &args.topology_server_url {
-        Some(TopologyServerConnection::spawn(
-            url.clone(),
-            MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
-            std::time::Duration::from_secs(30),
-            counter_registries.new_registry("topology_server_connection"),
-        ))
-    } else {
-        None
-    };
+    let topology_client = TopologyServerConnection::spawn(
+        args.topology_server_url.clone(),
+        MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
+        std::time::Duration::from_secs(30),
+        counter_registries.new_registry("topology_server_connection"),
+    );
 
     let devices = libconntrack::pcap::find_interesting_pcap_interfaces(&args.pcap_device)?;
     let local_addrs = devices
@@ -171,6 +168,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             tx,
             dns_tx,
             process_tx,
+            topology_client,
             Arc::new(counter_registries.registries()),
         ))
         .run(listen_addr)
@@ -181,6 +179,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 tx,
                 dns_tx,
                 process_tx,
+                topology_client,
                 Arc::new(counter_registries.registries()),
             )
             .or(make_desktop_wasm_html_http_routes(
@@ -212,12 +211,14 @@ pub fn make_common_desktop_http_routes(
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: ProcessTrackerSender,
+    topology_client: TopologyServerSender,
     counter_registries: SharedExportedStatRegistries,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     let ws = make_desktop_ws_route(
         connection_tracker,
         dns_tracker,
         process_tracker,
+        topology_client,
         counter_registries.clone(),
     )
     .with(warp::log("websocket"));
@@ -266,6 +267,14 @@ fn with_process_tracker(
     warp::any().map(move || process_tracker.clone())
 }
 
+fn with_topology_client(
+    topology_client: TopologyServerSender,
+) -> impl warp::Filter<Extract = (TopologyServerSender,), Error = std::convert::Infallible> + Clone
+{
+    let topology_client = topology_client.clone();
+    warp::any().map(move || topology_client.clone())
+}
+
 fn with_counter_registries(
     counter_registries: SharedExportedStatRegistries,
 ) -> impl warp::Filter<Extract = (SharedExportedStatRegistries,), Error = std::convert::Infallible> + Clone
@@ -277,12 +286,14 @@ fn make_desktop_ws_route(
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: ProcessTrackerSender,
+    topology_client: TopologyServerSender,
     counter_registries: SharedExportedStatRegistries,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::path("ws")
         .and(with_connection_tracker(connection_tracker))
         .and(with_dns_tracker(dns_tracker))
         .and(with_process_tracker(process_tracker))
+        .and(with_topology_client(topology_client))
         .and(with_counter_registries(counter_registries))
         .and(warp::ws())
         .and_then(websocket_desktop)
@@ -291,6 +302,7 @@ pub async fn websocket_desktop(
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: ProcessTrackerSender,
+    topology_client: TopologyServerSender,
     counter_registries: SharedExportedStatRegistries,
     ws: warp::ws::Ws,
 ) -> Result<impl warp::Reply, warp::Rejection> {
@@ -299,6 +311,7 @@ pub async fn websocket_desktop(
             connection_tracker,
             dns_tracker,
             process_tracker,
+            topology_client,
             counter_registries,
             websocket,
         )

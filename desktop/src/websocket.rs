@@ -16,7 +16,7 @@ use libconntrack::{
     dns_tracker::DnsTrackerMessage,
     perf_check,
     process_tracker::ProcessTrackerSender,
-    try_send_sync,
+    try_send_async, try_send_sync,
     utils::PerfMsgCheck,
 };
 use log::{debug, info, warn};
@@ -24,6 +24,8 @@ use tokio::sync::mpsc::{self, channel, UnboundedSender};
 use warp::ws::{self, Message, WebSocket};
 
 use desktop_common::{GuiToServerMessages, ServerToGuiMessages};
+
+use crate::topology_client::{TopologyServerMessage, TopologyServerSender};
 
 /**
  * We have a lot of different threads that want to send from the desktop server to the GUI client,
@@ -66,6 +68,7 @@ async fn handle_websocket_rx_messages(
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     _process_tracker: ProcessTrackerSender,
+    topology_client: TopologyServerSender,
     counter_registries: Arc<Vec<ExportedStatRegistry>>,
 ) {
     while let Some(msg_result) = ws_rx.next().await {
@@ -80,6 +83,7 @@ async fn handle_websocket_rx_messages(
                                 &tx,
                                 &connection_tracker,
                                 &dns_tracker,
+                                &topology_client,
                                 &counter_registries,
                             )
                             .await
@@ -102,6 +106,7 @@ async fn handle_gui_to_server_msg(
     tx: &UnboundedSender<ServerToGuiMessages>,
     connection_tracker: &ConnectionTrackerSender,
     dns_tracker: &UnboundedSender<DnsTrackerMessage>,
+    topology_client: &TopologyServerSender,
     counter_registries: &Vec<ExportedStatRegistry>,
 ) {
     let start = std::time::Instant::now();
@@ -122,8 +127,32 @@ async fn handle_gui_to_server_msg(
         GuiToServerMessages::DumpDnsAggregateCounters {} => {
             handle_gui_dump_dns_flows(tx, connection_tracker).await
         }
+        GuiToServerMessages::WhatsMyIp() => handle_get_my_ip(tx, topology_client).await,
     }
     perf_check!("process gui message", start, Duration::from_millis(200));
+}
+
+async fn handle_get_my_ip(
+    tx: &UnboundedSender<ServerToGuiMessages>,
+    topology_client: &mpsc::Sender<PerfMsgCheck<crate::topology_client::TopologyServerMessage>>,
+) {
+    let (reply_tx, mut reply_rx) = channel(1);
+    use TopologyServerMessage::*;
+    try_send_async!(
+        topology_client,
+        "handle_get_my_ip",
+        GetMyIpAndUserAgent { reply_tx }
+    )
+    .await;
+    match reply_rx.recv().await {
+        Some(perf_msg) => {
+            let (ip, _) = perf_msg.perf_check_get("handle_get_my_ip");
+            if let Err(e) = tx.send(ServerToGuiMessages::WhatsMyIpReply { ip }) {
+                warn!("Failed to send WhatsMyIpReply to GUI: {}", e);
+            }
+        }
+        None => todo!(),
+    }
 }
 
 async fn handle_dump_stat_counters(
@@ -255,6 +284,7 @@ pub async fn websocket_handler(
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: ProcessTrackerSender,
+    topology_client: TopologyServerSender,
     counter_registries: Arc<Vec<ExportedStatRegistry>>,
     ws: WebSocket,
 ) {
@@ -273,6 +303,7 @@ pub async fn websocket_handler(
             connection_tracker_clone,
             dns_tracker,
             process_tracker,
+            topology_client,
             counter_registries,
         )
         .await;
