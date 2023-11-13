@@ -146,7 +146,11 @@ const Flows: React.FC = () => {
       <SwitchHelper text={"Show UDP"} state={showUdp} updateFn={setShowUdp} />
       <SwitchHelper text={"Show TCP"} state={showTcp} updateFn={setShowTcp} />
       <TableContainer component={Paper}>
-        <Table sx={{ minWidth: 650 }} aria-label="Table of Connections">
+        <Table
+          sx={{ minWidth: 650 }}
+          size="small"
+          aria-label="Table of Connections"
+        >
           <TableHead>
             <TableRow style={headerStyle}>
               <TableCell sx={headerStyleWithWidth(0.3)} align="left">

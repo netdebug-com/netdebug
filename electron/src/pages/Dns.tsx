@@ -170,7 +170,11 @@ const Dns: React.FC = () => {
 
   return (
     <TableContainer component={Paper}>
-      <Table sx={{ minWidth: 650 }} aria-label="simple table">
+      <Table
+        sx={{ minWidth: 650 }}
+        size="small"
+        aria-label="Table of DNS enries"
+      >
         <TableHead>
           <TableRow style={headerStyle}>
             <TableCell sx={headerStyleWithWidth(0.5)}>Hostname</TableCell>
