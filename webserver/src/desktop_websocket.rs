@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use common_wasm::topology_server_messages::{DesktopToTopologyServer, TopologyServerToDesktop};
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
-use log::warn;
+use log::{info, warn};
 use tokio::sync::mpsc::{channel, Sender};
 use warp::filters::ws::{self, Message, WebSocket};
 
@@ -16,6 +16,7 @@ pub async fn handle_desktop_websocket(
     addr: Option<SocketAddr>,
 ) {
     let addr = addr.expect("Missing connection!?");
+    info!("DesktopWebsocket connection from {}", addr);
     let (ws_tx, mut ws_rx) = websocket.split();
     let ws_tx = spawn_websocket_writer(ws_tx, DEFAULT_CHANNEL_BUFFER_SIZE, addr.to_string()).await;
     /*
