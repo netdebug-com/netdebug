@@ -1,5 +1,8 @@
 # Top-level Cargo.toml - mostly just tells vscode to look into the subdirectories
 
+[profile.release]
+# always build release builds with debug symbols
+debug = true
 
 [workspace]
 members = [
