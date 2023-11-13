@@ -1,7 +1,28 @@
-# Dev Setup Instructions
+# Dev setup instructions 
+
+1. Create a _dedicated_ github account for netdebug using your netdebug.com email
+1. Enable 2FA for that account with both XXX (looking at yubikey) and SMS as a backup
+1. Run the git setup script in `./setup-git-clone.sh` to setup git hooks and a commit template
+1. Install rust: https://rustup.sh
+1. See `electron/README.MD` for instructions to setup `node` and `npm` for UI development
+1. VSCode is strongly recommended: https://code.visualstudio.com/download. The repo has VScode config files that recommend good/useful extensions. 
+1. Install additional rust tools / utilities: 
+   ```
+   cargo install wasm-pack   # for wasm development
+   cargo install flamegraph  # for flamegraph profiler
+   rustup component add llvm-tools-preview # llvm tools used for code coverage
+   cargo install cargo-llvm-cov # for code coverage (nice utilities that hide low-level commands)
+   ```
+1. Install Graphite for code review (git/gh frontend)  https://graphite.dev 
+1. Install graphviz 
+
+## Setting up windows & Bash:
+TODO
+
+# Older Dev Setup Instructions -- should revamp
 1. Create a _dedicated_ github account for netdebug using your netdebug.com email
 2. Enable 2FA for that account with both XXX (looking at yubikey) and SMS as a backup
-3. Run the git hooks setup script in ./hooks/setup.sh to setup all of your hooks
+3. Run the git setup script in `./setup-git-clone.sh` to setup git hooks and a commit template
 4. VS code is strongly recommended with a bunch of project defaults built into the repo
     1. Recommended that you install the vscode rpm repo so you get auto 6.1updates!
     2. Recommended packages include : 
