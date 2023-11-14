@@ -18,7 +18,7 @@ use libconntrack_wasm::DnsTrackerEntry;
 use crate::{
     connection::ConnectionKey,
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
-    try_send_sync,
+    send_or_log_sync,
     utils::PerfMsgCheck,
 };
 use dns_parser::{self, QueryType};
@@ -539,7 +539,7 @@ impl<'a> DnsTracker<'a> {
         };
         debug!("Looking up IP: {} - found {:?}", ip, remote_hostname);
         use ConnectionTrackerMsg::*;
-        try_send_sync!(
+        send_or_log_sync!(
             tx,
             "conntracker",
             SetConnectionRemoteHostnameDns {
@@ -569,7 +569,7 @@ impl<'a> DnsTracker<'a> {
         if self.pending_lookups.contains_key(&ip) {
             let (keys, tx) = self.pending_lookups.remove(&ip).unwrap();
             use ConnectionTrackerMsg::*;
-            try_send_sync!(
+            send_or_log_sync!(
                 tx,
                 "Connection_tracker",
                 SetConnectionRemoteHostnameDns {

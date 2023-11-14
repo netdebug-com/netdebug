@@ -82,37 +82,34 @@ pub fn packet_is_tcp_rst(packet: &OwnedParsedPacket) -> bool {
     }
 }
 
-/**
- * Easy macro to reduce code testing errors and updating stats around our common
- * try_send pattern
- *
- * ```rust
- * use std::vec::Vec;
- * use tokio::sync::mpsc::{Sender, channel};
- * use common_wasm::timeseries_stats::{ExportedStatRegistry, StatType, Units};
- * use log::warn;
- * use libconntrack::{try_send_sync, utils::PerfMsgCheck};
- *
- * let (tx, _rx) = channel::<PerfMsgCheck<Vec<u8>>>(128);
- * let mut stats_registry = ExportedStatRegistry::new("example", std::time::Instant::now());
- * let mut msg_errs_counter = stats_registry.add_stat("message_tx_errors", Units::None, [StatType::COUNT]);
- *
- * let data = Vec::from([0;128]);
- * // Instead of this:
- * // if let Err(e) = tx.try_send(PerfMsgChk::new(data)) {
- * //   warn!("Failed to send data to process: {}", e);
- * //   msg_errs_counter.update(1);
- * // }
- * // Write this:
- * try_send_sync!(tx, "process", data.clone(), &mut msg_errs_counter);
- * // Or this to explicitly specificy the SLA
- * try_send_sync!(tx, "process", data, &mut msg_errs_counter, std::time::Duration::from_millis(15));
- * // Or try_send_async!() if in an async context
- * ```
- */
+/// Easy macro to reduce code testing errors and updating stats around our common
+///  try_send pattern
+/// ```rust
+/// use std::vec::Vec;
+/// use tokio::sync::mpsc::{Sender, channel};
+/// use common_wasm::timeseries_stats::{ExportedStatRegistry, StatType, Units};
+/// use log::warn;
+/// use libconntrack::{send_or_log_sync, utils::PerfMsgCheck};
+///
+/// let (tx, _rx) = channel::<PerfMsgCheck<Vec<u8>>>(128);
+/// let mut stats_registry = ExportedStatRegistry::new("example", std::time::Instant::now());
+/// let mut msg_errs_counter = stats_registry.add_stat("message_tx_errors", Units::None, [StatType::COUNT]);
+///
+/// let data = Vec::from([0;128]);
+/// // Instead of this:
+/// // if let Err(e) = tx.try_send(PerfMsgChk::new(data)) {
+/// //   warn!("Failed to send data to process: {}", e);
+/// //   msg_errs_counter.update(1);
+/// // }
+/// // Write this:
+/// send_or_log_sync!(tx, "process", data.clone(), &mut msg_errs_counter);
+/// // Or this to explicitly specificy the SLA
+/// send_or_log_sync!(tx, "process", data, &mut msg_errs_counter, std::time::Duration::from_millis(15));
+/// // Or try_send_async!() if in an async context
+/// ```
 
 #[macro_export]
-macro_rules! try_send_sync {
+macro_rules! send_or_log_sync {
     // no stats or SLA
     ($tx:expr, $msg:expr, $data:expr) => {
         (|| {
@@ -143,37 +140,35 @@ macro_rules! try_send_sync {
     };
 }
 
-/**
- * Easy macro to reduce code testing errors and updating stats around our common
- * try_send pattern
- *
- * ```rust
- * # tokio_test::block_on( async {
- * use std::vec::Vec;
- * use tokio::sync::mpsc::{Sender, channel};
- * use common_wasm::timeseries_stats::{ExportedStatRegistry, StatType, Units};
- * use log::warn;
- * use libconntrack::{try_send_async, utils::PerfMsgCheck};
- *
- * let (tx, _rx) = channel::<PerfMsgCheck<Vec<u8>>>(128);
- * let mut stats_registry = ExportedStatRegistry::new("example", std::time::Instant::now());
- * let mut msg_errs_counter = stats_registry.add_stat("message_tx_errors", Units::None, [StatType::COUNT]);
- *
- * let data = Vec::from([0;128]);
- * // Instead of this:
- * // if let Err(e) = tx.send(PerfMsgChk::new(data)).await {
- * //   warn!("Failed to send data to process: {}", e);
- * //   msg_errs_counter.update(1);
- * // }
- * // Write this:
- * try_send_async!(tx, "process", data.clone(), &mut msg_errs_counter).await;
- * // Or this to explicitly specificy the SLA
- * try_send_async!(tx, "process", data, &mut msg_errs_counter, std::time::Duration::from_millis(15)).await;
- * # });
- * ```
- */
+/// Easy macro to reduce code testing errors and updating stats around our common
+/// try_send pattern
+///
+/// ```rust
+/// # tokio_test::block_on( async {
+/// use std::vec::Vec;
+/// use tokio::sync::mpsc::{Sender, channel};
+/// use common_wasm::timeseries_stats::{ExportedStatRegistry, StatType, Units};
+/// use log::warn;
+/// use libconntrack::{send_or_log_async, utils::PerfMsgCheck};
+///
+/// let (tx, _rx) = channel::<PerfMsgCheck<Vec<u8>>>(128);
+/// let mut stats_registry = ExportedStatRegistry::new("example", std::time::Instant::now());
+/// let mut msg_errs_counter = stats_registry.add_stat("message_tx_errors", Units::None, [StatType::COUNT]);
+///
+/// let data = Vec::from([0;128]);
+/// // Instead of this:
+/// // if let Err(e) = tx.send(PerfMsgChk::new(data)).await {
+/// //   warn!("Failed to send data to process: {}", e);
+/// //   msg_errs_counter.update(1);
+/// // }
+/// // Write this:
+/// send_or_log_async!(tx, "process", data.clone(), &mut msg_errs_counter).await;
+/// // Or this to explicitly specificy the SLA
+/// send_or_log_async!(tx, "process", data, &mut msg_errs_counter, std::time::Duration::from_millis(15)).await;
+/// # });
+/// ```
 #[macro_export]
-macro_rules! try_send_async {
+macro_rules! send_or_log_async {
     ($tx:expr, $msg:expr, $data:expr) => {
         async {
             if let Err(e) = $tx.send(PerfMsgCheck::new($data)).await {
