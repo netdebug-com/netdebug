@@ -7,7 +7,7 @@ const TabData = [
   ["Bandwidth", "/bandwidth"],
   ["DNS", "/dns"],
   ["Flows", "/flows"],
-  ["(Counters)", "/counters"],
+  ["Counters", "/counters"],
 ];
 
 function useRouteMatch(patterns: readonly string[]) {

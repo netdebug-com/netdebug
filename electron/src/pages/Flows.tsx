@@ -1,10 +1,4 @@
-import React, {
-  Dispatch,
-  SetStateAction,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ConnectionMeasurements } from "../netdebug_types";
 import useWebSocket from "react-use-websocket";
 import { WS_URL } from "../App";
@@ -20,7 +14,7 @@ import Table from "@mui/material/Table";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import TableCell from "@mui/material/TableCell";
-import { FormControlLabel, Switch } from "@mui/material";
+import { SwitchHelper } from "../SwitchHelper";
 
 // build a unique connection key, using the same fields the
 // rust logic uses.
@@ -50,25 +44,6 @@ function connSortFn(a: ConnectionMeasurements, b: ConnectionMeasurements) {
   return dt;
 }
 
-type StateUpdateFn = Dispatch<SetStateAction<boolean>>;
-interface SwitchHelperProps {
-  text: string;
-  state: boolean;
-  updateFn: StateUpdateFn;
-}
-const SwitchHelper: React.FC<SwitchHelperProps> = (props) => {
-  return (
-    <FormControlLabel
-      control={<Switch />}
-      label={props.text}
-      checked={props.state}
-      onChange={() => {
-        props.updateFn(!props.state);
-      }}
-    />
-  );
-};
-
 const Flows: React.FC = () => {
   const [flowEntries, setFlowEntries] = useState(
     new Array<ConnectionMeasurements>(),
@@ -82,7 +57,7 @@ const Flows: React.FC = () => {
   const last_send = useRef(null);
 
   const sendRequest = () => {
-    console.log("Sending DumpFlows request");
+    console.debug("Sending DumpFlows request");
     sendMessage(
       JSON.stringify({
         DumpFlows: [],
