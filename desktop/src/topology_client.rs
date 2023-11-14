@@ -1,6 +1,7 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
+use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units};
 use common_wasm::topology_server_messages::{DesktopToTopologyServer, TopologyServerToDesktop};
 use futures::sink::SinkExt;
 use futures_util::stream::SplitSink;
@@ -45,6 +46,9 @@ pub struct TopologyServerConnection {
     server_hello: Option<(IpAddr, String)>,
     /// A list of local agents that are waiting for the hello message info, e.g., the local IP
     waiting_for_hello: Vec<Sender<PerfMsgCheck<(IpAddr, String)>>>,
+    retry_stat: StatHandle,
+    desktop2server_msgs_stat: StatHandle,
+    server2desktop_msgs_stat: StatHandle,
 }
 
 impl TopologyServerConnection {
@@ -54,6 +58,7 @@ impl TopologyServerConnection {
         rx: Receiver<PerfMsgCheck<TopologyServerMessage>>,
         buffer_size: usize,
         max_retry_time: Duration,
+        mut stats_registry: ExportedStatRegistry,
     ) -> TopologyServerConnection {
         TopologyServerConnection {
             url,
@@ -64,6 +69,21 @@ impl TopologyServerConnection {
             max_retry_time,
             server_hello: None,
             waiting_for_hello: Vec::new(),
+            retry_stat: stats_registry.add_stat(
+                "connection_retries",
+                Units::None,
+                vec![StatType::SUM, StatType::RATE],
+            ),
+            server2desktop_msgs_stat: stats_registry.add_stat(
+                "server2desktop_msgs",
+                Units::None,
+                vec![StatType::SUM, StatType::RATE],
+            ),
+            desktop2server_msgs_stat: stats_registry.add_stat(
+                "desktop2server_msgs",
+                Units::None,
+                vec![StatType::SUM, StatType::RATE],
+            ),
         }
     }
 
@@ -71,12 +91,19 @@ impl TopologyServerConnection {
         url: String,
         buffer_size: usize,
         max_retry_time: Duration,
+        stats_registry: ExportedStatRegistry,
     ) -> Sender<PerfMsgCheck<TopologyServerMessage>> {
         let (tx, rx) = channel(buffer_size);
         let tx_clone = tx.clone();
         tokio::spawn(async move {
-            let topology_server =
-                TopologyServerConnection::new(url, tx, rx, buffer_size, max_retry_time);
+            let topology_server = TopologyServerConnection::new(
+                url,
+                tx,
+                rx,
+                buffer_size,
+                max_retry_time,
+                stats_registry,
+            );
             topology_server.rx_loop().await;
         });
         tx_clone
@@ -118,6 +145,7 @@ impl TopologyServerConnection {
                         "Failed to connect to TopologyServer {} : retrying in {:?} :: {}",
                         self.url, self.retry_time, e
                     );
+                    self.retry_stat.bump();
                     tokio::time::sleep(self.retry_time).await;
                     continue;
                 }
@@ -153,6 +181,7 @@ impl TopologyServerConnection {
     }
 
     pub async fn handle_ws_msg(&mut self, ws_msg: Message) {
+        self.server2desktop_msgs_stat.bump();
         let msg = match ws_msg {
             Message::Text(json_msg) => {
                 match serde_json::from_str::<TopologyServerToDesktop>(&json_msg) {
@@ -187,6 +216,7 @@ impl TopologyServerConnection {
     }
 
     pub async fn handle_desktop_msg(&mut self, desktop_msg: PerfMsgCheck<TopologyServerMessage>) {
+        self.desktop2server_msgs_stat.bump();
         match desktop_msg.perf_check_get("TopologyServerConnection:: handle_desktop_msg()") {
             TopologyServerMessage::GetMyIpAndUserAgent { reply_tx } => {
                 // if we have it cached, then reply right away, else queue them
@@ -244,7 +274,7 @@ impl TopologyServerConnection {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::str::FromStr;
+    use std::{str::FromStr, time::Instant};
 
     /**
      * Uses most of the code but not the websocket marshalling/unmarshalling
@@ -262,6 +292,7 @@ mod test {
             rx,
             10,
             Duration::from_secs(10),
+            ExportedStatRegistry::new("topo_server_conn", Instant::now()),
         );
         // request the IP before it's ready
         let (reply_tx, mut reply_rx) = channel(10);
