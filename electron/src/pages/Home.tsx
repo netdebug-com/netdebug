@@ -1,26 +1,43 @@
-import React from "react";
-import { Link } from "react-router-dom";
+import React, { useEffect, useRef, useState } from "react";
 import useWebSocket from "react-use-websocket";
 import { WS_URL } from "../App";
 
 const Home: React.FC = () => {
-  useWebSocket(WS_URL, {
+  const [myIp, setMyIp] = useState("Loading...");
+  const last_send = useRef(null);
+  useEffect(() => {
+    sendRequest();
+  }, []);
+
+  const { sendMessage } = useWebSocket(WS_URL, {
     onOpen: () => {
-      console.log("WebSocket connection established.");
+      console.debug("WebSocket connection established.");
     },
-
     onMessage: (msg) => {
-      console.log("Got message from websocket: ", msg.data);
+      const data = JSON.parse(msg.data);
+      if ("WhatsMyIpReply" in data) {
+        setMyIp(data.WhatsMyIpReply.ip);
+      }
     },
-
     onClose: () => {
-      console.log("Closing websocket");
+      console.debug("Closing websocket");
     },
   });
+
+  const sendRequest = () => {
+    console.debug("Sending WhatsMyIp request");
+    sendMessage(
+      JSON.stringify({
+        WhatsMyIp: [],
+      }),
+    );
+    last_send.current = window.performance.now();
+  };
+
   return (
     <div>
       <h1>Home Page</h1>
-      <Link to="flows">Flows</Link>
+      My external IP Address is <em>{myIp}</em>.
     </div>
   );
 };

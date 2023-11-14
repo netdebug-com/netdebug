@@ -47,6 +47,7 @@ pub async fn handle_desktop_websocket(
             Err(e) => warn!("Error processing connection {} :: {}", e, addr),
         }
     }
+    info!("DesktopWebsocket connection from {} closing", addr);
 }
 
 async fn handle_desktop_message(
@@ -67,6 +68,7 @@ async fn handle_hello(
     user_agent: &str,
     addr: &SocketAddr,
 ) {
+    info!("Handling HELLO message from {:?}", addr);
     if let Err(e) = ws_tx
         .send(TopologyServerToDesktop::Hello {
             client_ip: addr.ip(),

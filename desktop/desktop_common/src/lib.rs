@@ -25,6 +25,9 @@ pub enum ServerToGuiMessages {
     DumpDnsAggregateCountersReply(
         HashMap<AggregateCounterKind, (TrafficCounters, Vec<ConnectionMeasurements>)>,
     ),
+    WhatsMyIpReply {
+        ip: IpAddr,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TypeDef)]
@@ -34,6 +37,7 @@ pub enum GuiToServerMessages {
     DumpAggregateCounters(),
     DumpStatCounters(),
     DumpDnsAggregateCounters(),
+    WhatsMyIp(),
 }
 
 #[cfg(test)]

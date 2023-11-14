@@ -154,6 +154,7 @@ impl TopologyServerConnection {
             // send an initial hello to start the connection
             if let Err(e) = ws_tx.send(DesktopToTopologyServer::Hello).await {
                 warn!("Failed to send hello to TopologyServer: {}", e);
+                continue;
             }
             // now wait for internal users to send traffic to us as well as the topology server to send us messages
             loop {
@@ -223,6 +224,7 @@ impl TopologyServerConnection {
                 if let Some(hello) = &self.server_hello {
                     try_send_async!(reply_tx, "topology server hello", hello.clone()).await;
                 } else {
+                    info!("Request for topology server Hello/WhatsMyIp queued");
                     self.waiting_for_hello.push(reply_tx.clone());
                 }
             }
@@ -240,17 +242,18 @@ impl TopologyServerConnection {
         mut writer: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
     ) -> Sender<DesktopToTopologyServer> {
         let (tx, mut rx) = channel::<DesktopToTopologyServer>(self.buffer_size);
-        while let Some(msg) = rx.recv().await {
-            if let Err(e) = writer
-                .send(Message::Text(serde_json::to_string(&msg).unwrap()))
-                .await
-            {
-                warn!(
-                    "Tried to send to the TopologyServer {}, but got {}",
-                    self.url, e
-                );
+        let url = self.url.clone();
+        tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                if let Err(e) = writer
+                    .send(Message::Text(serde_json::to_string(&msg).unwrap()))
+                    .await
+                {
+                    warn!("Tried to send to the TopologyServer {}, but got {}", url, e);
+                }
             }
-        }
+            info!("TopologyServer: ws_writer exiting cleanly (!? should never happen?)");
+        });
         tx
     }
 

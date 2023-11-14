@@ -138,4 +138,6 @@ export type GuiToServerMessages = ({
     "DumpStatCounters": [];
 } | {
     "DumpDnsAggregateCounters": [];
+} | {
+    "WhatsMyIp": [];
 });
