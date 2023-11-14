@@ -178,7 +178,11 @@ where
             .checked_div(self.num_buckets as u128)
             .unwrap() as usize;
         if num_wraps < self.last_num_wraps {
-            panic!("Time went backward for our monotonic clock!?");
+            // panic!("Time went backward for our monotonic clock!?");
+            // This is no longer a monotonic clock all of the time!
+            // FOR NOW, NO-OP/drop the data, but ideally we would store the data if it was still in
+            // the window
+            // tracking as https://github.com/netdebug-com/netdebug/issues/248
         } else if num_wraps == self.last_num_wraps {
             // implicit: if bucket_index == self.last_bucket_used, then NOOP
             if bucket_index > self.last_used_bucket {

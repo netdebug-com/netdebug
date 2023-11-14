@@ -5,7 +5,6 @@ use std::str::FromStr;
 
 use crate::{
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
-    in_band_probe::ProbeMessage,
     perf_check,
     utils::PerfMsgCheck,
 };
@@ -14,6 +13,7 @@ use futures_util::StreamExt;
 use itertools::Itertools;
 use log::{debug, info, warn};
 use pcap::Capture;
+#[cfg(test)]
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::owned_packet::OwnedParsedPacket;
@@ -333,12 +333,14 @@ impl RawSocketWriter for PcapRawSocketWriter {
 /**
  * Used for testing - just capture and buffer anything written to it
  */
+#[cfg(test)]
 pub struct MockRawSocketProber {
-    pub tx: Sender<PerfMsgCheck<ProbeMessage>>,
-    pub rx: Receiver<PerfMsgCheck<ProbeMessage>>,
+    pub tx: Sender<PerfMsgCheck<crate::in_band_probe::ProbeMessage>>,
+    pub rx: Receiver<PerfMsgCheck<crate::in_band_probe::ProbeMessage>>,
     pub captured: Vec<Vec<u8>>,
 }
 
+#[cfg(test)]
 impl MockRawSocketProber {
     pub fn new() -> MockRawSocketProber {
         let (tx, rx) = channel(1024);
@@ -348,8 +350,71 @@ impl MockRawSocketProber {
             captured: Vec::new(),
         }
     }
+
+    /**
+     * Take the packets that were queued to be sent and put them into the connection tracker as if
+     * pcap had received them.  Useful in testing.
+     */
+    pub fn redirect_into_connection_tracker(
+        &mut self,
+        connection_tracker: &mut crate::connection_tracker::ConnectionTracker,
+    ) {
+        use etherparse::{TcpHeader, TransportHeader};
+
+        while let Ok(msg) = self.rx.try_recv() {
+            let msg = msg.skip_perf_check();
+            let (packet, ttl) = match msg {
+                crate::in_band_probe::ProbeMessage::SendProbe { packet, min_ttl } => {
+                    (packet, min_ttl)
+                }
+            };
+            let l2 = packet.link.as_ref().unwrap();
+
+            // build a probe out tof this
+            let builder = etherparse::PacketBuilder::ethernet2(l2.source, l2.destination);
+            let ip_header = packet.ip.as_ref().unwrap();
+            let mut new_ip = ip_header.clone();
+            match new_ip {
+                etherparse::IpHeader::Version4(ref mut ip4, _) => {
+                    ip4.time_to_live = ttl;
+                    ip4.identification = ttl as u16; // redundant but useful!
+                }
+                etherparse::IpHeader::Version6(ref mut ip6, _) => {
+                    ip6.hop_limit = ttl;
+                    // TODO: consider setting the flow_label BUT some ISPs might hash on it..
+                }
+            }
+            let builder = builder.ip(new_ip);
+            let builder = match &packet.transport {
+                Some(TransportHeader::Tcp(tcp)) => {
+                    let mut tcph = TcpHeader::new(
+                        tcp.source_port,
+                        tcp.destination_port,
+                        tcp.sequence_number,
+                        tcp.window_size,
+                    );
+                    // make this probe look more believable
+                    tcph.psh = true;
+                    tcph.ack = true;
+                    tcph.acknowledgment_number = tcp.acknowledgment_number;
+                    // don't set the TCP options for now - lazy
+                    builder.tcp_header(tcph)
+                }
+                _ => panic!("Called tcp_band_probe on non-TCP connection: {:?}", packet),
+            };
+
+            // try to encode the TTL into the payload; this solves a bunch of problems for us
+            let payload_len = std::cmp::min(ttl as usize, packet.payload.len());
+            let payload = packet.payload[0..payload_len].to_vec();
+            let mut probe = Vec::<u8>::with_capacity(builder.size(payload.len()));
+            builder.write(&mut probe, &payload).unwrap();
+            let parsed_probe = OwnedParsedPacket::try_from_fake_time(probe).unwrap();
+            connection_tracker.add(parsed_probe);
+        }
+    }
 }
 
+#[cfg(test)]
 impl RawSocketWriter for MockRawSocketProber {
     fn sendpacket(&mut self, buf: &[u8]) -> Result<(), pcap::Error> {
         self.captured.push(buf.to_vec());

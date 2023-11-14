@@ -643,7 +643,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "typescript-type-def",
- "url",
  "warp",
  "webserver",
 ]
@@ -1260,8 +1259,10 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-test",
+ "tokio-tungstenite",
  "tonic",
  "tower",
+ "url",
 ]
 
 [[package]]

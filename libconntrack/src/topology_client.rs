@@ -1,13 +1,14 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
+use crate::send_or_log_async;
+use crate::utils::PerfMsgCheck;
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units};
 use common_wasm::topology_server_messages::{DesktopToTopologyServer, TopologyServerToDesktop};
 use futures::sink::SinkExt;
 use futures_util::stream::SplitSink;
 use futures_util::StreamExt;
-use libconntrack::send_or_log_async;
-use libconntrack::utils::PerfMsgCheck;
+use libconntrack_wasm::ConnectionMeasurements;
 use log::{info, warn};
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -22,6 +23,9 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 pub enum TopologyServerMessage {
     GetMyIpAndUserAgent {
         reply_tx: Sender<PerfMsgCheck<(IpAddr, String)>>,
+    },
+    StoreConnectionMeasurements {
+        connection_measurements: ConnectionMeasurements,
     },
 }
 
@@ -218,8 +222,9 @@ impl TopologyServerConnection {
 
     pub async fn handle_desktop_msg(&mut self, desktop_msg: PerfMsgCheck<TopologyServerMessage>) {
         self.desktop2server_msgs_stat.bump();
+        use TopologyServerMessage::*;
         match desktop_msg.perf_check_get("TopologyServerConnection:: handle_desktop_msg()") {
-            TopologyServerMessage::GetMyIpAndUserAgent { reply_tx } => {
+            GetMyIpAndUserAgent { reply_tx } => {
                 // if we have it cached, then reply right away, else queue them
                 if let Some(hello) = &self.server_hello {
                     send_or_log_async!(reply_tx, "topology server hello", hello.clone()).await;
@@ -228,6 +233,9 @@ impl TopologyServerConnection {
                     self.waiting_for_hello.push(reply_tx.clone());
                 }
             }
+            StoreConnectionMeasurements {
+                connection_measurements: _,
+            } => todo!(),
         }
     }
 
