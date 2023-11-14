@@ -2881,15 +2881,18 @@ dependencies = [
  "indexmap 2.1.0",
  "itertools 0.11.0",
  "libconntrack",
+ "libconntrack-wasm",
  "log",
  "pb-conntrack-types",
  "pb-storage-service",
  "pcap",
  "pwhash",
  "rand",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-rusqlite",
  "warp",
 ]
 
