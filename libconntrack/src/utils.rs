@@ -3,7 +3,6 @@ use std::net::IpAddr;
 use chrono::{DateTime, Utc};
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration};
 use etherparse::IpHeader;
-use libconntrack_wasm::aggregate_counters::AggregateCounter;
 
 use crate::owned_packet::OwnedParsedPacket;
 
@@ -356,10 +355,10 @@ impl<T> PerfMsgCheck<T> {
         self.data
     }
 
-    pub fn perf_check_get_with_stats(self, msg: &str, counters: &mut AggregateCounter) -> T {
+    pub fn perf_check_get_with_stats(self, msg: &str, duration_stat: &mut StatHandleDuration) -> T {
         let delta = std::time::Instant::now() - self.send_time;
         perf_check!(msg, self.send_time, self.sla);
-        counters.update(delta.as_micros() as u64);
+        duration_stat.add_duration_value(delta);
         self.data
     }
 }
