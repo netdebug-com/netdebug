@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
     net::IpAddr,
-    time::Instant,
 };
 
 use chrono::Utc;
@@ -13,7 +12,7 @@ use common_wasm::{
 };
 
 use libconntrack_wasm::{
-    aggregate_counters::{AggregateCounter, AggregateCounterKind, TrafficCounters},
+    aggregate_counters::{AggregateCounterKind, TrafficCounters},
     ConnectionMeasurements,
 };
 #[cfg(not(test))]
@@ -149,8 +148,6 @@ pub struct ConnectionTracker<'a> {
     process_tx: Option<ProcessTrackerSender>,
     tx: ConnectionTrackerSender, // so we can tell others how to send msgs to us
     rx: ConnectionTrackerReceiver, // to read messages sent to us
-    // aggregate counters of everything that's gone through this connection manager
-    dequeue_delay_stats_us: AggregateCounter,
     // used to track traffic grouped by, e.g., DNS destination
     aggregate_traffic_counters: HashMap<AggregateCounterKind, TrafficCounters>,
     /// Trackes number of successfully parsed packets. I.e., packets from
@@ -169,6 +166,8 @@ pub struct ConnectionTracker<'a> {
     /// The time difference between the packet timestamp (from libpcap) to the current wall
     /// time.
     pcap_to_wall_delay: StatHandleDuration,
+    /// Tracks the time between enqueing and dequeing messages to the connection tracker
+    dequeue_delay_stats: StatHandleDuration,
 }
 impl<'a> ConnectionTracker<'a> {
     pub fn new(
@@ -181,14 +180,6 @@ impl<'a> ConnectionTracker<'a> {
     ) -> ConnectionTracker<'a> {
         let (tx, rx) = tokio::sync::mpsc::channel(max_queue_size);
         let storage_service_msg_tx_clone = topology_client.clone();
-        // for now, track these big counters by minute and second
-        let mut dequeue_delay_stats_us =
-            AggregateCounter::new(AggregateCounterKind::ConnectionTracker);
-        dequeue_delay_stats_us.add_time_series(
-            "(us)".to_string(),
-            std::time::Duration::from_millis(1),
-            5000,
-        );
         ConnectionTracker {
             connections: EvictingHashMap::new(
                 max_connections_per_tracker,
@@ -204,7 +195,6 @@ impl<'a> ConnectionTracker<'a> {
             process_tx: None,
             tx,
             rx,
-            dequeue_delay_stats_us,
             // we always have at least the top-level ConnectionTracker traffic counters
             aggregate_traffic_counters: HashMap::from([(
                 AggregateCounterKind::ConnectionTracker,
@@ -227,6 +217,11 @@ impl<'a> ConnectionTracker<'a> {
                 Units::Microseconds,
                 [StatType::AVG, StatType::MAX],
             ),
+            dequeue_delay_stats: stats.add_duration_stat(
+                "dequeue_delay",
+                Units::Microseconds,
+                [StatType::MAX, StatType::AVG, StatType::COUNT],
+            ),
         }
     }
 
@@ -239,22 +234,12 @@ impl<'a> ConnectionTracker<'a> {
     }
 
     pub async fn rx_loop(&mut self) {
-        let mut last_stats_update = std::time::Instant::now();
         while let Some(msg) = self.rx.recv().await {
             use ConnectionTrackerMsg::*;
             let msg = msg.perf_check_get_with_stats(
                 "ConnectionTracker::rx_loop",
-                &mut self.dequeue_delay_stats_us,
+                &mut self.dequeue_delay_stats,
             );
-            // TODO: fb303-style stats!!
-            let now = Instant::now();
-            if (now - last_stats_update) > std::time::Duration::from_secs(5) {
-                last_stats_update = now;
-                debug!(
-                    "ConnectionTracker dequeue delay stats: {}",
-                    self.dequeue_delay_stats_us
-                );
-            }
             match msg {
                 Pkt(pkt) => self.add(pkt),
                 ProbeReport {
@@ -615,6 +600,7 @@ pub mod test {
     use core::panic;
     use std::num::Wrapping;
     use std::str::FromStr;
+    use std::time::Instant;
 
     use chrono::Duration;
     use common::test_utils::test_dir;
