@@ -6,7 +6,7 @@ use common_wasm::topology_server_messages::{DesktopToTopologyServer, TopologySer
 use futures::sink::SinkExt;
 use futures_util::stream::SplitSink;
 use futures_util::StreamExt;
-use libconntrack::try_send_async;
+use libconntrack::send_or_log_async;
 use libconntrack::utils::PerfMsgCheck;
 use log::{info, warn};
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -222,7 +222,7 @@ impl TopologyServerConnection {
             TopologyServerMessage::GetMyIpAndUserAgent { reply_tx } => {
                 // if we have it cached, then reply right away, else queue them
                 if let Some(hello) = &self.server_hello {
-                    try_send_async!(reply_tx, "topology server hello", hello.clone()).await;
+                    send_or_log_async!(reply_tx, "topology server hello", hello.clone()).await;
                 } else {
                     info!("Request for topology server Hello/WhatsMyIp queued");
                     self.waiting_for_hello.push(reply_tx.clone());
@@ -262,7 +262,7 @@ impl TopologyServerConnection {
             warn!("Got duplicate!? Hello message for TopologyServer!? Maybe reconnect");
         }
         for tx in &self.waiting_for_hello {
-            try_send_async!(
+            send_or_log_async!(
                 tx,
                 "handle_topology_hello",
                 (client_ip.clone(), user_agent.clone())

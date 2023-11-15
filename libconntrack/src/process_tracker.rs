@@ -15,7 +15,7 @@ use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 use crate::connection::ConnectionKey;
 use crate::connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender};
 use crate::utils::{make_perf_check_stats, PerfCheckStats, PerfMsgCheck};
-use crate::{perf_check, try_send_async, try_send_sync};
+use crate::{perf_check, send_or_log_async, send_or_log_sync};
 
 #[derive(Clone, Debug)]
 pub enum ProcessTrackerMessage {
@@ -105,7 +105,7 @@ impl ProcessTracker {
             loop {
                 // TODO: break on too many errors? Then do what?
                 tokio::time::sleep(update_frequency.to_std().unwrap()).await;
-                try_send_async!(
+                send_or_log_async!(
                     &tx,
                     "process_tracker",
                     ProcessTrackerMessage::UpdateCache,
@@ -187,7 +187,7 @@ impl ProcessTracker {
     fn lookup_or_queue(&mut self, key: ConnectionKey, tx: ConnectionTrackerSender) {
         let reply = self.lookup_from_cache(&key);
         if reply.is_some() {
-            try_send_sync!(
+            send_or_log_sync!(
                 tx,
                 "ConnectionTracker",
                 ConnectionTrackerMsg::SetConnectionApplication {
@@ -284,7 +284,7 @@ impl ProcessTracker {
     fn process_queued_lookups(&mut self) {
         while let Some((key, tx)) = self.lookup_queue.pop() {
             let application = self.lookup_from_cache(&key);
-            try_send_sync!(
+            send_or_log_sync!(
                 tx,
                 "ConnectionTracker",
                 ConnectionTrackerMsg::SetConnectionApplication {
@@ -317,7 +317,7 @@ async fn run_pid2process_loop(update_frequency: Duration, tx: ProcessTrackerSend
         };
 
         use ProcessTrackerMessage::*;
-        try_send_async!(tx, "process_tracker", UpdatePidMapping { pid2process }).await;
+        send_or_log_async!(tx, "process_tracker", UpdatePidMapping { pid2process }).await;
 
         let next_update = start + update_frequency;
         let now = Utc::now();

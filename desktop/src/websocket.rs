@@ -16,7 +16,7 @@ use libconntrack::{
     dns_tracker::DnsTrackerMessage,
     perf_check,
     process_tracker::ProcessTrackerSender,
-    try_send_async, try_send_sync,
+    send_or_log_async, send_or_log_sync,
     utils::PerfMsgCheck,
 };
 use log::{debug, info, warn};
@@ -138,7 +138,7 @@ async fn handle_get_my_ip(
 ) {
     let (reply_tx, mut reply_rx) = channel(1);
     use TopologyServerMessage::*;
-    try_send_async!(
+    send_or_log_async!(
         topology_client,
         "handle_get_my_ip",
         GetMyIpAndUserAgent { reply_tx }
@@ -224,7 +224,7 @@ async fn handle_gui_dump_dns_flows(
     // get the cache of current dns and process tracking
     let (reply_tx, mut reply_rx) = channel(128);
     use ConnectionTrackerMsg::*;
-    try_send_sync!(
+    send_or_log_sync!(
         connection_tracker,
         "connection_tracker",
         GetDnsTrafficCounters { tx: reply_tx }
