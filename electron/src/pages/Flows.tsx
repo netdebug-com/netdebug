@@ -1,11 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState } from "react";
 import { ConnectionMeasurements } from "../netdebug_types";
-import useWebSocket from "react-use-websocket";
-import { WS_URL } from "../App";
 import {
   headerStyle,
   headerStyleWithWidth,
-  periodic_with_sla,
   prettyPrintSiUnits,
 } from "../utils";
 import TableContainer from "@mui/material/TableContainer";
@@ -15,6 +12,7 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import TableCell from "@mui/material/TableCell";
 import { SwitchHelper } from "../SwitchHelper";
+import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 
 // build a unique connection key, using the same fields the
 // rust logic uses.
@@ -48,68 +46,18 @@ const Flows: React.FC = () => {
   const [flowEntries, setFlowEntries] = useState(
     new Array<ConnectionMeasurements>(),
   );
-  const [autoRefresh, setAutoRefresh] = React.useState(true);
-  const [showUdp, setShowUdp] = React.useState(true);
-  const [showTcp, setShowTcp] = React.useState(true);
-  const min_time_between_requests_ms = 1000;
-  const max_time_between_requests_ms = 2000;
-  const timeout_id = useRef(null);
-  const last_send = useRef(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [showUdp, setShowUdp] = useState(true);
+  const [showTcp, setShowTcp] = useState(true);
 
-  const sendRequest = () => {
-    console.debug("Sending DumpFlows request");
-    sendMessage(
-      JSON.stringify({
-        DumpFlows: [],
-      }),
-    );
-    last_send.current = window.performance.now();
-  };
-  const { sendMessage } = useWebSocket(WS_URL, {
-    onOpen: () => {
-      console.debug("WebSocket connection established.");
-    },
-
-    onMessage: (msg) => {
-      const data = JSON.parse(msg.data);
-      console.debug("Got message from websocket: ", typeof data);
-      if ("DumpFlowsReply" in data) {
-        if (autoRefresh) {
-          setFlowEntries(data.DumpFlowsReply);
-          periodic_with_sla(
-            "DumpFlowsReply",
-            timeout_id,
-            last_send,
-            min_time_between_requests_ms,
-            max_time_between_requests_ms,
-            sendRequest,
-          );
-        }
-      }
-    },
-
-    onError: () => {
-      // If this happens, something is seriously wrong since the desktop
-      // process must not be running
-      alert("Error connecting to websocket");
-    },
-
-    onClose: () => {
-      console.debug("Closing websocket");
-    },
+  useWebSocketGuiToServer({
+    autoRefresh: autoRefresh,
+    reqMsgType: { DumpFlows: [] },
+    respMsgType: "DumpFlowsReply",
+    min_time_between_requests_ms: 1000,
+    max_time_between_requests_ms: 2000,
+    responseCb: setFlowEntries,
   });
-
-  // send a DumFlows message one time on first load
-  // or if autoRefresh changes to "on"
-  useEffect(() => {
-    if (autoRefresh) {
-      sendRequest();
-    }
-    return () => {
-      // on unmount, clear the timeout, if it's set
-      timeout_id && clearTimeout(timeout_id.current);
-    };
-  }, [autoRefresh]);
 
   return (
     <>

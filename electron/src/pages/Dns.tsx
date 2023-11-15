@@ -1,7 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
-import useWebSocket from "react-use-websocket";
+import React, { useRef, useState } from "react";
 import { DnsTrackerEntry } from "../netdebug_types";
-import { WS_URL } from "../App";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
@@ -9,8 +7,8 @@ import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Paper from "@mui/material/Paper";
-
-import { headerStyle, headerStyleWithWidth, periodic_with_sla } from "../utils";
+import { headerStyle, headerStyleWithWidth } from "../utils";
+import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 
 function format_ips(ips: string[]) {
   if (ips.length <= 1) {
@@ -48,45 +46,20 @@ const Dns: React.FC = () => {
   const [dnsEntries, setDnsEntries] = useState(
     new Map<string, DnsTrackerEntry>(),
   );
-  const min_time_between_requests_ms = 500;
-  const max_time_between_requests_ms = 1000;
-  const timeout_id = useRef(null);
-  const last_send = useRef(null);
   const yellow_threshold = useRef(null);
   const red_threshold = useRef(null);
 
-  const { sendMessage } = useWebSocket(WS_URL, {
-    onOpen: () => {
-      console.debug("WebSocket connection established.");
-    },
+  const setDnsEntriesWrapper = (entries: object) => {
+    setDnsEntries(new Map<string, DnsTrackerEntry>(Object.entries(entries)));
+  };
 
-    onMessage: (msg) => {
-      const data = JSON.parse(msg.data);
-      console.debug("Got message from websocket: ", typeof data, data);
-      if ("DumpDnsCache" in data) {
-        const cache = new Map<string, DnsTrackerEntry>(
-          Object.entries(data.DumpDnsCache),
-        );
-        console.debug("Got a DumpDnsCache message!", typeof cache);
-        setDnsEntries(cache);
-        periodic_with_sla(
-          "DumpDnsCache",
-          timeout_id,
-          last_send,
-          min_time_between_requests_ms,
-          max_time_between_requests_ms,
-          sendRequest,
-        );
-      }
-    },
-
-    onError: () => {
-      alert("Error connecting to websocket");
-    },
-
-    onClose: () => {
-      console.debug("Closing websocket");
-    },
+  useWebSocketGuiToServer({
+    autoRefresh: true,
+    reqMsgType: { DumpDnsCache: [] },
+    respMsgType: "DumpDnsCache",
+    min_time_between_requests_ms: 500,
+    max_time_between_requests_ms: 1000,
+    responseCb: setDnsEntriesWrapper,
   });
 
   /**
@@ -111,26 +84,6 @@ const Dns: React.FC = () => {
       calcThresholdStats(new_map);
     return new_map;
   }
-
-  // send a DnsDump message one time on first load
-  // TODO: why does it send @)(*%@)(% twice!? ANSWER: only in debug mode!
-  useEffect(() => {
-    sendRequest();
-    return () => {
-      // on unmount, clear the timeout, if it's set
-      timeout_id && clearTimeout(timeout_id.current);
-    };
-  }, []);
-
-  const sendRequest = () => {
-    console.debug("Sending DNS request");
-    sendMessage(
-      JSON.stringify({
-        DumpDnsCache: [],
-      }),
-    );
-    last_send.current = window.performance.now();
-  };
 
   // which rtts do we color yellow and red?
   // calc avg ; yellow is avg *2 , red is avg * 4

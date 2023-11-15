@@ -1,6 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
-import useWebSocket from "react-use-websocket";
-import { WS_URL } from "../App";
+import React, { useState } from "react";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
@@ -12,75 +10,27 @@ import {
   formatValue,
   headerStyle,
   headerStyleWithWidth,
-  periodic_with_sla,
   reshapeCounter,
 } from "../utils";
 import { SwitchHelper } from "../SwitchHelper";
+import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 
 const Counters: React.FC = () => {
   const [counters, setCounters] = useState(new Map<string, number>());
   const [thousandsSep, setThousandsSep] = useState(true);
-  const min_time_between_requests_ms = 500;
-  const max_time_between_requests_ms = 1000;
-  const timeout_id = useRef(null);
-  const last_send = useRef(null);
 
-  const { sendMessage } = useWebSocket(WS_URL, {
-    onOpen: () => {
-      console.debug("WebSocket connection established.");
-    },
-
-    onMessage: (msg) => {
-      const data = JSON.parse(msg.data);
-      console.debug("Got message from websocket: ", typeof data, data);
-      if ("DumpStatCountersReply" in data) {
-        const counter_map = new Map<string, number>(
-          Object.entries(data.DumpStatCountersReply),
-        );
-        console.debug(
-          "Got a DumpStatCountersReply message!",
-          typeof counter_map,
-        );
-        setCounters(counter_map);
-        periodic_with_sla(
-          "",
-          timeout_id,
-          last_send,
-          min_time_between_requests_ms,
-          max_time_between_requests_ms,
-          sendRequest,
-        );
-      }
-    },
-
-    onError: () => {
-      alert("Error connecting to websocket");
-    },
-
-    onClose: () => {
-      console.debug("Closing websocket");
-    },
-  });
-
-  // send a DumpStatCounters message one time on first load
-  // TODO: why does it send @)(*%@)(% twice!? ANSWER: only in debug mode!
-  useEffect(() => {
-    sendRequest();
-    return () => {
-      // on unmount, clear the timeout, if it's set
-      timeout_id && clearTimeout(timeout_id.current);
-    };
-  }, []);
-
-  const sendRequest = () => {
-    console.debug("Sending DumpStatCounters request");
-    sendMessage(
-      JSON.stringify({
-        DumpStatCounters: [],
-      }),
-    );
-    last_send.current = window.performance.now();
+  const setCountersWrapper = (counters: object) => {
+    setCounters(new Map(Object.entries(counters)));
   };
+
+  useWebSocketGuiToServer({
+    autoRefresh: true,
+    reqMsgType: { DumpStatCounters: [] },
+    respMsgType: "DumpStatCountersReply",
+    min_time_between_requests_ms: 1000,
+    max_time_between_requests_ms: 2000,
+    responseCb: setCountersWrapper,
+  });
 
   return (
     <>
