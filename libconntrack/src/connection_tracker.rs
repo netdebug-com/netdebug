@@ -19,7 +19,6 @@ use libconntrack_wasm::{
 #[cfg(not(test))]
 use log::{debug, warn};
 
-use pb_conntrack_types::ConnectionStorageEntry;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
 
@@ -34,6 +33,8 @@ use crate::{
     owned_packet::{ConnectionKeyError, OwnedParsedPacket},
     prober_helper::ProberHelper,
     process_tracker::{ProcessTrackerEntry, ProcessTrackerMessage, ProcessTrackerSender},
+    send_or_log_sync,
+    topology_client::{TopologyServerMessage, TopologyServerSender},
     utils::{self, packet_is_tcp_rst, PerfMsgCheck},
 };
 
@@ -100,21 +101,32 @@ pub enum ConnectionTrackerMsg {
     },
 }
 
-fn send_connection_storage_msg(
-    storage_service_msg_tx: &Option<mpsc::Sender<ConnectionStorageEntry>>,
-    mut c: Connection,
-) {
-    if c.probe_report_summary.raw_reports.is_empty() && !c.in_active_probe_session() {
-        // This connection has not probes. Don't bother exporting it
-        return;
-    }
-    if let Some(tx) = storage_service_msg_tx.as_ref() {
-        if let Err(e) = tx.try_send(c.to_connection_storage_entry()) {
-            // TODO: Should probably rate-limit the potential log message at some
-            // point, but I think it's fine for now.
-            warn!(
-                "Could not send connection entry to storage handler: {:?}",
-                e
+/**
+ * Send a copy of the ConnectionMeasurements() struct associated with this connection
+ * to the remote topology server for storage.
+ */
+
+fn send_connection_storage_msg(topology_client: &Option<TopologyServerSender>, c: &mut Connection) {
+    if let Some(tx) = topology_client.as_ref() {
+        let measurement = c.to_connection_measurements(None);
+        if measurement.probe_report_summary.raw_reports.len() > 0 {
+            // only send the connection info if we have at least one successful probe round
+            debug!(
+                "Sending connection measurements to topology server for {}",
+                c.connection_key
+            );
+            send_or_log_sync!(
+                tx,
+                "send_connection_storage_msg()",
+                TopologyServerMessage::StoreConnectionMeasurements {
+                    connection_measurements: measurement
+                }
+            );
+        } else {
+            debug!(
+                "Not sending connection measurement to storage server: {} measurements {}",
+                measurement.probe_report_summary.raw_reports.len(),
+                c.connection_key
             );
         }
     }
@@ -132,7 +144,7 @@ pub struct ConnectionTracker<'a> {
     connections: EvictingHashMap<'a, ConnectionKey, Connection>,
     local_addrs: HashSet<IpAddr>,
     prober_helper: ProberHelper,
-    storage_service_msg_tx: Option<mpsc::Sender<ConnectionStorageEntry>>,
+    topology_client: Option<TopologyServerSender>,
     dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
     process_tx: Option<ProcessTrackerSender>,
     tx: ConnectionTrackerSender, // so we can tell others how to send msgs to us
@@ -160,7 +172,7 @@ pub struct ConnectionTracker<'a> {
 }
 impl<'a> ConnectionTracker<'a> {
     pub fn new(
-        storage_service_msg_tx: Option<mpsc::Sender<ConnectionStorageEntry>>,
+        topology_client: Option<TopologyServerSender>,
         max_connections_per_tracker: usize,
         local_addrs: HashSet<IpAddr>,
         prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
@@ -168,7 +180,7 @@ impl<'a> ConnectionTracker<'a> {
         mut stats: ExportedStatRegistry,
     ) -> ConnectionTracker<'a> {
         let (tx, rx) = tokio::sync::mpsc::channel(max_queue_size);
-        let storage_service_msg_tx_clone = storage_service_msg_tx.clone();
+        let storage_service_msg_tx_clone = topology_client.clone();
         // for now, track these big counters by minute and second
         let mut dequeue_delay_stats_us =
             AggregateCounter::new(AggregateCounterKind::ConnectionTracker);
@@ -180,14 +192,14 @@ impl<'a> ConnectionTracker<'a> {
         ConnectionTracker {
             connections: EvictingHashMap::new(
                 max_connections_per_tracker,
-                move |_k, v: Connection| {
+                move |_k, mut v: Connection| {
                     debug!("Evicting connection");
-                    send_connection_storage_msg(&storage_service_msg_tx_clone, v);
+                    send_connection_storage_msg(&storage_service_msg_tx_clone, &mut v);
                 },
             ),
             local_addrs,
             prober_helper: ProberHelper::new(prober_tx),
-            storage_service_msg_tx,
+            topology_client,
             dns_tx: None,
             process_tx: None,
             tx,
@@ -374,8 +386,9 @@ impl<'a> ConnectionTracker<'a> {
         while let Some((_key, conn)) = self.connections.front() {
             let elapsed_ms = conn.last_packet_instant.elapsed().as_millis();
             if eviction_cnt < MAX_ENTRIES_TO_EVICT && elapsed_ms > TIME_WAIT_MS as u128 {
-                let (_key, conn) = self.connections.pop_front().unwrap();
-                send_connection_storage_msg(&self.storage_service_msg_tx, conn);
+                let (key, mut conn) = self.connections.pop_front().unwrap();
+                debug!("Evicting connection {} from connection_tracker", key);
+                send_connection_storage_msg(&self.topology_client, &mut conn);
                 eviction_cnt += 1;
             } else {
                 break;
@@ -1172,7 +1185,7 @@ pub mod test {
     #[tokio::test]
     async fn test_time_wait_eviction() {
         let max_connections_per_tracker = 32;
-        let mock_prober = MockRawSocketProber::new();
+        let mut mock_prober = MockRawSocketProber::new();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
         let (evict_tx, mut evict_rx) = mpsc::channel(10);
         let mut connection_tracker = ConnectionTracker::new(
@@ -1206,11 +1219,15 @@ pub mod test {
         }
         assert_eq!(connection_tracker.connections.len(), 1);
 
+        // feed the mock'd probes into the connection tracker so it thinks
+        // it has a valid ProbeReport
+        mock_prober.redirect_into_connection_tracker(&mut connection_tracker);
+
         // pause() halt updating of the tokio Instant timer.
         tokio::time::pause();
         // But if there's no more work todo, the tokio runtime will
         // auto-advance any pending sleeps / timers, etc. So this sleep
-        // call will not take any real wall-time
+        // call will not take any real wall-time - important b/c this is 60s!!
         tokio::time::sleep(tokio::time::Duration::from_millis(TIME_WAIT_MS + 10)).await;
 
         // Create a packet from a different connection.
@@ -1218,10 +1235,10 @@ pub mod test {
         etherparse::PacketBuilder::ethernet2(
             [1, 2, 3, 4, 5, 6], //source mac
             [7, 8, 9, 10, 11, 12],
-        ) //destionation mac
+        ) //destination mac
         .ipv4(
             [192, 168, 1, 238], //source ip
-            [192, 168, 1, 2],   //desitionation ip
+            [192, 168, 1, 2],   //destination ip
             20,
         )
         .tcp(12345, 80, 42, 1024)
@@ -1239,10 +1256,18 @@ pub mod test {
         // be evicted
         connection_tracker.add(pkt_unrelated_conn);
         assert_eq!(connection_tracker.connections.len(), 1);
-        let evicted = evict_rx.try_recv().unwrap();
-        assert_eq!(evicted.local_ip, "192.168.1.238");
-        assert_eq!(evicted.remote_ip, "34.121.150.27");
-        assert_eq!(evicted.remote_port, 443);
+        let evicted = evict_rx.try_recv().unwrap().skip_perf_check();
+        use TopologyServerMessage::*;
+        match evicted {
+            StoreConnectionMeasurements {
+                connection_measurements: m,
+            } => {
+                assert_eq!(m.local_ip, IpAddr::from_str("192.168.1.238").unwrap());
+                assert_eq!(m.remote_ip, IpAddr::from_str("34.121.150.27").unwrap());
+                assert_eq!(m.remote_l4_port, 443);
+            }
+            _wut => panic!("Expected StoreConnectionMeasurements, got {:?}", _wut),
+        }
 
         // make sure we have the "unrelated" connection in the tracker
         assert!(connection_tracker

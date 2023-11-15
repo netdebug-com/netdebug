@@ -18,8 +18,7 @@ use libconntrack_wasm::{
 #[cfg(not(test))]
 use log::{debug, warn};
 use netstat2::ProtocolSocketInfo;
-use pb_conntrack_types::ConnectionStorageEntry;
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, time::Instant};
 
 #[cfg(test)]
 use std::{println as debug, println as warn}; // Workaround to use prinltn! for logs.
@@ -169,7 +168,10 @@ impl ProbeRound {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub connection_key: ConnectionKey,
+    /// System clock
     pub start_tracking_time: DateTime<Utc>,
+    /// monotonic clock, also respects tokio::sleep::pause() for testing
+    pub start_tracking_time_instant: Instant,
     // Human readable time of the last packet for logging
     pub last_packet_time: DateTime<Utc>,
     // The time of the last packet used for evictions and statekeeping
@@ -218,6 +220,7 @@ impl Connection {
             user_agent: None,
             associated_apps: None,
             start_tracking_time: ts,
+            start_tracking_time_instant: tokio::time::Instant::now(),
             last_packet_time: ts,
             last_packet_instant: tokio::time::Instant::now(),
             remote_hostname: None,
@@ -914,42 +917,6 @@ impl Connection {
         }
     }
 
-    pub(crate) fn in_active_probe_session(&self) -> bool {
-        self.probe_round.is_some()
-    }
-
-    pub(crate) fn to_connection_storage_entry(&mut self) -> ConnectionStorageEntry {
-        use pb_conntrack_types::MeasurementType;
-        if self.in_active_probe_session() {
-            let probe_round = self.probe_report_summary.raw_reports.len() as u32;
-            self.generate_probe_report(probe_round, None, true);
-        }
-        ConnectionStorageEntry {
-            measurement_type: MeasurementType::UnspecifiedMeasurementType as i32,
-            local_hostname: None, // TODO
-            local_ip: self.connection_key.local_ip.to_string(),
-            local_port: self.connection_key.local_l4_port as u32,
-            remote_hostname: self.remote_hostname.clone(),
-            remote_ip: self.connection_key.remote_ip.to_string(),
-            remote_port: self.connection_key.remote_l4_port as u32,
-            ip_proto: self.connection_key.ip_proto as u32,
-            probe_rounds: self
-                .probe_report_summary
-                .raw_reports
-                .iter()
-                .map(|report| report.to_protobuf())
-                .collect(),
-            user_annotation: self.user_annotation.clone(),
-            user_agent: self.user_agent.clone(),
-            // TODO: populate associated_apps. This is not a straight-forward as it might
-            // appear. Connection::associated_apps is never populated. And in order to
-            // retrieve it from the ProcessTracker, we need to send it a message and wait
-            // for the response. Also the associated apps are not criticial at this stage since
-            // we mostly need router IPs for now.
-            associated_apps: Vec::new(),
-        }
-    }
-
     fn update_udp(
         &self,
         key: &ConnectionKey,
@@ -992,11 +959,14 @@ impl Connection {
         // if there's an active probe round going, finish it/generate the report if it's been longer
         // then probe_timeout
         if let Some(probe_round) = self.probe_round.as_ref() {
-            let now = Utc::now();
-            let delta = now - self.start_tracking_time;
+            let now = tokio::time::Instant::now();
+            // Use the monotonic clock not the system clock as it respects
+            // tokio::time::pause() which is required for some tests, e.g.,
+            // connection_tracker::test::test_time_wait_eviction()
+            let delta = now - self.start_tracking_time_instant;
             let timeout = match probe_timeout {
-                Some(timeout) => timeout,
-                None => Duration::milliseconds(500),
+                Some(timeout) => timeout.to_std().unwrap(),
+                None => Duration::milliseconds(500).to_std().unwrap(),
             };
             if delta > timeout {
                 self.generate_probe_report(probe_round.round_number as u32, None, false);

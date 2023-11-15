@@ -8,4 +8,5 @@ pub mod owned_packet;
 pub mod pcap;
 pub mod prober_helper;
 pub mod process_tracker;
+pub mod topology_client;
 pub mod utils;

@@ -1,4 +1,3 @@
-mod topology_client;
 mod websocket;
 
 use chrono::Duration;
@@ -6,8 +5,8 @@ use clap::Parser;
 use common_wasm::timeseries_stats::{
     CounterProvider, CounterProviderWithTimeUpdate, ExportedStatRegistry, SuperRegistry,
 };
+use libconntrack::topology_client::{self, TopologyServerSender};
 use libconntrack::{
-    connection_storage_handler::ConnectionStorageHandler,
     connection_tracker::{ConnectionTracker, ConnectionTrackerMsg, ConnectionTrackerSender},
     dns_tracker::{DnsTracker, DnsTrackerMessage},
     in_band_probe::spawn_raw_prober,
@@ -17,11 +16,10 @@ use libconntrack::{
 use log::info;
 use std::{collections::HashSet, error::Error, net::IpAddr, sync::Arc};
 use tokio::sync::mpsc::UnboundedSender;
-use topology_client::TopologyServerSender;
 use warp::Filter;
 use websocket::websocket_handler;
 
-use crate::topology_client::TopologyServerConnection;
+use libconntrack::topology_client::TopologyServerConnection;
 
 type SharedExportedStatRegistries = Arc<Vec<ExportedStatRegistry>>;
 
@@ -125,23 +123,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let connection_manager_tx = tx.clone();
 
     let conn_track_counters = counter_registries.new_registry("conn_tracker");
+    let topology_client_clone = topology_client.clone();
     let _connection_tracker_task = tokio::spawn(async move {
         let raw_sock =
             libconntrack::pcap::bind_writable_pcap_by_name(devices[0].name.clone()).unwrap();
         let prober_tx = spawn_raw_prober(raw_sock, MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE).await;
         let args = args_clone;
         // Spawn a ConnectionTracker task
-        let storage_service_msg_tx = if let Some(url) = args.storage_server_url {
-            Some(
-                ConnectionStorageHandler::spawn_from_url(url, 1000)
-                    .await
-                    .unwrap(),
-            )
-        } else {
-            None
-        };
         let mut connection_tracker = ConnectionTracker::new(
-            storage_service_msg_tx,
+            Some(topology_client_clone),
             args.max_connections_per_tracker,
             local_addrs,
             prober_tx,

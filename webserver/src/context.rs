@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use libconntrack::{
-    connection_storage_handler::ConnectionStorageHandler,
     connection_tracker::{ConnectionTracker, ConnectionTrackerSender},
     in_band_probe::spawn_raw_prober,
     pcap::{bind_writable_pcap, lookup_pcap_device_by_name},
@@ -85,22 +84,15 @@ impl WebServerContext {
 
         // TODO Spawn lots for multi-processing
         if !args.web_server_only {
-            let (storage_server_url, max_connections_per_tracker, device) = (
-                args.storage_server_url.clone(),
+            let (max_connections_per_tracker, device) = (
                 context.max_connections_per_tracker,
                 context.pcap_device.clone(),
             );
             // Spawn a ConnectionTracker task
             tokio::spawn(async move {
                 info!("Launching the connection tracker (single instance for now)");
-                let storage_service_msg_tx = if let Some(url) = storage_server_url {
-                    match ConnectionStorageHandler::spawn_from_url(url, 1000).await {
-                        Ok(server) => Some(server),
-                        Err(e) => panic!("Problem connecting to the storage server: {}", e),
-                    }
-                } else {
-                    None
-                };
+                // TODO: Make the webserver start a local instance of the topology service
+                let storage_service_msg_tx = None;
                 let prober_tx = spawn_raw_prober(
                     bind_writable_pcap(device).unwrap(),
                     MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
