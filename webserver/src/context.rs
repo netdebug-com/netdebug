@@ -94,7 +94,7 @@ impl WebServerContext {
             // Spawn a ConnectionTracker task
             let db_path = args.topology_server_db_path.clone();
             tokio::spawn(async move {
-                info!("Launching the connection tracker (single instance for now)");
+                info!("Launching the topology server now with db_path={}", db_path);
                 let topology_server_tx = topology_server::TopologyServer::spawn_local(
                     &db_path,
                     MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE,
@@ -106,6 +106,7 @@ impl WebServerContext {
                     MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
                 )
                 .await;
+                info!("Launching the connection tracker (single instance for now)");
                 let mut connection_tracker = ConnectionTracker::new(
                     Some(topology_server_tx),
                     max_connections_per_tracker,
