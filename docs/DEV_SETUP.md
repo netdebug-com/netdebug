@@ -14,7 +14,28 @@
    cargo install cargo-llvm-cov # for code coverage (nice utilities that hide low-level commands)
    ```
 1. Install Graphite for code review (git/gh frontend)  https://graphite.dev 
+   TODO: more details
 1. Install graphviz 
+
+## Git setup tips:
+
+* Set up name and email
+  ```
+  $ git config --global user.name "John Doe"
+  $ git config --global user.email john.doe@netdebug.com
+  ```
+  **NOTE** if you have multiple git hub users on your machine, you can also set
+  name and email per clone. Simply use `--local` instead of `--global`. You need
+  to repeat this every time you re-clone.
+
+* Set up hooks and commit template: it's already mentioned above but simply run `./setup-git-clone.sh`
+
+* **Merge conflict markers** We recommend, you use `diff3` style merge conflict markers. In addition to the two revisions a normal conflict marker shows, this one will also show the
+base revision, which is incredibly helpful in properly resolving the conflict:
+  ```
+  git config --global merge.conflictstyle diff3
+  ```
+
 
 ## Setting up windows & Bash:
 TODO
