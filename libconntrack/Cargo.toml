@@ -22,7 +22,6 @@ libc = "0.2.146"
 libconntrack-wasm = { path = "../libconntrack-wasm" }
 log = "0.4.19"
 netstat2 = "0.9.1"
-pretty_env_logger = "0.5.0"
 # PublicSufficeList - but statically includes official list from https://publicsuffix.org/
 psl = "2.1.4"
 rand = "0.8.5"
@@ -31,8 +30,6 @@ serde_with = { version = "3.3.0", features = ["chrono_0_4"] }
 serde_json = "1.0.104"
 tokio = { version = "1.29.1", features = ["full"] }
 tokio-tungstenite = { version = "0.20.1", features = ["connect"] }
-tonic = "0.10"
-tower = "0.4"
 url = "2.4.1"
 
 [dev-dependencies]
