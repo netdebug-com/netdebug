@@ -592,5 +592,4 @@ impl Display for ProbeReportSummary {
 pub mod analysis_messages;
 pub mod evicting_hash_map;
 pub mod timeseries_stats;
-pub mod topology_server_messages;
 pub mod wasm_perf_check;

@@ -1,7 +1,14 @@
 use std::net::SocketAddr;
 
-use common_wasm::topology_server_messages::{DesktopToTopologyServer, TopologyServerToDesktop};
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
+use libconntrack::{
+    send_or_log_async,
+    topology_client::{TopologyServerMessage, TopologyServerSender},
+    utils::PerfMsgCheck,
+};
+use libconntrack_wasm::topology_server_messages::{
+    DesktopToTopologyServer, TopologyServerToDesktop,
+};
 use log::{info, warn};
 use tokio::sync::mpsc::{channel, Sender};
 use warp::filters::ws::{self, Message, WebSocket};
@@ -19,6 +26,7 @@ pub async fn handle_desktop_websocket(
     info!("DesktopWebsocket connection from {}", addr);
     let (ws_tx, mut ws_rx) = websocket.split();
     let ws_tx = spawn_websocket_writer(ws_tx, DEFAULT_CHANNEL_BUFFER_SIZE, addr.to_string()).await;
+    let topology_server = context.read().await.topology_server.clone();
     /*
      * Unwrap the layering here:
      * 1. WebSockets has it's own Message Type
@@ -37,7 +45,8 @@ pub async fn handle_desktop_websocket(
                 };
                 match serde_json::from_str(json_msg) {
                     Ok(msg) => {
-                        handle_desktop_message(&context, msg, &ws_tx, &user_agent, &addr).await;
+                        handle_desktop_message(&topology_server, msg, &ws_tx, &user_agent, &addr)
+                            .await;
                     }
                     Err(e) => {
                         warn!("Failed to parse json message {}", e);
@@ -51,7 +60,7 @@ pub async fn handle_desktop_websocket(
 }
 
 async fn handle_desktop_message(
-    _context: &Context,
+    topology_server: &TopologyServerSender,
     msg: DesktopToTopologyServer,
     ws_tx: &Sender<TopologyServerToDesktop>,
     user_agent: &str,
@@ -60,7 +69,27 @@ async fn handle_desktop_message(
     use DesktopToTopologyServer::*;
     match msg {
         Hello => handle_hello(ws_tx, user_agent, addr).await,
+        StoreConnectionMeasurement {
+            connection_measurements: connection_measurement,
+        } => handle_store(connection_measurement, topology_server).await,
     }
+}
+
+/**
+ * Just forward on to the TopologyServer for storage
+ */
+async fn handle_store(
+    connection_measurements: libconntrack_wasm::ConnectionMeasurements,
+    topology_server: &TopologyServerSender,
+) {
+    send_or_log_async!(
+        topology_server,
+        "handle_store",
+        TopologyServerMessage::StoreConnectionMeasurements {
+            connection_measurements
+        }
+    )
+    .await
 }
 
 async fn handle_hello(
@@ -90,9 +119,9 @@ pub async fn spawn_websocket_writer(
     channel_buffer_size: usize,
     addr_str: String,
 ) -> Sender<TopologyServerToDesktop> {
-    let (tx, mut rx) = channel::<common_wasm::topology_server_messages::TopologyServerToDesktop>(
-        channel_buffer_size,
-    );
+    let (tx, mut rx) = channel::<
+        libconntrack_wasm::topology_server_messages::TopologyServerToDesktop,
+    >(channel_buffer_size);
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let Err(e) = ws_tx

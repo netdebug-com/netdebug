@@ -52,10 +52,6 @@ pub struct Args {
     #[arg(long, default_value_t = 4096)]
     pub max_connections_per_tracker: usize,
 
-    /// The URL of the GRPC storage server. E.g., http://localhost:50051
-    #[arg(long, default_value=None)]
-    pub storage_server_url: Option<String>,
-
     /// The URL of the Topology Server. E.g., ws://localhost:3030
     #[arg(long, default_value = "ws://localhost:3030/desktop")]
     pub topology_server_url: String,

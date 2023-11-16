@@ -4,10 +4,12 @@ use std::time::Duration;
 use crate::send_or_log_async;
 use crate::utils::PerfMsgCheck;
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units};
-use common_wasm::topology_server_messages::{DesktopToTopologyServer, TopologyServerToDesktop};
 use futures::sink::SinkExt;
 use futures_util::stream::SplitSink;
 use futures_util::StreamExt;
+use libconntrack_wasm::topology_server_messages::{
+    DesktopToTopologyServer, TopologyServerToDesktop,
+};
 use libconntrack_wasm::ConnectionMeasurements;
 use log::{info, warn};
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -52,6 +54,7 @@ pub struct TopologyServerConnection {
     waiting_for_hello: Vec<Sender<PerfMsgCheck<(IpAddr, String)>>>,
     retry_stat: StatHandle,
     desktop2server_msgs_stat: StatHandle,
+    desktop2server_store_msgs_stat: StatHandle,
     server2desktop_msgs_stat: StatHandle,
 }
 
@@ -87,6 +90,11 @@ impl TopologyServerConnection {
                 "desktop2server_msgs",
                 Units::None,
                 vec![StatType::SUM, StatType::RATE],
+            ),
+            desktop2server_store_msgs_stat: stats_registry.add_stat(
+                "desktop2server_store_msgs",
+                Units::None,
+                vec![StatType::SUM, StatType::COUNT, StatType::RATE],
             ),
         }
     }
@@ -157,7 +165,10 @@ impl TopologyServerConnection {
             };
             let ws_tx = self.spawn_ws_writer(ws_write).await;
             // send an initial hello to start the connection
-            if let Err(e) = ws_tx.send(DesktopToTopologyServer::Hello).await {
+            if let Err(e) = ws_tx
+                .send(PerfMsgCheck::new(DesktopToTopologyServer::Hello))
+                .await
+            {
                 warn!("Failed to send hello to TopologyServer: {}", e);
                 continue;
             }
@@ -178,7 +189,7 @@ impl TopologyServerConnection {
                         }
                     }
                     desktop_msg = self.rx.recv() => match desktop_msg {
-                        Some(desktop_msg) => self.handle_desktop_msg(desktop_msg).await,
+                        Some(desktop_msg) => self.handle_desktop_msg(desktop_msg, &ws_tx).await,
                         None => warn!("Got None back from TopologyServerConnection rx!?"),
                     }
                 }
@@ -221,7 +232,11 @@ impl TopologyServerConnection {
         self.tx.clone()
     }
 
-    pub async fn handle_desktop_msg(&mut self, desktop_msg: PerfMsgCheck<TopologyServerMessage>) {
+    pub async fn handle_desktop_msg(
+        &mut self,
+        desktop_msg: PerfMsgCheck<TopologyServerMessage>,
+        ws_tx: &Sender<PerfMsgCheck<DesktopToTopologyServer>>,
+    ) {
         self.desktop2server_msgs_stat.bump();
         use TopologyServerMessage::*;
         match desktop_msg.perf_check_get("TopologyServerConnection:: handle_desktop_msg()") {
@@ -235,8 +250,18 @@ impl TopologyServerConnection {
                 }
             }
             StoreConnectionMeasurements {
-                connection_measurements: _,
-            } => todo!(),
+                connection_measurements,
+            } => {
+                send_or_log_async!(
+                    ws_tx,
+                    "handle_desktop_msg::StoreConnectionMeasurement",
+                    DesktopToTopologyServer::StoreConnectionMeasurement {
+                        connection_measurements
+                    },
+                    self.desktop2server_store_msgs_stat
+                )
+                .await
+            }
         }
     }
 
@@ -249,11 +274,12 @@ impl TopologyServerConnection {
     async fn spawn_ws_writer(
         &self,
         mut writer: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
-    ) -> Sender<DesktopToTopologyServer> {
-        let (tx, mut rx) = channel::<DesktopToTopologyServer>(self.buffer_size);
+    ) -> Sender<PerfMsgCheck<DesktopToTopologyServer>> {
+        let (tx, mut rx) = channel::<PerfMsgCheck<DesktopToTopologyServer>>(self.buffer_size);
         let url = self.url.clone();
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
+                let msg = msg.perf_check_get("TopologyServerClient::spawn_ws_writer");
                 if let Err(e) = writer
                     .send(Message::Text(serde_json::to_string(&msg).unwrap()))
                     .await
@@ -301,12 +327,14 @@ mod test {
             Duration::from_secs(10),
             ExportedStatRegistry::new("topo_server_conn", Instant::now()),
         );
+        let (ws_tx, _ws_rx) = channel(10);
         // request the IP before it's ready
         let (reply_tx, mut reply_rx) = channel(10);
         topology
-            .handle_desktop_msg(PerfMsgCheck::new(
-                TopologyServerMessage::GetMyIpAndUserAgent { reply_tx },
-            ))
+            .handle_desktop_msg(
+                PerfMsgCheck::new(TopologyServerMessage::GetMyIpAndUserAgent { reply_tx }),
+                &ws_tx,
+            )
             .await;
         assert!(reply_rx.try_recv().is_err()); // make sure we didn't get a reply
                                                // now send in the reply
@@ -329,9 +357,10 @@ mod test {
         // request the IP after it's cached
         let (reply_tx, mut reply_rx) = channel(10);
         topology
-            .handle_desktop_msg(PerfMsgCheck::new(
-                TopologyServerMessage::GetMyIpAndUserAgent { reply_tx },
-            ))
+            .handle_desktop_msg(
+                PerfMsgCheck::new(TopologyServerMessage::GetMyIpAndUserAgent { reply_tx }),
+                &ws_tx,
+            )
             .await;
         assert!(reply_rx.try_recv().is_ok()); // make sure we now DO get a reply right away
 

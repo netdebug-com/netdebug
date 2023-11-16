@@ -2,9 +2,14 @@ use std::net::IpAddr;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ConnectionMeasurements;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DesktopToTopologyServer {
     Hello,
+    StoreConnectionMeasurement {
+        connection_measurements: ConnectionMeasurements,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
