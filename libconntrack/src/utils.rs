@@ -72,8 +72,7 @@ pub fn ip_proto_to_string(ip_proto: u8) -> String {
 pub fn packet_is_tcp_rst(packet: &OwnedParsedPacket) -> bool {
     if let Some(rst) = &(packet.transport)
         .as_ref()
-        .map(|th| th.clone().tcp().map(|tcph| tcph.rst))
-        .flatten()
+        .and_then(|th| th.clone().tcp().map(|tcph| tcph.rst))
     {
         *rst
     } else {
@@ -110,22 +109,18 @@ pub fn packet_is_tcp_rst(packet: &OwnedParsedPacket) -> bool {
 #[macro_export]
 macro_rules! send_or_log_sync {
     // no stats or SLA
-    ($tx:expr, $msg:expr, $data:expr) => {
-        (|| {
-            if let Err(e) = $tx.try_send(PerfMsgCheck::new($data)) {
-                warn!("Failed to send data to {} :: err {}", $msg, e);
-            }
-        })()
-    };
+    ($tx:expr, $msg:expr, $data:expr) => {{
+        if let Err(e) = $tx.try_send(PerfMsgCheck::new($data)) {
+            warn!("Failed to send data to {} :: err {}", $msg, e);
+        }
+    }};
     // stats, no SLA
-    ($tx:expr, $msg:expr, $data:expr, $stats:expr) => {
-        (|| {
-            if let Err(e) = $tx.try_send(PerfMsgCheck::new($data)) {
-                warn!("Failed to send data to {} :: err {}", $msg, e);
-            }
-            $stats.add_value(1);
-        })()
-    };
+    ($tx:expr, $msg:expr, $data:expr, $stats:expr) => {{
+        if let Err(e) = $tx.try_send(PerfMsgCheck::new($data)) {
+            warn!("Failed to send data to {} :: err {}", $msg, e);
+        }
+        $stats.add_value(1);
+    }};
     // stats AND SLA
     ($tx:expr, $msg:expr, $data:expr, $stats:expr, $sla:expr) => {
         (|| {
@@ -221,65 +216,61 @@ macro_rules! send_or_log_async {
 
 #[macro_export]
 macro_rules! perf_check {
-    ($m:expr, $t:expr, $d:expr) => {
-        (|| -> (std::time::Instant, bool) {
-            let now = std::time::Instant::now();
-            let passed = if (now - $t) > $d {
-                log::warn!(
-                    "PERF_CHECK {}:{} failed: {} - {:?} > SLA of {:?}",
-                    file!(),
-                    line!(),
-                    $m,
-                    now - $t,
-                    $d
-                );
-                false
-            } else {
-                log::trace!(
-                    "PERF_CHECK {}:{} passed: {} - {:?} <= SLA of {:?}",
-                    file!(),
-                    line!(),
-                    $m,
-                    now - $t,
-                    $d
-                );
-                true
-            };
-            (now, passed)
-        })()
-    };
-    ($m:expr, $t:expr, $d:expr, $s:expr) => {
-        (|| -> (std::time::Instant, bool) {
-            let now = std::time::Instant::now();
-            let elapsed = (now - $t);
-            let passed = if elapsed > $d {
-                log::warn!(
-                    "PERF_CHECK {}:{} failed: {} - {:?} > SLA of {:?}",
-                    file!(),
-                    line!(),
-                    $m,
-                    now - $t,
-                    $d
-                );
-                false
-            } else {
-                log::trace!(
-                    "PERF_CHECK {}:{} passed: {} - {:?} <= SLA of {:?}",
-                    file!(),
-                    line!(),
-                    $m,
-                    now - $t,
-                    $d
-                );
-                true
-            };
-            $s.duration.add_duration_value(elapsed);
-            if !passed {
-                $s.violations.add_duration_value(elapsed);
-            }
-            (now, passed)
-        })()
-    };
+    ($m:expr, $t:expr, $d:expr) => {{
+        let now = std::time::Instant::now();
+        let passed = if (now - $t) > $d {
+            log::warn!(
+                "PERF_CHECK {}:{} failed: {} - {:?} > SLA of {:?}",
+                file!(),
+                line!(),
+                $m,
+                now - $t,
+                $d
+            );
+            false
+        } else {
+            log::trace!(
+                "PERF_CHECK {}:{} passed: {} - {:?} <= SLA of {:?}",
+                file!(),
+                line!(),
+                $m,
+                now - $t,
+                $d
+            );
+            true
+        };
+        (now, passed)
+    }};
+    ($m:expr, $t:expr, $d:expr, $s:expr) => {{
+        let now = std::time::Instant::now();
+        let elapsed = (now - $t);
+        let passed = if elapsed > $d {
+            log::warn!(
+                "PERF_CHECK {}:{} failed: {} - {:?} > SLA of {:?}",
+                file!(),
+                line!(),
+                $m,
+                now - $t,
+                $d
+            );
+            false
+        } else {
+            log::trace!(
+                "PERF_CHECK {}:{} passed: {} - {:?} <= SLA of {:?}",
+                file!(),
+                line!(),
+                $m,
+                now - $t,
+                $d
+            );
+            true
+        };
+        $s.duration.add_duration_value(elapsed);
+        if !passed {
+            $s.violations.add_duration_value(elapsed);
+        }
+        (now, passed)
+    }};
 }
 
 /// Wrapper around the two StatHandle we want to use for `perf_check!()`
@@ -371,7 +362,7 @@ impl<T> PerfMsgCheck<T> {
  * TODO: list of aliases should probably be more complete
  */
 
-pub fn dns_to_cannonical_domain(hostname: &String) -> Result<String, String> {
+pub fn dns_to_cannonical_domain(hostname: &str) -> Result<String, String> {
     let hostname = hostname.to_lowercase();
     // use the 'psl' crate that uses the https://publicsuffix.org/ list to parse the domain
     // this is non-trivial so I'm glad someone else solved this for us!

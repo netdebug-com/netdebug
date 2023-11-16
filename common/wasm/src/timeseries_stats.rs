@@ -27,7 +27,7 @@ impl TimeSource for Instant {
     }
 
     fn now() -> Instant {
-        return Instant::now();
+        Instant::now()
     }
 }
 
@@ -39,7 +39,7 @@ impl TimeSource for DateTime<Utc> {
     }
 
     fn now() -> DateTime<Utc> {
-        return Utc::now();
+        Utc::now()
     }
 }
 
@@ -338,7 +338,7 @@ where
             .map(|(bucket_index, b)| {
                 serde_json::json!({
                     "y": b.sum as f64 / y_scale,
-                    "x": bucket_index * x_scale as usize
+                    "x": bucket_index * x_scale
                 }
                 )
             })
@@ -642,7 +642,7 @@ impl ExportedStat {
             data: MultilevelTimeseries::new_with_create_time(
                 window_sizes_sec
                     .into_iter()
-                    .map(|ws| Duration::from_secs(ws))
+                    .map(Duration::from_secs)
                     .collect_vec(),
                 60, // num_buckets
                 now,

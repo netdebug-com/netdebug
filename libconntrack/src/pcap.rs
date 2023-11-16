@@ -156,8 +156,7 @@ pub fn blocking_pcap_loop(
                 let pkt_timestamp = pkt.header.ts; // save this for stats checking
                 let parsed = etherparse::PacketHeaders::from_ethernet_slice(pkt.data);
                 if let Ok(parsed_pkt) = parsed {
-                    let parsed_packet =
-                        Box::new(OwnedParsedPacket::new(parsed_pkt, pkt.header.clone()));
+                    let parsed_packet = Box::new(OwnedParsedPacket::new(parsed_pkt, *pkt.header));
                     let _hash = parsed_packet.sloppy_hash();
                     // TODO: use this hash to map to 256 parallel ConnectionTrackers for parallelism
                     if tx.capacity() < throttle_threshold {
@@ -248,10 +247,7 @@ fn check_pcap_stats(
             // failed to get new stats, can't really do anything
             // just log and return old_stats for next time in case the problem goes away!?
             warn!("Pcap:: Failed to collect stats : {}", e);
-            match last_stats {
-                Some(stats) => Some(stats),
-                None => None,
-            }
+            last_stats
         }
     }
 }
@@ -265,7 +261,7 @@ fn check_pcap_stats(
 pub fn lookup_egress_device() -> Result<pcap::Device, Box<dyn Error>> {
     let addr = crate::utils::remote_ip_to_local(IpAddr::from_str("8.8.8.8").unwrap())?;
     for d in &pcap::Device::list()? {
-        if d.addresses.iter().find(|&a| a.addr == addr).is_some() {
+        if d.addresses.iter().any(|a| a.addr == addr) {
             return Ok(d.clone());
         }
     }

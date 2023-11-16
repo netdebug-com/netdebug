@@ -118,7 +118,8 @@ impl TopologyServerConnection {
 
         loop {
             // Intentionally panic here if we got a bad URL
-            let url = url::Url::parse(&self.url).expect(format!("Bad url! {}", &self.url).as_str());
+            let url =
+                url::Url::parse(&self.url).unwrap_or_else(|_| panic!("Bad url! {}", &self.url));
             // need to generate a custom request because we need to set the User-Agent for our webserver
             let req = Request::builder()
                 .method("GET")
@@ -270,12 +271,7 @@ impl TopologyServerConnection {
             warn!("Got duplicate!? Hello message for TopologyServer!? Maybe reconnect");
         }
         for tx in &self.waiting_for_hello {
-            send_or_log_async!(
-                tx,
-                "handle_topology_hello",
-                (client_ip.clone(), user_agent.clone())
-            )
-            .await;
+            send_or_log_async!(tx, "handle_topology_hello", (client_ip, user_agent.clone())).await;
         }
         self.server_hello = Some((client_ip, user_agent));
         self.waiting_for_hello.clear();

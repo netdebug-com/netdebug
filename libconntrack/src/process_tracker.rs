@@ -163,19 +163,13 @@ impl ProcessTracker {
 
     fn lookup_from_cache(&self, key: &ConnectionKey) -> Option<ProcessTrackerEntry> {
         if key.ip_proto == etherparse::IpNumber::Tcp as u8 {
-            if let Some(entry) = self.tcp_cache.get(&key) {
-                Some(entry.clone())
-            } else {
-                None
-            }
+            self.tcp_cache.get(key).map(|entry| entry.clone())
         } else {
             // Udp is stored only by local IP + local Port - try looking that up
             // only a single process can bind a specific port, so try that
-            if let Some(entry) = self.udp_cache.get(&(key.local_ip, key.local_l4_port)) {
-                Some(entry.clone())
-            } else {
-                None
-            }
+            self.udp_cache
+                .get(&(key.local_ip, key.local_l4_port))
+                .cloned()
         }
     }
 
@@ -232,11 +226,7 @@ impl ProcessTracker {
         for si in sockets_info {
             let associated_apps = HashMap::from_iter(si.associated_pids.into_iter().map(|p| {
                 // clone the app name if it exists
-                let app = if let Some(app) = self.pid2app_name_cache.get(&p) {
-                    Some(app.clone())
-                } else {
-                    None
-                };
+                let app = self.pid2app_name_cache.get(&p).cloned();
                 (p, app)
             }));
             match &si.protocol_socket_info {
@@ -287,10 +277,7 @@ impl ProcessTracker {
             send_or_log_sync!(
                 tx,
                 "ConnectionTracker",
-                ConnectionTrackerMsg::SetConnectionApplication {
-                    key,
-                    application: application,
-                },
+                ConnectionTrackerMsg::SetConnectionApplication { key, application },
                 &mut self.msgs_tx_errors
             );
         }

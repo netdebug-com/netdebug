@@ -284,7 +284,7 @@ impl Connection {
             }
             Some(TransportHeader::Udp(udp)) => {
                 // logic is for both src_is_local and not, for now
-                self.update_udp(&key, &packet, udp, dns_tx, src_is_local);
+                self.update_udp(key, &packet, udp, dns_tx, src_is_local);
             }
             None => {
                 warn!(
@@ -470,7 +470,7 @@ impl Connection {
             if let Some(old_ack) = self.remote_ack {
                 // Is this ACK a duplicate ACK?
                 if old_ack == Wrapping(tcp.acknowledgment_number)
-                    && packet.payload.len() == 0
+                    && packet.payload.is_empty()
                     && !tcp.syn
                     && !tcp.fin
                 {
@@ -990,17 +990,17 @@ impl Connection {
                 tx: self.max_burst_rate.tx.get_packet_rate(),
             },
             local_hostname: Some("localhost".to_string()),
-            local_ip: self.connection_key.local_ip.clone(),
+            local_ip: self.connection_key.local_ip,
             local_l4_port: self.connection_key.local_l4_port,
             remote_hostname: self.remote_hostname.clone(),
-            remote_ip: self.connection_key.remote_ip.clone(),
+            remote_ip: self.connection_key.remote_ip,
             remote_l4_port: self.connection_key.remote_l4_port,
             ip_proto: IpProtocol::from_wire(self.connection_key.ip_proto),
             probe_report_summary: self.probe_report_summary.clone(),
             user_annotation: self.user_annotation.clone(),
             user_agent: self.user_agent.clone(),
             associated_apps: self.associated_apps.clone(),
-            start_tracking_time: self.start_tracking_time.clone(),
+            start_tracking_time: self.start_tracking_time,
             last_packet_time: self.last_packet_time,
             close_has_started: self.close_has_started(),
             four_way_close_done: self.is_four_way_close_done_or_rst(),

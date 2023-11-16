@@ -76,7 +76,7 @@ async fn handle_websocket_rx_messages(
             Ok(msg) => {
                 if msg.is_text() {
                     let json = msg.to_str().expect("msg.is_text() lies!");
-                    match serde_json::from_str::<GuiToServerMessages>(&json) {
+                    match serde_json::from_str::<GuiToServerMessages>(json) {
                         Ok(msg) => {
                             handle_gui_to_server_msg(
                                 msg,

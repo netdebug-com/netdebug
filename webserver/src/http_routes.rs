@@ -118,7 +118,7 @@ fn make_webtest_route(
 }
 
 pub fn make_webclient_route(
-    wasm_root: &String,
+    wasm_root: &str,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     /* First pass, with cookie checking
     warp::path("webclient")
@@ -134,7 +134,7 @@ pub fn make_webclient_route(
         // we will just serve the wrong pages and it gets confusing
         panic!("Wasm directory doesn't exist!? - {}", wasm_root);
     }
-    warp::path("webclient").and(warp::fs::dir(wasm_root.clone()))
+    warp::path("webclient").and(warp::fs::dir(wasm_root.to_owned()))
 }
 
 fn make_login_form_route(

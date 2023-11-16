@@ -87,7 +87,7 @@ pub fn setup_graph_tab(
 
     let canvas = document.create_element("canvas").unwrap();
     canvas.set_id("canvas"); // come back if we need manual double buffering
-    let (width, height) = calc_height(&document, &body);
+    let (width, height) = calc_height(document, body);
     let width = 9 * width / 10;
     let height = 4 * height / 5;
     console_log!("Setting height to {}, width to {}", height, width);
@@ -201,13 +201,13 @@ pub fn build_info_div(document: &Document) -> Result<Element, JsValue> {
 // for why height and width are complex to calculate
 pub fn calc_height(document: &Document, body: &HtmlElement) -> (i32, i32) {
     let html = document.document_element().unwrap();
-    let possible_heights = vec![
+    let possible_heights = [
         body.scroll_height(),
         body.offset_height(),
         html.client_height(),
         html.scroll_height(),
     ];
-    let possible_widths = vec![
+    let possible_widths = [
         body.scroll_width(),
         body.offset_width(),
         html.client_width(),

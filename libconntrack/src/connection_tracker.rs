@@ -108,7 +108,7 @@ pub enum ConnectionTrackerMsg {
 fn send_connection_storage_msg(topology_client: &Option<TopologyServerSender>, c: &mut Connection) {
     if let Some(tx) = topology_client.as_ref() {
         let measurement = c.to_connection_measurements(None);
-        if measurement.probe_report_summary.raw_reports.len() > 0 {
+        if !measurement.probe_report_summary.raw_reports.is_empty() {
             // only send the connection info if we have at least one successful probe round
             debug!(
                 "Sending connection measurements to topology server for {}",
@@ -261,7 +261,7 @@ impl<'a> ConnectionTracker<'a> {
                 }
                 GetConnectionKeys { tx } => {
                     // so simple, no need for a dedicated function
-                    let keys = self.connections.keys().map(|k| k.clone()).collect();
+                    let keys = self.connections.keys().cloned().collect();
                     if let Err(e) = tx.send(keys).await {
                         warn!(
                             "Error sendings keys back to caller in GetConnectionKeys(): {}",
@@ -484,10 +484,9 @@ impl<'a> ConnectionTracker<'a> {
                             // add this group and make sure the connection tracker is tracking it
                             let group = AggregateCounterKind::DnsDstDomain { name: domain };
                             connection.aggregate_groups.insert(group.clone());
-                            if !self.aggregate_traffic_counters.contains_key(&group) {
-                                self.aggregate_traffic_counters
-                                    .insert(group, TrafficCounters::new());
-                            }
+                            self.aggregate_traffic_counters
+                                .entry(group)
+                                .or_insert_with(TrafficCounters::new);
                         }
                         Err(e) => warn!("Unparsible DNS name: {} :: {}", &remote_hostname, e),
                     }

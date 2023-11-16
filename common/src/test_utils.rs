@@ -15,7 +15,7 @@ pub fn test_dir(base: &str, f: &str) -> String {
     let p = Path::new(base).join(f);
     if metadata(&p).is_ok() {
         let p = p.into_os_string().to_str().unwrap().to_string();
-        return p;
+        p
     } else {
         let cwd = env::current_dir().unwrap();
         panic!(

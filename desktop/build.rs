@@ -32,19 +32,17 @@ const TYPESCRIPT_OUT_FILE: &str = "../electron/src/netdebug_types.ts";
 fn generate_typescript_types() {
     // NOTE: if we use Path::new(), things magically work with windows
     // if we just use the raw &str, they do not
-    let mut outfile = std::fs::File::create(Path::new(TYPESCRIPT_OUT_FILE)).expect(
-        format!(
+    let mut outfile = std::fs::File::create(Path::new(TYPESCRIPT_OUT_FILE)).unwrap_or_else(|_| {
+        panic!(
             "Can't write to {} from {}",
             TYPESCRIPT_OUT_FILE,
-            std::env::current_dir()
-                .unwrap()
-                .to_string_lossy()
-                .to_string()
+            std::env::current_dir().unwrap().to_string_lossy()
         )
-        .as_str(),
-    );
-    let mut options = DefinitionFileOptions::default();
-    options.root_namespace = None;
+    });
+    let options = DefinitionFileOptions {
+        root_namespace: None,
+        ..Default::default()
+    };
     write_definition_file::<_, ExportedTypes>(&mut outfile, options).unwrap();
 }
 fn main() {

@@ -42,7 +42,7 @@ pub struct DnsTrackerEntry {
 pub fn pretty_print_duration(d: &chrono::Duration) -> String {
     // apparently this can overflow
     if let Some(mut nanos) = d.num_nanoseconds() {
-        nanos = nanos % 1_000_000_000; // truncate off the seconds portion
+        nanos %= 1_000_000_000; // truncate off the seconds portion
         if d.num_seconds() > 0 {
             format!("{}.{:9} seconds", d.num_seconds(), nanos)
         } else if d.num_milliseconds() > 0 || d.num_microseconds().is_none() {
@@ -116,14 +116,13 @@ impl Display for IpProtocol {
 impl IpProtocol {
     pub fn to_wire(&self) -> u8 {
         use IpProtocol::*;
-        let num = match self {
+        match self {
             ICMP => 1,
             TCP => 6,
             UDP => 17,
             ICMP6 => 58,
             Other(ip_proto) => *ip_proto,
-        };
-        num as u8
+        }
     }
 
     pub fn from_wire(ip_proto: u8) -> IpProtocol {
@@ -175,9 +174,7 @@ impl AverageRate {
     }
 
     fn calc_rate(&self, x: f64) -> Option<f64> {
-        if self.first_time.is_none() {
-            return None;
-        }
+        self.first_time?;
         let dt = (self.last_time.unwrap() - self.first_time.unwrap())
             .num_microseconds()
             .unwrap();
@@ -255,29 +252,23 @@ impl RateCalculator for MaxBurstRate {
     }
 
     fn get_byte_rate(&self) -> Option<f64> {
-        self.ts
-            .as_ref()
-            .map(|ts| {
-                if ts.full_window_seen() {
-                    Some(self.max_bytes as f64 / self.time_window.as_secs_f64())
-                } else {
-                    None
-                }
-            })
-            .flatten()
+        self.ts.as_ref().and_then(|ts| {
+            if ts.full_window_seen() {
+                Some(self.max_bytes as f64 / self.time_window.as_secs_f64())
+            } else {
+                None
+            }
+        })
     }
 
     fn get_packet_rate(&self) -> Option<f64> {
-        self.ts
-            .as_ref()
-            .map(|ts| {
-                if ts.full_window_seen() {
-                    Some(self.max_pkts as f64 / self.time_window.as_secs_f64())
-                } else {
-                    None
-                }
-            })
-            .flatten()
+        self.ts.as_ref().and_then(|ts| {
+            if ts.full_window_seen() {
+                Some(self.max_pkts as f64 / self.time_window.as_secs_f64())
+            } else {
+                None
+            }
+        })
     }
 }
 
