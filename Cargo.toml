@@ -12,7 +12,6 @@ members = [
   "ip-asn-lookup",
   "libconntrack",
   "probe-o-matic",
-  "storage-server",
   "webserver",
   "webserver/web-client",
 ]
