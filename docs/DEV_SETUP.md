@@ -39,7 +39,15 @@ base revision, which is incredibly helpful in properly resolving the conflict:
 
 
 ## Setting up windows & Bash:
-TODO
+1. You must install npcap by hand (for now): https://npcap.com/#download.
+
+**NOTE** : when installing, you MUST check the box "Install Npcap in WinPcap API Compatibility mode" or the
+  binaries will not find wpcap.dll at runtime.  You can check this by running ```ldd target/debug/desktop.exe```
+  and making sure that wpcap.dll is resolved.  Note that if you reinstall some other tool on the system that
+  uses Npcap, e.g., wireshark, you need to make sure this box is re-checked or everything will break.
+
+2. Optional but recommended is to run through git-bash " https://gitforwindows.org/
+3. When running ```ssh-add``` to cache your password, you must use ```cmd``` not ```bash``` else it will talk to the wrong ssh-agent instance and will not work as expected.
 
 # Older Dev Setup Instructions -- should revamp
 1. Create a _dedicated_ github account for netdebug using your netdebug.com email
