@@ -22,8 +22,6 @@ libc = "0.2.146"
 libconntrack-wasm = { path = "../libconntrack-wasm" }
 log = "0.4.19"
 netstat2 = "0.9.1"
-pb-conntrack-types = { path = "../protobuf/conntrack-types" }
-pb-storage-service = { path = "../protobuf/storage-service" }
 pretty_env_logger = "0.5.0"
 # PublicSufficeList - but statically includes official list from https://publicsuffix.org/
 psl = "2.1.4"

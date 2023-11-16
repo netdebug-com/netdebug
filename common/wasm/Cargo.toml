@@ -9,8 +9,6 @@ edition = "2021"
 chrono = "0.4.26"
 itertools = "0.10.5"
 linked-hash-map = "0.5.6"
-pb-conntrack-types = { path = "../../protobuf/conntrack-types" }
-prost-types = "0.12"
 serde = { version = "1.0.164", features = ["derive"] }
 serde_json = "1.0.96"
 serde_with = { version = "3.4.0", features = ["chrono_0_4"] }

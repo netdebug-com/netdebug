@@ -1,9 +1,8 @@
 use std::{collections::HashSet, process::ExitCode};
 
 use clap::Parser;
+use libconntrack_wasm::ConnectionMeasurements;
 use log::{error, info};
-use pb_conntrack_types::ConnectionStorageEntry;
-use prost::Message;
 use rusqlite::{Connection, OpenFlags};
 
 #[derive(Parser, Debug)]
@@ -26,27 +25,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let mut stmt = db
             .prepare("SELECT saved_at, pb_storage_entry FROM connections")
             .expect("Could not prepare statement");
-        let entries = stmt.query_and_then::<ConnectionStorageEntry, BoxError, _, _>([], |row| {
-            let buf = row.get::<usize, Vec<u8>>(1)?;
-            Ok(ConnectionStorageEntry::decode(buf.as_slice())?)
+        let entries = stmt.query_and_then::<ConnectionMeasurements, BoxError, _, _>([], |row| {
+            let json = row.get::<usize, String>(1)?;
+            Ok(serde_json::from_str::<ConnectionMeasurements>(&json)?)
         })?;
         for entry in entries {
             let entry = entry?;
             remote_ips.insert(entry.remote_ip);
-            for probe_round in entry.probe_rounds {
-                for probe in &probe_round.probes {
-                    if let Some(sender_ip) = probe.sender_ip.clone() {
-                        use pb_conntrack_types::ProbeType::*;
-                        match probe.probe_type() {
-                            RouterReplyFound | RouterReplyNoProbe | NatReplyFound
-                            | NatReplyNoProbe => {
-                                // XXX: the match is probably redundant since `sender_ip` is only
-                                // populated for the above variants. But better to explicit here.
-                                router_ips.insert(sender_ip);
-                            }
-                            EndHostReplyFound | EndHostReplyNoProbe | NoReply | NoOutgoing
-                            | UnspecifiedProbeType => (),
-                        }
+            for probe_round in entry.probe_report_summary.raw_reports {
+                for (_ttl, probe) in &probe_round.probes {
+                    if let Some(sender_ip) = probe.get_ip().clone() {
+                        router_ips.insert(sender_ip);
                     }
                 }
             }
