@@ -1,5 +1,5 @@
 [package]
-name = "mrt-stuff"
+name = "ip-asn-lookup"
 version = "0.1.0"
 edition = "2021"
 
