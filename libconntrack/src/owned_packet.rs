@@ -78,7 +78,7 @@ impl std::hash::Hash for OwnedParsedPacket {
 fn pcap_timestamp_to_utc(pcap_header: &pcap::PacketHeader) -> DateTime<Utc> {
     use chrono::TimeZone;
     Utc.timestamp_opt(
-        pcap_header.ts.tv_sec,
+        pcap_header.ts.tv_sec.into(),
         (pcap_header.ts.tv_usec * 1000) as u32,
     )
     .unwrap()
