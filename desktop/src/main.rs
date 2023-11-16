@@ -86,8 +86,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let devices = libconntrack::pcap::find_interesting_pcap_interfaces(&args.pcap_device)?;
     let local_addrs = devices
         .iter()
-        .map(|d| d.addresses.iter().map(|a| a.addr).collect::<Vec<IpAddr>>())
-        .flatten()
+        .flat_map(|d| d.addresses.iter().map(|a| a.addr).collect::<Vec<IpAddr>>())
         .collect::<HashSet<IpAddr>>();
     // launch the process tracker
     let process_tracker = ProcessTracker::new(
@@ -215,19 +214,18 @@ pub fn make_common_desktop_http_routes(
     let counter_path =
         make_counter_routes(counter_registries).with(warp::log("counters/get_counters"));
 
-    let routes = ws.or(counter_path);
-    routes
+    ws.or(counter_path)
 }
 
 pub fn make_desktop_wasm_html_http_routes(
-    wasm_root: &String,
-    html_root: &String,
+    wasm_root: &str,
+    html_root: &str,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     let webclient =
-        libwebserver::http_routes::make_webclient_route(&wasm_root).with(warp::log("webclient"));
-    let static_path = warp::fs::dir(html_root.clone()).with(warp::log("static"));
-    let routes = webclient.or(static_path);
-    routes
+        libwebserver::http_routes::make_webclient_route(wasm_root).with(warp::log("webclient"));
+    let static_path = warp::fs::dir(html_root.to_owned()).with(warp::log("static"));
+
+    webclient.or(static_path)
 }
 
 // this function just wraps the connection tracker to make sure the types are understood

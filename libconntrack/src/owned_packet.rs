@@ -78,7 +78,7 @@ impl std::hash::Hash for OwnedParsedPacket {
 fn pcap_timestamp_to_utc(pcap_header: &pcap::PacketHeader) -> DateTime<Utc> {
     use chrono::TimeZone;
     Utc.timestamp_opt(
-        pcap_header.ts.tv_sec as i64,
+        pcap_header.ts.tv_sec,
         (pcap_header.ts.tv_usec * 1000) as u32,
     )
     .unwrap()
@@ -151,20 +151,20 @@ impl OwnedParsedPacket {
             Some(Version4(ip4, _)) => {
                 let mut hash = 0;
                 for i in 0..=3 {
-                    hash = hash ^ ip4.source[i];
+                    hash ^= ip4.source[i];
                 }
                 for i in 0..=3 {
-                    hash = hash ^ ip4.destination[i];
+                    hash ^= ip4.destination[i];
                 }
                 return hash;
             }
             Some(Version6(ip6, _)) => {
                 let mut hash = 0;
                 for i in 0..=3 {
-                    hash = hash ^ ip6.source[i];
+                    hash ^= ip6.source[i];
                 }
                 for i in 0..=3 {
-                    hash = hash ^ ip6.destination[i];
+                    hash ^= ip6.destination[i];
                 }
                 return hash;
             }
@@ -175,12 +175,12 @@ impl OwnedParsedPacket {
             Some(e) => {
                 let mut hash = 0;
                 for i in 0..=5 {
-                    hash = hash ^ e.source[i];
+                    hash ^= e.source[i];
                 }
                 for i in 0..=5 {
-                    hash = hash ^ e.destination[i];
+                    hash ^= e.destination[i];
                 }
-                return hash;
+                hash
             }
             None => 0, // just give up, this packet didn't even have an l2 header!?
         }
@@ -668,8 +668,7 @@ impl<'de> Deserialize<'de> for OwnedParsedPacket {
                 Ok(pkt)
             }
         }
-        const FIELDS: &'static [&'static str] =
-            &["pcapheader", "eth", "vlan", "ip", "transport", "payload"];
+        const FIELDS: &[&str] = &["pcapheader", "eth", "vlan", "ip", "transport", "payload"];
         deserializer.deserialize_struct(
             "struct OwnedParsedPacket",
             FIELDS,

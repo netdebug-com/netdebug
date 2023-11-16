@@ -133,12 +133,12 @@ fn compute_application_latency(
             }
             if max < app_rtt {
                 max = app_rtt;
-                max_probe_round = *probe_round as u32;
+                max_probe_round = *probe_round;
             }
         }
     }
 
-    let avg = if report_rounds.len() > 0 {
+    let avg = if !report_rounds.is_empty() {
         sum / report_rounds.len() as f64
     } else {
         0.0 // no data, can't take average
@@ -146,7 +146,7 @@ fn compute_application_latency(
     // now go back through the application latency results and find the round closest
     // to the average so we can compare against a 'typical' one
     let mut avg_probe_round_approximation_error = f64::MAX;
-    let mut avg_probe_round = 0 as u32;
+    let mut avg_probe_round = 0_u32;
     for probe_round in report_rounds {
         let report = connection
             .probe_report_summary
@@ -158,7 +158,7 @@ fn compute_application_latency(
             if diff < avg_probe_round_approximation_error {
                 // this clause should trigger at least once if there's any data
                 avg_probe_round_approximation_error = diff;
-                avg_probe_round = probe_round as u32;
+                avg_probe_round = probe_round;
             }
         }
     }
@@ -233,12 +233,10 @@ fn explain_latency(connection: &Connection, nats: Vec<u32>) -> Vec<AnalysisInsig
         } else {
             Blame::HostStack
         }
+    } else if endhost_delta > processing_delta {
+        Blame::HomeNetwork
     } else {
-        if endhost_delta > processing_delta {
-            Blame::HomeNetwork
-        } else {
-            Blame::HostStack
-        }
+        Blame::HostStack
     };
     use Goodness::*;
     let goodness = match application_latency.max - application_latency.avg {
@@ -298,7 +296,7 @@ fn extract_latencies(
             endhost_max = **endhost_rtt;
         }
     }
-    let endhost_avg = if endhost_rtts.len() > 0 {
+    let endhost_avg = if !endhost_rtts.is_empty() {
         endhost_sum / endhost_rtts.len() as f64
     } else {
         // complete packet loss!?  what should we do?  Return a large constant for now
@@ -378,7 +376,7 @@ fn naive_latency_analysis(connection: &Connection) -> Vec<AnalysisInsights> {
         });
     }
 
-    if endhosts.len() > 0 {
+    if !endhosts.is_empty() {
         // calc some quick stats across all of the endhost probes (likely across many TTLs)
         let mut endhost_min = f64::MAX;
         let mut endhost_max = f64::MIN;
@@ -439,51 +437,49 @@ fn naive_latency_analysis(connection: &Connection) -> Vec<AnalysisInsights> {
                     endhost_max,
                 });
             }
-        } else {
-            if let Some(router) = last_router {
-                // if we can't find a NAT, use the last router we got as a reference; it's not
-                // as accurate but hopefully one day we can validate this with geolocation
-                // e.g., if the latitude and longitudes of the endhost and routers are not too far apart
-                let (_router_min, router_avg, router_max) = router.stats().unwrap(); // unwrap ok for Router's
-                if router_avg > endhost_avg || router_max > endhost_max {
-                    // weird data - this shouldn't ever be the case and likely indicates some sort of
-                    // systematic measurement error, e.g., bad clocks
-                    latency_insights.push(AnalysisInsights::LatencyRouterWeirdData {
-                        router_avg,
-                        endhost_avg,
-                        router_max,
-                        endhost_max,
-                    });
-                } else {
-                    // a lot of work to get to some clean data!
-                    //
-                    let last_hop_avg = endhost_avg - router_avg;
-                    let last_hop_max = endhost_max - router_max;
-                    let last_hop_avg_fraction = last_hop_avg / router_avg;
-                    let last_hop_max_fraction = last_hop_max / router_max;
-                    // boundaries are somewhat arbitrary ... but IMHO defensible
-                    // relative to a NAT, should probably increase them but.. how much?
-                    // leave the same for now...
-                    let goodness = match last_hop_max_fraction {
-                        x if x < 0.1 => Goodness::VeryGood,
-                        x if x < 0.4 => Goodness::Good,
-                        x if x < 0.8 => Goodness::Meh,
-                        x if x < 1.5 => Goodness::Bad,
-                        _ => Goodness::VeryBad, // last hop max is 150+% more than rest of network
-                    };
-                    latency_insights.push(AnalysisInsights::LastHopRouterLatencyVariance {
-                        goodness,
-                        last_hop_avg,
-                        last_hop_max,
-                        last_hop_avg_fraction,
-                        last_hop_max_fraction,
-                        endhost_avg,
-                        endhost_max,
-                    });
-                }
+        } else if let Some(router) = last_router {
+            // if we can't find a NAT, use the last router we got as a reference; it's not
+            // as accurate but hopefully one day we can validate this with geolocation
+            // e.g., if the latitude and longitudes of the endhost and routers are not too far apart
+            let (_router_min, router_avg, router_max) = router.stats().unwrap(); // unwrap ok for Router's
+            if router_avg > endhost_avg || router_max > endhost_max {
+                // weird data - this shouldn't ever be the case and likely indicates some sort of
+                // systematic measurement error, e.g., bad clocks
+                latency_insights.push(AnalysisInsights::LatencyRouterWeirdData {
+                    router_avg,
+                    endhost_avg,
+                    router_max,
+                    endhost_max,
+                });
             } else {
-                latency_insights.push(AnalysisInsights::NoRouterReplies);
+                // a lot of work to get to some clean data!
+                //
+                let last_hop_avg = endhost_avg - router_avg;
+                let last_hop_max = endhost_max - router_max;
+                let last_hop_avg_fraction = last_hop_avg / router_avg;
+                let last_hop_max_fraction = last_hop_max / router_max;
+                // boundaries are somewhat arbitrary ... but IMHO defensible
+                // relative to a NAT, should probably increase them but.. how much?
+                // leave the same for now...
+                let goodness = match last_hop_max_fraction {
+                    x if x < 0.1 => Goodness::VeryGood,
+                    x if x < 0.4 => Goodness::Good,
+                    x if x < 0.8 => Goodness::Meh,
+                    x if x < 1.5 => Goodness::Bad,
+                    _ => Goodness::VeryBad, // last hop max is 150+% more than rest of network
+                };
+                latency_insights.push(AnalysisInsights::LastHopRouterLatencyVariance {
+                    goodness,
+                    last_hop_avg,
+                    last_hop_max,
+                    last_hop_avg_fraction,
+                    last_hop_max_fraction,
+                    endhost_avg,
+                    endhost_max,
+                });
             }
+        } else {
+            latency_insights.push(AnalysisInsights::NoRouterReplies);
         }
     } else {
         // no endhost probes - like at all?!

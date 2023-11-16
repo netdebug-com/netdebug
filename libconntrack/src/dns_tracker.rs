@@ -213,7 +213,7 @@ impl<'a> DnsTracker<'a> {
         _src_is_local: bool,
     ) {
         // track who sent us a DNS reply
-        let src_dns_server = key.remote_ip.clone();
+        let src_dns_server = key.remote_ip;
         if dns_packet.header.response_code == dns_parser::ResponseCode::NoError {
             *self.local_dns_servers.entry(src_dns_server).or_insert(0) += 1;
         }
@@ -300,9 +300,9 @@ impl<'a> DnsTracker<'a> {
                     ip,
                     DnsTrackerEntry {
                         hostname: hostname.clone(),
-                        created: created.clone(),
+                        created: *created,
                         from_ptr_record,
-                        rtt: rtt.clone(),
+                        rtt: *rtt,
                         ttl: Some(chrono::Duration::seconds(answer.ttl as i64)),
                     },
                 );
@@ -358,7 +358,7 @@ impl<'a> DnsTracker<'a> {
             .filter_map(|(k, v)| {
                 if let Some(ttl) = v.ttl {
                     if now > (v.created + ttl) {
-                        Some(k.clone())
+                        Some(*k)
                     } else {
                         None
                     }
@@ -393,14 +393,14 @@ impl<'a> DnsTracker<'a> {
             // if we're a test, never send a packet out
             return;
         }
-        let dns_server = if self.local_dns_servers.len() > 0 {
+        let dns_server = if !self.local_dns_servers.is_empty() {
             // pick the most common DNS server we've seen a reply from
-            self.local_dns_servers
+            *self
+                .local_dns_servers
                 .iter()
-                .max_by(|(_k1, v1), (_k2, v2)| v2.cmp(&v1))
+                .max_by(|(_k1, v1), (_k2, v2)| v2.cmp(v1))
                 .map(|(k, _v)| k)
                 .unwrap()
-                .clone()
         } else {
             // we know nothing, just use a global DNS server
             IpAddr::from_str("8.8.8.8").unwrap()
@@ -529,7 +529,7 @@ impl<'a> DnsTracker<'a> {
             Some(entry.hostname.clone())
         } else {
             if !self.pending_lookups.contains_key(&ip) {
-                self.pending_lookups.insert(ip.clone(), (vec![key], tx));
+                self.pending_lookups.insert(ip, (vec![key], tx));
                 self.send_dns_ptr_lookup(ip).await;
             } else {
                 let (keys, _tx) = self.pending_lookups.get_mut(&ip).unwrap();
@@ -594,7 +594,7 @@ fn dns_ptr_decode(name: &String) -> Result<IpAddr, Box<dyn std::error::Error>> {
     let name = name.to_lowercase(); // can't be chained with .trim_end_matches()
     let name = name.trim_end_matches('.'); // remove trailing period if there
     if name.ends_with(DNS_PTR_V4_DOMAIN) {
-        let tokens = name.split(".").collect::<Vec<&str>>();
+        let tokens = name.split('.').collect::<Vec<&str>>();
         Ok(IpAddr::try_from([
             u8::from_str_radix(tokens[3], 10)?,
             u8::from_str_radix(tokens[2], 10)?,
@@ -602,14 +602,16 @@ fn dns_ptr_decode(name: &String) -> Result<IpAddr, Box<dyn std::error::Error>> {
             u8::from_str_radix(tokens[0], 10)?,
         ])?)
     } else if name.ends_with(DNS_PTR_V6_DOMAIN) {
-        let tokens = name.split(".").collect::<Vec<&str>>();
+        let tokens = name.split('.').collect::<Vec<&str>>();
         if tokens.len() < 32 {
-            return Err(format!("dns_ptr_decode: Less than 32 digits in Ipv6 addr!?").into());
+            return Err("dns_ptr_decode: Less than 32 digits in Ipv6 addr!?"
+                .to_string()
+                .into());
         }
         let mut addr: [u8; 16] = [0; 16];
         for i in 0..=15 {
-            let oct = (u8::from_str_radix(&tokens[2 * i + 1], 16)? << 4)
-                + u8::from_str_radix(&tokens[2 * i], 16)?;
+            let oct = (u8::from_str_radix(tokens[2 * i + 1], 16)? << 4)
+                + u8::from_str_radix(tokens[2 * i], 16)?;
             addr[15 - i] = oct; // put in reverse order
         }
         Ok(IpAddr::try_from(addr)?)

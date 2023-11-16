@@ -88,7 +88,7 @@ impl Graph {
      */
 
     pub fn add_data_probe_report(&mut self, probe_report: ProbeRoundReport, probe_round: u32) {
-        for (_ttl, probe) in &probe_report.probes {
+        for probe in probe_report.probes.values() {
             // extract a name for the hop (e.g. "TTL=x" or "NAT") plus rtt, etc. info
             if let Some((key, rtt, ts)) = match probe {
                 ProbeReportEntry::RouterReplyFound {

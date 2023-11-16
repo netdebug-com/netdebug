@@ -4,11 +4,11 @@
  */
 pub fn init_logging() {
     // if RUST_LOG isn't set explicitly, set RUST_LOG=info as a default
-    if let Err(_) = std::env::var("RUST_LOG") {
+    if std::env::var("RUST_LOG").is_err() {
         std::env::set_var("RUST_LOG", "info");
     }
     // if RUST_BACKTRACE isn't set explicitly, set RUST_BACKTRACE=1 as a default
-    if let Err(_) = std::env::var("RUST_BACKTRACE") {
+    if std::env::var("RUST_BACKTRACE").is_err() {
         std::env::set_var("RUST_BACKTRACE", "1");
     }
     env_logger::Builder::from_default_env()

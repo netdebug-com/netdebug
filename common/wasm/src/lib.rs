@@ -391,7 +391,7 @@ impl ProbeReportSummaryNode {
             max = if max > *rtt { max } else { *rtt };
             sum += rtt;
         }
-        if self.rtts.len() > 0 {
+        if !self.rtts.is_empty() {
             let avg = sum / self.rtts.len() as f64;
             Some((min, avg, max))
         } else {
@@ -430,7 +430,7 @@ impl Display for ProbeReportSummaryNode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
 pub struct ProbeReportSummary {
     pub raw_reports: Vec<ProbeRoundReport>,
     pub summary: HashMap<u8, Vec<ProbeReportSummaryNode>>,
@@ -438,10 +438,7 @@ pub struct ProbeReportSummary {
 
 impl ProbeReportSummary {
     pub fn new() -> ProbeReportSummary {
-        ProbeReportSummary {
-            raw_reports: Vec::new(),
-            summary: HashMap::new(),
-        }
+        ProbeReportSummary::default()
     }
 
     /**

@@ -23,7 +23,7 @@ where
     pub fn new(max_elements: usize, eviction_cb: impl FnMut(K, V) + Send + 'a) -> Self {
         EvictingHashMap {
             map: LinkedHashMap::with_capacity(max_elements),
-            max_elements: max_elements,
+            max_elements,
             cb: Box::new(eviction_cb),
         }
     }
@@ -95,6 +95,10 @@ where
 
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 
     pub fn clear(&mut self) {
