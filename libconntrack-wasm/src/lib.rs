@@ -8,6 +8,7 @@ pub mod connection_measurements;
 pub use connection_measurements::*;
 use typescript_type_def::TypeDef; // reshare these identifiers in this namespace
 pub mod aggregate_counters;
+pub mod topology_server_messages;
 
 /// When calculating the average rate, require at least this much time between
 /// the first and the last packets.

@@ -41,8 +41,7 @@ const createWindow = (): void => {
 function spawn_desktop_binary(command: string) {
   const args = [
     "--no-wasm-html-serving",
-    "--storage-server-url",
-    "http://localhost:50051",
+    // default to connecting to a local webserver/topology server on ws://localhost:3030/desktop
   ];
   const options: SpawnOptions = { stdio: "inherit" };
   desktopProcess = spawn(command, args, options);

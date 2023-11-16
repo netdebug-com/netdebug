@@ -12,6 +12,7 @@ use libconntrack::{
     connection_tracker::{ConnectionTracker, ConnectionTrackerSender},
     in_band_probe::spawn_raw_prober,
     pcap::{bind_writable_pcap, lookup_pcap_device_by_name},
+    topology_client::TopologyServerSender,
 };
 
 use crate::topology_server;
@@ -32,6 +33,7 @@ pub struct WebServerContext {
     // communications channel to the connection_tracker
     // TODO: make a pool for multi-threading
     pub connection_tracker: ConnectionTrackerSender,
+    pub topology_server: TopologyServerSender,
     pub counter_registries: Arc<Vec<ExportedStatRegistry>>,
 }
 
@@ -73,6 +75,8 @@ impl WebServerContext {
         // create a connection tracker
         //
         let (tx, rx) = tokio::sync::mpsc::channel(MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
+        let (topology_server_tx, topology_server_rx) =
+            tokio::sync::mpsc::channel(MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE);
         let context = WebServerContext {
             user_db: UserDb::new(),
             html_root: args.html_root.clone(),
@@ -81,6 +85,7 @@ impl WebServerContext {
             local_tcp_listen_port: args.listen_port,
             local_ips: local_ips,
             connection_tracker: tx.clone(),
+            topology_server: topology_server_tx.clone(),
             max_connections_per_tracker: args.max_connections_per_tracker,
             counter_registries: Arc::new(counter_registries.registries()),
         };
@@ -95,9 +100,10 @@ impl WebServerContext {
             let db_path = args.topology_server_db_path.clone();
             tokio::spawn(async move {
                 info!("Launching the topology server now with db_path={}", db_path);
-                let topology_server_tx = topology_server::TopologyServer::spawn_local(
+                topology_server::TopologyServer::spawn_with_tx_rx(
                     &db_path,
-                    MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE,
+                    topology_server_tx.clone(),
+                    topology_server_rx,
                 )
                 .await
                 .unwrap();
@@ -243,6 +249,7 @@ pub mod test {
         let test_hash = UserDb::new_password(&test_pass.to_string()).unwrap();
         // create a connection tracker to nothing for the test context
         let (tx, _rx) = tokio::sync::mpsc::channel(128);
+        let (topology_server_tx, _rx) = tokio::sync::mpsc::channel(128);
         Arc::new(RwLock::new(WebServerContext {
             user_db: UserDb::testing_demo(test_hash),
             html_root: "html".to_string(),
@@ -251,6 +258,7 @@ pub mod test {
             local_tcp_listen_port: 3030,
             local_ips: HashSet::new(),
             connection_tracker: tx,
+            topology_server: topology_server_tx,
             max_connections_per_tracker: 4096,
             counter_registries: Arc::new(Vec::new()),
         }))

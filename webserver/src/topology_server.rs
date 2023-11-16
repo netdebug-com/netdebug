@@ -47,17 +47,33 @@ impl TopologyServer {
             db,
         })
     }
-    pub async fn spawn_local(
+    pub async fn spawn(
         db_path: &str,
         buffer_size: usize,
     ) -> tokio_rusqlite::Result<TopologyServerSender> {
         let (tx, rx) = channel(buffer_size);
+        TopologyServer::spawn_with_tx_rx(db_path, tx, rx).await
+    }
+
+    pub async fn spawn_with_tx_rx(
+        db_path: &str,
+        tx: TopologyServerSender,
+        rx: TopologyServerReceiver,
+    ) -> tokio_rusqlite::Result<TopologyServerSender> {
         let topology_server = TopologyServer::new(tx.clone(), rx, db_path.to_string()).await?;
         tokio::spawn(async move {
             topology_server.rx_loop().await;
         });
         Ok(tx)
     }
+
+    /*
+    pub fn spawn_sync(db_path: &str, buffer_size: usize) -> tokio_rusqlite::Result<TopologyServerSender> {
+        tokio::spawn(async move {
+            TopologyServer::spawn(db_path, buffer_size)
+        }).join()
+    }
+    */
 
     async fn rx_loop(mut self) {
         debug!("Starting TopologyServer:rx_loop()");
