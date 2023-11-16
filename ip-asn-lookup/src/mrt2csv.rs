@@ -13,7 +13,7 @@ use mrt_rs::tabledump::RIB_AFI;
 use mrt_rs::tabledump::TABLE_DUMP_V2;
 use mrt_rs::Record;
 
-use mrt_stuff::*;
+use ip_asn_lookup::*;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

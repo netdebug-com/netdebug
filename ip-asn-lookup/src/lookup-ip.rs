@@ -3,8 +3,8 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 use clap::Parser;
+use ip_asn_lookup::*;
 use ip_network_table_deps_treebitmap::IpLookupTable;
-use mrt_stuff::*;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

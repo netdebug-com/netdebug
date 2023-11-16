@@ -1064,6 +1064,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ip-asn-lookup"
+version = "0.1.0"
+dependencies = [
+ "bgp-rs",
+ "clap",
+ "csv",
+ "ip_network_table-deps-treebitmap",
+ "mrt-rs",
+ "serde",
+]
+
+[[package]]
 name = "ip_network_table-deps-treebitmap"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1336,18 +1348,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "988e4ce9a90e8a166da7c42d89b4f86e55ce62aadfea93fbf7e5a3dc380133de"
 dependencies = [
  "byteorder",
-]
-
-[[package]]
-name = "mrt-stuff"
-version = "0.1.0"
-dependencies = [
- "bgp-rs",
- "clap",
- "csv",
- "ip_network_table-deps-treebitmap",
- "mrt-rs",
- "serde",
 ]
 
 [[package]]
