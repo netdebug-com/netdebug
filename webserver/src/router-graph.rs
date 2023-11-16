@@ -10,8 +10,11 @@ use clap::{Parser, Subcommand};
 use common_wasm::ProbeReportEntry;
 use itertools::Itertools;
 use libconntrack_wasm::ConnectionMeasurements;
+#[cfg(not(test))]
 use log::{error, warn};
 use rusqlite::{Connection, OpenFlags};
+#[cfg(test)]
+use std::{println as error, println as warn}; // Workaround to use prinltn! for logs.
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -36,12 +39,18 @@ struct ListCmd {
 }
 #[derive(Debug, Parser)]
 struct StatsCmd {
+    /// print weird flows as we find them
+    #[arg(long, default_value_t = false)]
+    pub verbose: bool,
+
+    /// DB File
     #[arg()]
     pub sqlite_filenames: Vec<String>,
 }
 
 #[derive(Debug, Parser)]
 struct DotCmd {
+    /// DB File
     #[arg()]
     pub sqlite_filenames: Vec<String>,
 }
@@ -97,7 +106,7 @@ fn visit_all_connections<F: FnMut(&String, &ConnectionMeasurements)>(
     for db_file in db_files {
         let db = Connection::open_with_flags(db_file, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let mut stmt = db
-            .prepare("SELECT saved_at, pb_storage_entry FROM connections")
+            .prepare("SELECT saved_at, measurements FROM connections")
             .expect("Could not prepare statement");
         let entries =
             stmt.query_and_then::<(String, ConnectionMeasurements), BoxError, _, _>([], |row| {
@@ -137,16 +146,16 @@ fn filter_weird_and_routerless_connections<F: FnMut(&String, &ConnectionMeasurem
             let probe = probe_round.probes.get(ttl).unwrap();
             // did we get a reply from a router or NAT?
             use ProbeReportEntry::*;
-            found_routers = match probe {
+            match probe {
                 RouterReplyFound { .. }
                 | NatReplyFound { .. }
                 | NatReplyNoProbe { .. }
-                | RouterReplyNoProbe { .. } => true,
+                | RouterReplyNoProbe { .. } => found_routers = true,
                 NoReply { .. }
                 | NoOutgoing { .. }
                 | EndHostReplyFound { .. }
-                | EndHostNoProbe { .. } => false,
-            };
+                | EndHostNoProbe { .. } => (), // NO-OP
+            }
             if !probe.get_comment().is_empty() {
                 found_weird = true;
             }
@@ -163,10 +172,14 @@ fn filter_weird_and_routerless_connections<F: FnMut(&String, &ConnectionMeasurem
             }
         }
     }
+    let busted = busted_endhost_check1 && busted_endhost_check2;
     if found_weird || (busted_endhost_check1 && busted_endhost_check2) || !found_routers {
         warn!(
-            "Rejecting conneciton with bad data: {} -> {:?}:{}",
-            connection.local_l4_port, connection.remote_hostname, connection.remote_l4_port
+            "Rejecting conneciton with bad data: {} :: weird={} busted={}, routers={}",
+            connection.get_five_tuple_string(),
+            found_weird,
+            busted,
+            found_routers
         );
     } else {
         visit(ts, connection);
@@ -477,11 +490,11 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         CliCommands::Stats(sub_args) => {
-            compute_stats(&sub_args.sqlite_filenames);
+            compute_stats(&sub_args.sqlite_filenames, sub_args.verbose);
             ExitCode::SUCCESS
         }
         CliCommands::Dot(sub_args) => {
-            match run_dot(&sub_args.sqlite_filenames, false, false, false) {
+            match run_dot(&sub_args.sqlite_filenames, false, true, true) {
                 Ok(_graph) => ExitCode::SUCCESS,
                 Err(e) => {
                     error!("{:?}", e);
@@ -492,7 +505,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn compute_stats(db_files: &Vec<String>) {
+fn compute_stats(db_files: &Vec<String>, verbose: bool) {
     let mut num_flows = 0;
     let mut flows_with_routers = 0;
     let mut flows_with_weird = 0;
@@ -535,6 +548,9 @@ fn compute_stats(db_files: &Vec<String>) {
             flows_with_routers += 1;
         }
         if found_weird {
+            if verbose {
+                println!("Found weird! {}", connection.get_five_tuple_string());
+            }
             flows_with_weird += 1;
         }
         if busted_endhost_check1 && busted_endhost_check2 {
@@ -566,7 +582,8 @@ fn list_db_contents(db_files: &Vec<String>) {
         let mut found_endhost = false;
         for probe_round in &connection.probe_report_summary.raw_reports {
             println!(
-                "Connection: {:?} ({}:{}) --> {:?} ({}:{})",
+                "Connection: {} {:?} ({}:{}) --> {:?} ({}:{})",
+                connection.ip_proto,
                 connection.local_hostname,
                 connection.local_ip,
                 connection.local_l4_port,
@@ -617,12 +634,11 @@ mod test {
     use crate::run_dot;
 
     const TEST_DATA_SIMPLE: &str = "tests/test_input_connections.sqlite3";
-    #[ignore = "Need to regenerate the data to the new format, but can't do that until rest of refactor"]
     #[test]
     fn test_simple_graph() {
         let test_files = vec![test_dir("storge_server", TEST_DATA_SIMPLE)];
         let graph = run_dot(&test_files, false, false, false).unwrap();
-        assert_eq!(graph.edges.len(), 48);
-        assert_eq!(graph.nodes.len(), 46);
+        assert_eq!(graph.edges.len(), 33);
+        assert_eq!(graph.nodes.len(), 33);
     }
 }

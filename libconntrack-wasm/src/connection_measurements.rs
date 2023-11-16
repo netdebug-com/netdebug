@@ -54,3 +54,24 @@ pub struct ConnectionMeasurements {
     pub max_burst_byte_rate: RxTxRate,
     pub max_burst_packet_rate: RxTxRate,
 }
+
+impl ConnectionMeasurements {
+    pub fn get_five_tuple_string(&self) -> String {
+        format!(
+            "{} {} ({} :: {}) --> {} ({} :: {})",
+            self.ip_proto,
+            self.local_hostname
+                .clone()
+                .or(Some("-".to_string()))
+                .unwrap(),
+            self.local_ip,
+            self.local_l4_port,
+            self.remote_hostname
+                .clone()
+                .or(Some("-".to_string()))
+                .unwrap(),
+            self.remote_ip,
+            self.remote_l4_port
+        )
+    }
+}
