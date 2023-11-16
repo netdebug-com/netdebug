@@ -14,6 +14,8 @@ use libconntrack::{
     pcap::{bind_writable_pcap, lookup_pcap_device_by_name},
 };
 
+use crate::topology_server;
+
 // All of the web server state that's maintained across
 // parallel threads.  This will be wrapped in an
 // Arc::new(Mutex::new(...)) for thread and borrower checker
@@ -34,6 +36,7 @@ pub struct WebServerContext {
 }
 
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
+const MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE: usize = 8192;
 
 impl WebServerContext {
     pub fn new(args: &Args) -> Result<WebServerContext, Box<dyn Error>> {
@@ -89,17 +92,22 @@ impl WebServerContext {
                 context.pcap_device.clone(),
             );
             // Spawn a ConnectionTracker task
+            let db_path = args.topology_server_db_path.clone();
             tokio::spawn(async move {
                 info!("Launching the connection tracker (single instance for now)");
-                // TODO: Make the webserver start a local instance of the topology service
-                let storage_service_msg_tx = None;
+                let topology_server_tx = topology_server::TopologyServer::spawn_local(
+                    &db_path,
+                    MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE,
+                )
+                .await
+                .unwrap();
                 let prober_tx = spawn_raw_prober(
                     bind_writable_pcap(device).unwrap(),
                     MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
                 )
                 .await;
                 let mut connection_tracker = ConnectionTracker::new(
-                    storage_service_msg_tx,
+                    Some(topology_server_tx),
                     max_connections_per_tracker,
                     local_addrs,
                     prober_tx,
@@ -147,9 +155,9 @@ pub struct Args {
     #[arg(long, default_value_t = 4096)]
     pub max_connections_per_tracker: usize,
 
-    /// The URL of the GRPC storage server. E.g., http://localhost:50051
-    #[arg(long, default_value=None)]
-    pub storage_server_url: Option<String>,
+    /// The SQLite db path, e.g., a filename
+    #[arg(long, default_value = "./connections.sqlite3")]
+    pub topology_server_db_path: String,
 }
 
 pub type Context = Arc<RwLock<WebServerContext>>;

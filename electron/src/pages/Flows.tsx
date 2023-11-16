@@ -38,7 +38,7 @@ function getConnKeyForDisplay(conn: ConnectionMeasurements) {
 }
 
 function connSortFn(a: ConnectionMeasurements, b: ConnectionMeasurements) {
-  const dt = b.last_packet_time_ms - a.last_packet_time_ms;
+  const dt = b.last_packet_time_ns - a.last_packet_time_ns;
   return dt;
 }
 
