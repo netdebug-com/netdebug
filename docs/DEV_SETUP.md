@@ -10,6 +10,7 @@
    ```
    cargo install wasm-pack   # for wasm development
    cargo install flamegraph  # for flamegraph profiler
+   cargo install udeps       # for finding unused dependencies
    rustup component add llvm-tools-preview # llvm tools used for code coverage
    cargo install cargo-llvm-cov # for code coverage (nice utilities that hide low-level commands)
    ```

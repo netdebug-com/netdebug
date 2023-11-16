@@ -681,7 +681,6 @@ pub mod test {
      * we can match them up to calculate RTTs, etc.
      */
     async fn connection_tracker_one_flow_out_and_in() {
-        pretty_env_logger::init();
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
         let mock_prober = MockRawSocketProber::new();
