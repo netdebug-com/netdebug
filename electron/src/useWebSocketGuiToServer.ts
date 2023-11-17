@@ -34,8 +34,9 @@ export function useWebSocketGuiToServer<T>(args: WebSocketGuiToServerArgs<T>) {
   const last_send = useRef(null);
 
   const sendRequest = () => {
-    console.debug(`Sending $reqMsgType request`);
-    sendMessage(JSON.stringify(args.reqMsgType));
+    const msg = JSON.stringify(args.reqMsgType);
+    console.debug(`Sending ${msg} request`);
+    sendMessage(msg);
     last_send.current = window.performance.now();
   };
 
