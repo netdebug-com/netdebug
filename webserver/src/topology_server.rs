@@ -163,7 +163,7 @@ mod test {
     // Appropriated from the original storage-server code
     type TestRes = Result<(), Box<dyn std::error::Error>>;
     use chrono::Utc;
-    use libconntrack_wasm::RxTxRate;
+    use libconntrack_wasm::traffic_stats::TrafficStatsSummary;
 
     use super::*;
 
@@ -185,10 +185,8 @@ mod test {
             four_way_close_done: false,
             start_tracking_time: Utc::now(),
             last_packet_time: Utc::now(),
-            avg_byte_rate: RxTxRate { rx: None, tx: None },
-            avg_packet_rate: RxTxRate { rx: None, tx: None },
-            max_burst_byte_rate: RxTxRate { rx: None, tx: None },
-            max_burst_packet_rate: RxTxRate { rx: None, tx: None },
+            tx_stats: TrafficStatsSummary::default(),
+            rx_stats: TrafficStatsSummary::default(),
         }
     }
     #[tokio::test]
