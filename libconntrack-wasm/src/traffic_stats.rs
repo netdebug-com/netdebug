@@ -1,4 +1,4 @@
-use std::{fmt::Display, time::Duration};
+use std::{collections::HashMap, fmt::Display, time::Duration};
 
 use chrono::{DateTime, Utc};
 use common_wasm::timeseries_stats::{BucketedTimeSeries, ExportedBuckets};
@@ -97,6 +97,12 @@ pub struct TrafficStatsSummary {
     pub last_min_byte_rate: Option<f64>,
 }
 
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
+pub struct BidirTrafficStatsSummary {
+    pub rx: TrafficStatsSummary,
+    pub tx: TrafficStatsSummary,
+}
+
 impl Display for TrafficStatsSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -132,18 +138,19 @@ pub struct BandwidthHistory {
     /// The total time the flow was active (time between first and last
     /// packet)
     pub total_duration: std::time::Duration,
-    /// 10us buckets covering the last 5 sec: bytes
-    pub last_5_sec_bytes: ExportedBuckets,
-    /// 10us buckets covering the last 5 sec: packets
-    pub last_5_sec_pkts: ExportedBuckets,
-    /// 1s buckets covering the last 1min: bytes
-    pub last_min_bytes: ExportedBuckets,
-    /// 1s buckets covering the last 1min: packets
-    pub last_min_pkts: ExportedBuckets,
-    /// 1min buckets covering the last 1hr: bytes
-    pub last_hour_bytes: ExportedBuckets,
-    /// 1min buckets covering the last 1hr: packets
-    pub last_hour_pkts: ExportedBuckets,
+
+    /// Maps a label to an exported bucket (for bytes) for a certain
+    /// bucket size  
+    pub byte_buckets: HashMap<String, ExportedBuckets>,
+    /// Maps a label to an exported bucket (for packets) for a certain
+    /// bucket size  
+    pub pkt_buckets: HashMap<String, ExportedBuckets>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
+pub struct BidirBandwidthStatsHistory {
+    pub rx: BandwidthHistory,
+    pub tx: BandwidthHistory,
 }
 
 /// Track statistics for a unidirectional flow (can be per 5-tuple, or higher aggregations).
@@ -256,15 +263,25 @@ impl TrafficStats {
 
     pub fn as_bandwidth_history(&mut self, now: DateTime<Utc>) -> BandwidthHistory {
         self.advance_time(now);
+        let mut byte_buckets = HashMap::new();
+        let mut pkt_buckets = HashMap::new();
+        byte_buckets.insert(
+            "Last 5 Seconds".to_owned(),
+            self.last_5_sec.export_sum_buckets(),
+        );
+        byte_buckets.insert("Last Minute".to_owned(), self.last_min.export_sum_buckets());
+        byte_buckets.insert("Last Hour".to_owned(), self.last_hour.export_sum_buckets());
+        pkt_buckets.insert(
+            "Last 5 Seconds".to_owned(),
+            self.last_5_sec.export_cnt_buckets(),
+        );
+        pkt_buckets.insert("Last Minute".to_owned(), self.last_min.export_cnt_buckets());
+        pkt_buckets.insert("Last Hour".to_owned(), self.last_hour.export_cnt_buckets());
         BandwidthHistory {
             end_bucket_time: now,
             total_duration: (self.last_time - self.first_time).to_std().unwrap(),
-            last_5_sec_bytes: self.last_5_sec.export_sum_buckets(),
-            last_5_sec_pkts: self.last_5_sec.export_cnt_buckets(),
-            last_min_bytes: self.last_min.export_sum_buckets(),
-            last_min_pkts: self.last_min.export_cnt_buckets(),
-            last_hour_bytes: self.last_hour.export_sum_buckets(),
-            last_hour_pkts: self.last_hour.export_cnt_buckets(),
+            byte_buckets,
+            pkt_buckets,
         }
     }
 }
@@ -536,40 +553,49 @@ mod test {
             stats.add_packet_with_time(100, t);
         }
         let hist = stats.as_bandwidth_history(t);
+        let last_5_sec_bytes = hist.byte_buckets.get("Last 5 Seconds").unwrap();
+        let last_5_sec_pkts = hist.pkt_buckets.get("Last 5 Seconds").unwrap();
+        let last_min_bytes = hist.byte_buckets.get("Last Minute").unwrap();
+        let last_min_pkts = hist.pkt_buckets.get("Last Minute").unwrap();
+        let last_hour_bytes = hist.byte_buckets.get("Last Hour").unwrap();
+        let last_hour_pkts = hist.pkt_buckets.get("Last Hour").unwrap();
         assert_eq!(
-            hist.last_5_sec_bytes.bucket_time_window,
+            last_5_sec_bytes.bucket_time_window,
             Duration::from_millis(10)
         );
-        assert_eq!(hist.last_5_sec_bytes.buckets[0..200], [0; 200]);
-        assert_eq!(hist.last_5_sec_bytes.buckets[200..], [100; 300]);
-        assert_eq!(hist.last_5_sec_pkts.buckets[0..200], [0; 200]);
-        assert_eq!(hist.last_5_sec_pkts.buckets[200..], [1; 300]);
+        assert_eq!(last_5_sec_bytes.buckets[0..200], [0; 200]);
+        assert_eq!(last_5_sec_bytes.buckets[200..], [100; 300]);
+        assert_eq!(last_5_sec_pkts.buckets[0..200], [0; 200]);
+        assert_eq!(last_5_sec_pkts.buckets[200..], [1; 300]);
 
         // Last min buckets
-        assert_eq!(
-            hist.last_min_bytes.bucket_time_window,
-            Duration::from_secs(1)
-        );
-        assert_eq!(hist.last_min_bytes.buckets[0..57], [0; 57]);
-        assert_eq!(hist.last_min_bytes.buckets[57..60], [10_000; 3]);
-        assert_eq!(hist.last_min_pkts.buckets[0..57], [0; 57]);
-        assert_eq!(hist.last_min_pkts.buckets[57..60], [100; 3]);
+        assert_eq!(last_min_bytes.bucket_time_window, Duration::from_secs(1));
+        assert_eq!(last_min_bytes.buckets[0..57], [0; 57]);
+        assert_eq!(last_min_bytes.buckets[57..60], [10_000; 3]);
+        assert_eq!(last_min_pkts.buckets[0..57], [0; 57]);
+        assert_eq!(last_min_pkts.buckets[57..60], [100; 3]);
 
         // Last hour buckets
-        assert_eq!(
-            hist.last_hour_bytes.bucket_time_window,
-            Duration::from_secs(60)
-        );
-        assert_eq!(hist.last_hour_bytes.buckets[0..59], [0; 59]);
-        assert_eq!(hist.last_hour_bytes.buckets[59], 30_000);
-        assert_eq!(hist.last_hour_pkts.buckets[0..59], [0; 59]);
-        assert_eq!(hist.last_hour_pkts.buckets[59], 300);
+        assert_eq!(last_hour_bytes.bucket_time_window, Duration::from_secs(60));
+        assert_eq!(last_hour_bytes.buckets[0..59], [0; 59]);
+        assert_eq!(last_hour_bytes.buckets[59], 30_000);
+        assert_eq!(last_hour_pkts.buckets[0..59], [0; 59]);
+        assert_eq!(last_hour_pkts.buckets[59], 300);
 
         // advance time, everything should be 0
         t += Duration::from_secs(4000);
         let hist = stats.as_bandwidth_history(t);
-        assert_eq!(hist.last_5_sec_bytes.buckets, [0; 500]);
-        assert_eq!(hist.last_min_bytes.buckets, [0; 60]);
-        assert_eq!(hist.last_hour_bytes.buckets, [0; 60]);
+        let last_5_sec_bytes = hist.byte_buckets.get("Last 5 Seconds").unwrap();
+        let last_5_sec_pkts = hist.pkt_buckets.get("Last 5 Seconds").unwrap();
+        let last_min_bytes = hist.byte_buckets.get("Last Minute").unwrap();
+        let last_min_pkts = hist.pkt_buckets.get("Last Minute").unwrap();
+        let last_hour_bytes = hist.byte_buckets.get("Last Hour").unwrap();
+        let last_hour_pkts = hist.pkt_buckets.get("Last Hour").unwrap();
+        assert_eq!(last_5_sec_bytes.buckets, [0; 500]);
+        assert_eq!(last_min_bytes.buckets, [0; 60]);
+        assert_eq!(last_hour_bytes.buckets, [0; 60]);
+        assert_eq!(last_5_sec_pkts.buckets, [0; 500]);
+        assert_eq!(last_min_pkts.buckets, [0; 60]);
+        assert_eq!(last_hour_pkts.buckets, [0; 60]);
     }
 }
