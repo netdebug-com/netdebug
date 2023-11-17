@@ -107,7 +107,7 @@ pub enum ConnectionTrackerMsg {
 
 fn send_connection_storage_msg(topology_client: &Option<TopologyServerSender>, c: &mut Connection) {
     if let Some(tx) = topology_client.as_ref() {
-        let measurement = c.to_connection_measurements(None);
+        let measurement = c.to_connection_measurements(Utc::now(), None);
         if !measurement.probe_report_summary.raw_reports.is_empty() {
             // only send the connection info if we have at least one successful probe round
             debug!(
@@ -460,7 +460,7 @@ impl<'a> ConnectionTracker<'a> {
         let connections = self
             .connections
             .iter_mut()
-            .map(|(_key, c)| c.to_connection_measurements(None))
+            .map(|(_key, c)| c.to_connection_measurements(Utc::now(), None))
             .collect::<Vec<ConnectionMeasurements>>();
         if let Err(e) = tx.send(connections) {
             warn!(
@@ -568,7 +568,7 @@ impl<'a> ConnectionTracker<'a> {
             (TrafficCounters, Vec<ConnectionMeasurements>),
         > = HashMap::new();
         for (_key, connection) in self.connections.iter_mut() {
-            let m = connection.to_connection_measurements(None);
+            let m = connection.to_connection_measurements(Utc::now(), None);
             for kind in &connection.aggregate_groups {
                 if !match_rule(kind) {
                     continue;

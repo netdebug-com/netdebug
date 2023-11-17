@@ -12,8 +12,8 @@ use common_wasm::{
 
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{
-    aggregate_counters::AggregateCounterKind, AverageRate, BidirectionalRate, DnsTrackerEntry,
-    IpProtocol, MaxBurstRate, RateCalculator, RxTxRate,
+    aggregate_counters::AggregateCounterKind, traffic_stats::BidirectionalStats, DnsTrackerEntry,
+    IpProtocol,
 };
 #[cfg(not(test))]
 use log::{debug, warn};
@@ -192,16 +192,13 @@ pub struct Connection {
     pub user_agent: Option<String>, // when created via a web request, store the user-agent header
     pub associated_apps: Option<HashMap<u32, Option<String>>>, // PID --> ProcessName, if we know it
     pub remote_hostname: Option<String>, // the FQDN of the remote host, if we know it
-    pub avg_rate: BidirectionalRate<AverageRate>,
-    pub max_burst_rate: BidirectionalRate<MaxBurstRate>,
+    pub traffic_stats: BidirectionalStats,
     // which counter groups does this flow belong to, e.g., "google.com" and "chrome"
     pub aggregate_groups: HashSet<AggregateCounterKind>,
 }
 
 impl Connection {
     pub(crate) fn new(key: ConnectionKey, ts: DateTime<Utc>) -> Connection {
-        let burst_rate_time_window =
-            std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS);
         Connection {
             connection_key: key.clone(),
             local_syn: None,
@@ -224,14 +221,9 @@ impl Connection {
             last_packet_time: ts,
             last_packet_instant: tokio::time::Instant::now(),
             remote_hostname: None,
-            avg_rate: BidirectionalRate {
-                rx: AverageRate::new(),
-                tx: AverageRate::new(),
-            },
-            max_burst_rate: BidirectionalRate {
-                rx: MaxBurstRate::new(burst_rate_time_window),
-                tx: MaxBurstRate::new(burst_rate_time_window),
-            },
+            traffic_stats: BidirectionalStats::new(std::time::Duration::from_millis(
+                MAX_BURST_RATE_TIME_WINDOW_MILLIS,
+            )),
             // all connections are part of the connection tracker counter group
             aggregate_groups: HashSet::from([AggregateCounterKind::ConnectionTracker]),
         }
@@ -250,9 +242,7 @@ impl Connection {
         let pcap_wall_dt = (Utc::now() - packet.timestamp).abs();
         pcap_to_wall_delay.add_duration_value(pcap_wall_dt.to_std().unwrap());
         self.last_packet_instant = tokio::time::Instant::now();
-        self.avg_rate
-            .add_packet_with_time(src_is_local, packet.len as u64, packet.timestamp);
-        self.max_burst_rate
+        self.traffic_stats
             .add_packet_with_time(src_is_local, packet.len as u64, packet.timestamp);
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
@@ -954,16 +944,17 @@ impl Connection {
 
     pub fn to_connection_measurements(
         &mut self,
+        now: DateTime<Utc>,
         probe_timeout: Option<Duration>,
     ) -> libconntrack_wasm::ConnectionMeasurements {
         // if there's an active probe round going, finish it/generate the report if it's been longer
         // then probe_timeout
         if let Some(probe_round) = self.probe_round.as_ref() {
-            let now = tokio::time::Instant::now();
+            let now_instant = tokio::time::Instant::now();
             // Use the monotonic clock not the system clock as it respects
             // tokio::time::pause() which is required for some tests, e.g.,
             // connection_tracker::test::test_time_wait_eviction()
-            let delta = now - self.start_tracking_time_instant;
+            let delta = now_instant - self.start_tracking_time_instant;
             let timeout = match probe_timeout {
                 Some(timeout) => timeout.to_std().unwrap(),
                 None => Duration::milliseconds(500).to_std().unwrap(),
@@ -973,22 +964,8 @@ impl Connection {
             }
         }
         libconntrack_wasm::ConnectionMeasurements {
-            avg_byte_rate: RxTxRate {
-                rx: self.avg_rate.rx.get_byte_rate(),
-                tx: self.avg_rate.tx.get_byte_rate(),
-            },
-            avg_packet_rate: RxTxRate {
-                rx: self.avg_rate.rx.get_packet_rate(),
-                tx: self.avg_rate.tx.get_packet_rate(),
-            },
-            max_burst_byte_rate: RxTxRate {
-                rx: self.max_burst_rate.rx.get_byte_rate(),
-                tx: self.max_burst_rate.tx.get_byte_rate(),
-            },
-            max_burst_packet_rate: RxTxRate {
-                rx: self.max_burst_rate.rx.get_packet_rate(),
-                tx: self.max_burst_rate.tx.get_packet_rate(),
-            },
+            tx_stats: self.traffic_stats.tx_stats_summary(now),
+            rx_stats: self.traffic_stats.rx_stats_summary(now),
             local_hostname: Some("localhost".to_string()),
             local_ip: self.connection_key.local_ip,
             local_l4_port: self.connection_key.local_l4_port,
@@ -1246,63 +1223,75 @@ pub mod test {
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.1").unwrap()]);
         let mut helper = Helper::new(local_addrs.clone());
 
-        let t0 = mk_start_time();
-        let pkt = mk_packet(true, t0, 100);
+        let start = mk_start_time();
+        let pkt = mk_packet(true, start, 100);
         let (key, _) = pkt.to_connection_key(&local_addrs).unwrap();
-        let mut conn = Connection::new(key, t0);
+        let mut conn = Connection::new(key, start);
 
-        let conn_measurement = conn.to_connection_measurements(None);
-        assert_eq!(conn_measurement.avg_byte_rate.rx, None);
-        assert_eq!(conn_measurement.avg_byte_rate.tx, None);
-        assert_eq!(conn_measurement.avg_packet_rate.rx, None);
-        assert_eq!(conn_measurement.avg_packet_rate.tx, None);
-        assert_eq!(conn_measurement.max_burst_byte_rate.rx, None);
-        assert_eq!(conn_measurement.max_burst_byte_rate.tx, None);
-        assert_eq!(conn_measurement.max_burst_packet_rate.rx, None);
-        assert_eq!(conn_measurement.max_burst_packet_rate.tx, None);
+        let conn_measurement = conn.to_connection_measurements(start, None);
+        assert_eq!(conn_measurement.rx_stats.last_min_byte_rate, None);
+        assert_eq!(conn_measurement.rx_stats.last_min_pkt_rate, None);
+        assert_eq!(conn_measurement.tx_stats.last_min_byte_rate, None);
+        assert_eq!(conn_measurement.tx_stats.last_min_pkt_rate, None);
+        assert_eq!(conn_measurement.rx_stats.burst_byte_rate, None);
+        assert_eq!(conn_measurement.rx_stats.burst_pkt_rate, None);
+        assert_eq!(conn_measurement.tx_stats.burst_byte_rate, None);
+        assert_eq!(conn_measurement.tx_stats.burst_pkt_rate, None);
 
         helper.update_conn(&mut conn, pkt);
 
-        for dt in 1..=15 {
-            let pkt = mk_packet(true, t0 + dur_micros(dt * 1000), 100);
+        let mut t = start;
+        for _ in 1..=15 {
+            t += dur_micros(1000);
+            let pkt = mk_packet(true, t, 100);
             helper.update_conn(&mut conn, pkt);
         }
-        let conn_meas = conn.to_connection_measurements(None);
+        let conn_meas = conn.to_connection_measurements(t, None);
         // 16 packets, 142 bytes each over 15ms
-        assert_eq!(conn_meas.avg_byte_rate.tx.unwrap(), 16. * 142. / 0.015);
+        assert_eq!(
+            conn_meas.tx_stats.last_min_byte_rate.unwrap(),
+            16. * 142. / 0.015
+        );
         // 16 packets over 15ms
-        assert_eq!(conn_meas.avg_packet_rate.tx.unwrap(), 16. / 0.015);
-        assert_eq!(conn_meas.avg_byte_rate.rx, None);
-        assert_eq!(conn_meas.avg_packet_rate.rx, None);
+        assert_eq!(conn_meas.tx_stats.last_min_pkt_rate.unwrap(), 16. / 0.015);
+        assert_eq!(conn_meas.rx_stats.last_min_byte_rate, None);
+        assert_eq!(conn_meas.rx_stats.last_min_pkt_rate, None);
 
         // One 142 byte packet per ms ==> 142KB/s
-        assert_eq!(conn_meas.max_burst_byte_rate.tx.unwrap(), 142e3);
-        assert_eq!(conn_meas.max_burst_packet_rate.tx.unwrap(), 1000.);
-        assert_eq!(conn_meas.max_burst_byte_rate.rx, None);
-        assert_eq!(conn_meas.max_burst_packet_rate.rx, None);
+        assert_eq!(conn_meas.tx_stats.burst_byte_rate.unwrap(), 142e3);
+        assert_eq!(conn_meas.tx_stats.burst_pkt_rate.unwrap(), 1000.);
+        assert_eq!(conn_meas.rx_stats.burst_byte_rate, None);
+        assert_eq!(conn_meas.rx_stats.burst_pkt_rate, None);
 
         //-----------
         // Lets receive some bytes too
         // 24 packets in 11.5 ms
-        let t1 = t0 + dur_micros(30_000);
-        for dt in 1..=24 {
-            let pkt = mk_packet(false, t1 + dur_micros(dt * 500), 200);
+        t = start + dur_micros(30_000);
+        for _ in 1..=24 {
+            t += dur_micros(500);
+            let pkt = mk_packet(false, t, 200);
             helper.update_conn(&mut conn, pkt);
         }
-        let conn_meas = conn.to_connection_measurements(None);
+        let conn_meas = conn.to_connection_measurements(t, None);
 
         // Average TX rate is unchanged since no more packets were received
-        assert_eq!(conn_meas.avg_byte_rate.tx.unwrap(), 16. * 142. / 0.015);
-        assert_eq!(conn_meas.avg_packet_rate.tx.unwrap(), 16. / 0.015);
+        assert_eq!(
+            conn_meas.tx_stats.last_min_byte_rate.unwrap(),
+            16. * 142. / 0.015
+        );
+        assert_eq!(conn_meas.tx_stats.last_min_pkt_rate.unwrap(), 16. / 0.015);
         // 24 packets, 242 bytes each over 12.5ms
-        assert_eq!(conn_meas.avg_byte_rate.rx.unwrap(), 24. * 242. / 0.0115);
-        assert_eq!(conn_meas.avg_packet_rate.rx.unwrap(), 24. / 0.0115);
+        assert_eq!(
+            conn_meas.rx_stats.last_min_byte_rate.unwrap(),
+            24. * 242. / 0.0115
+        );
+        assert_eq!(conn_meas.rx_stats.last_min_pkt_rate.unwrap(), 24. / 0.0115);
 
         // Burst TX rate is unchanged
-        assert_eq!(conn_meas.max_burst_byte_rate.tx.unwrap(), 142e3);
-        assert_eq!(conn_meas.max_burst_packet_rate.tx.unwrap(), 1000.);
+        assert_eq!(conn_meas.tx_stats.burst_byte_rate.unwrap(), 142e3);
+        assert_eq!(conn_meas.tx_stats.burst_pkt_rate.unwrap(), 1000.);
         // One 242 byte packet per 0.5ms ==> 484KB/s
-        assert_eq!(conn_meas.max_burst_byte_rate.rx.unwrap(), 484e3);
-        assert_eq!(conn_meas.max_burst_packet_rate.rx.unwrap(), 2000.);
+        assert_eq!(conn_meas.rx_stats.burst_byte_rate.unwrap(), 484e3);
+        assert_eq!(conn_meas.rx_stats.burst_pkt_rate.unwrap(), 2000.);
     }
 }

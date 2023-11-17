@@ -2230,6 +2230,7 @@ version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "356e00027bd9ef773605a353070dc87684b25561a59087ea3ee3dd5fe8854e83"
 dependencies = [
+ "serde_json",
  "typescript-type-def-derive",
 ]
 

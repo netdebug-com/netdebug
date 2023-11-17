@@ -311,11 +311,25 @@ where
         }
     }
 
-    pub fn export_sum(&self) -> ExportedBuckets {
+    pub fn export_sum_buckets(&self) -> ExportedBuckets {
         ExportedBuckets {
             bucket_time_window: self.bucket_time_window,
             buckets: self.bucket_iter().map(|bucket| bucket.sum).collect_vec(),
         }
+    }
+
+    pub fn export_cnt_buckets(&self) -> ExportedBuckets {
+        ExportedBuckets {
+            bucket_time_window: self.bucket_time_window,
+            buckets: self
+                .bucket_iter()
+                .map(|bucket| bucket.num_entries)
+                .collect_vec(),
+        }
+    }
+
+    pub fn total_duration(&self) -> Duration {
+        return self.bucket_time_window * self.num_buckets as u32;
     }
 
     /***
@@ -379,6 +393,7 @@ impl<'a> Iterator for BucketIterator<'a> {
 pub struct ExportedBuckets {
     #[type_def(type_of = "u64")]
     #[serde_as(as = "serde_with::DurationMicroSeconds<u64>")]
+    #[serde(rename = "bucket_time_window_us")]
     pub bucket_time_window: Duration,
     pub buckets: Vec<u64>,
 }
@@ -1137,14 +1152,17 @@ mod test {
         ts.add_value(3, create_time + 2 * dt);
         ts.add_value(4, create_time + 3 * dt);
         assert_eq!(get_bucket_values(&ts), &[1, 2, 3, 4]);
-        assert_eq!(ts.export_sum().buckets, &[1, 2, 3, 4]);
+        assert_eq!(ts.export_sum_buckets().buckets, &[1, 2, 3, 4]);
         ts.add_value(5, create_time + 4 * dt);
         assert_eq!(get_bucket_values(&ts), &[5, 2, 3, 4]);
-        assert_eq!(ts.export_sum().buckets, &[2, 3, 4, 5]);
+        assert_eq!(ts.export_sum_buckets().buckets, &[2, 3, 4, 5]);
         ts.add_value(6, create_time + 5 * dt);
         assert_eq!(get_bucket_values(&ts), &[5, 6, 3, 4]);
-        assert_eq!(ts.export_sum().buckets, &[3, 4, 5, 6]);
-        assert_eq!(ts.export_sum().bucket_time_window, Duration::from_secs(1));
+        assert_eq!(ts.export_sum_buckets().buckets, &[3, 4, 5, 6]);
+        assert_eq!(
+            ts.export_sum_buckets().bucket_time_window,
+            Duration::from_secs(1)
+        );
     }
 
     #[test]
@@ -1180,11 +1198,11 @@ mod test {
         ts.add_value(6, create_time + 5 * dt);
         ts.add_value(7, create_time + 6 * dt);
         assert_eq!(get_bucket_values(&ts), &[5, 6, 7, 4]);
-        assert_eq!(ts.export_sum().buckets, &[4, 5, 6, 7]);
+        assert_eq!(ts.export_sum_buckets().buckets, &[4, 5, 6, 7]);
 
         ts.add_value(8, create_time + 8 * dt);
         assert_eq!(get_bucket_values(&ts), &[8, 6, 7, 0]);
-        assert_eq!(ts.export_sum().buckets, &[6, 7, 0, 8]);
+        assert_eq!(ts.export_sum_buckets().buckets, &[6, 7, 0, 8]);
     }
 
     #[test]

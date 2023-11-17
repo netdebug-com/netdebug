@@ -38,8 +38,13 @@ function getConnKeyForDisplay(conn: ConnectionMeasurements) {
 }
 
 function connSortFn(a: ConnectionMeasurements, b: ConnectionMeasurements) {
-  const dt = b.last_packet_time_ns - a.last_packet_time_ns;
-  return dt;
+  const max_rate_fn = (conn: ConnectionMeasurements) => {
+    return Math.max(
+      conn.tx_stats.last_min_byte_rate,
+      conn.rx_stats.last_min_byte_rate,
+    );
+  };
+  return max_rate_fn(b) - max_rate_fn(a);
 }
 
 const Flows: React.FC = () => {
@@ -117,10 +122,16 @@ const Flows: React.FC = () => {
                   <TableRow key={getUniqueConnKey(conn)}>
                     <TableCell>{app}</TableCell>
                     <TableCell align="right">
-                      {prettyPrintSiUnits(conn.avg_byte_rate.tx, "Bytes/s")}
+                      {prettyPrintSiUnits(
+                        conn.tx_stats?.last_min_byte_rate,
+                        "Bytes/s",
+                      )}
                     </TableCell>
                     <TableCell align="right">
-                      {prettyPrintSiUnits(conn.avg_byte_rate.tx, "Bytes/s")}
+                      {prettyPrintSiUnits(
+                        conn.rx_stats?.last_min_byte_rate,
+                        "Bytes/s",
+                      )}
                     </TableCell>
                     <TableCell>{renderedKey}</TableCell>
                   </TableRow>

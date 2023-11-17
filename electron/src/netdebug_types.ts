@@ -85,9 +85,33 @@ export type ProbeReportSummary = {
     "raw_reports": (ProbeRoundReport)[];
     "summary": Record<U8, (ProbeReportSummaryNode)[]>;
 };
-export type RxTxRate = {
-    "rx": (F64 | null);
-    "tx": (F64 | null);
+export type U64 = number;
+
+/**
+ * Used for exported data (to UI, storage, etc.)
+ * A summary of a unidirectional flow stats. A flow can be anything: A 5-tuple,
+ * aggregated by IP, domain, whatever
+ */
+export type TrafficStatsSummary = {
+
+    /**
+     * total number of bytes
+     */
+    "bytes": U64;
+
+    /**
+     * total number of packets
+     */
+    "pkts": U64;
+
+    /**
+     * if the flow had enough packets and duration: the maximum
+     * burst we observed (over the configured time window)
+     */
+    "burst_pkt_rate": (F64 | null);
+    "burst_byte_rate": (F64 | null);
+    "last_min_pkt_rate": (F64 | null);
+    "last_min_byte_rate": (F64 | null);
 };
 export type ConnectionMeasurements = {
     "local_hostname": (string | null);
@@ -115,10 +139,8 @@ export type ConnectionMeasurements = {
     "four_way_close_done": boolean;
     "start_tracking_time_ns": F64;
     "last_packet_time_ns": F64;
-    "avg_byte_rate": RxTxRate;
-    "avg_packet_rate": RxTxRate;
-    "max_burst_byte_rate": RxTxRate;
-    "max_burst_packet_rate": RxTxRate;
+    "rx_stats"?: TrafficStatsSummary;
+    "tx_stats"?: TrafficStatsSummary;
 };
 export type I64 = number;
 export type DnsTrackerEntry = {

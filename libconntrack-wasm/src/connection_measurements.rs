@@ -6,13 +6,8 @@ use common_wasm::ProbeReportSummary;
 use serde::{Deserialize, Serialize};
 use typescript_type_def::TypeDef;
 
+use crate::traffic_stats::TrafficStatsSummary;
 use crate::IpProtocol;
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
-pub struct RxTxRate {
-    pub rx: Option<f64>,
-    pub tx: Option<f64>,
-}
 
 /***
  * The `struct ConnectionMeasurements` contains only the derived connection state
@@ -49,10 +44,10 @@ pub struct ConnectionMeasurements {
     #[type_def(type_of = "f64")]
     #[serde(with = "ts_nanoseconds", rename = "last_packet_time_ns")]
     pub last_packet_time: DateTime<Utc>, // time tracker: last saw a packet
-    pub avg_byte_rate: RxTxRate,
-    pub avg_packet_rate: RxTxRate,
-    pub max_burst_byte_rate: RxTxRate,
-    pub max_burst_packet_rate: RxTxRate,
+    #[serde(default)]
+    pub rx_stats: TrafficStatsSummary,
+    #[serde(default)]
+    pub tx_stats: TrafficStatsSummary,
 }
 
 impl ConnectionMeasurements {

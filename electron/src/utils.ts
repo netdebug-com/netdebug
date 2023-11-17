@@ -31,7 +31,7 @@ export function prettyPrintSiUnits(
   x: number | null,
   unitSuffix: string,
 ): string {
-  if (x === null) {
+  if (x === null || x === undefined) {
     return "None";
   }
   const opts = {
