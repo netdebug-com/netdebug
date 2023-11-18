@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { ConnectionMeasurements } from "../netdebug_types";
 import {
+  connKeyToStr,
   headerStyle,
   headerStyleWithWidth,
   prettyPrintSiUnits,
@@ -14,15 +15,6 @@ import TableCell from "@mui/material/TableCell";
 import { SwitchHelper } from "../SwitchHelper";
 import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 
-// build a unique connection key, using the same fields the
-// rust logic uses.
-function getUniqueConnKey(conn: ConnectionMeasurements) {
-  return (
-    `${conn.ip_proto}-${conn.local_ip}:${conn.local_l4_port}` +
-    `-[${conn.remote_ip}]:${conn.remote_l4_port}`
-  );
-}
-
 // build a connection key for displaying in the table
 // This key might not be unique. E.g., two different local IPs could
 // have the same local port and remote pair.
@@ -33,8 +25,8 @@ function getConnKeyForDisplay(conn: ConnectionMeasurements) {
   const remote =
     conn.remote_hostname !== null
       ? conn.remote_hostname
-      : `[${conn.remote_ip}]`;
-  return `${conn.ip_proto} :${conn.local_l4_port} --> ${remote}:${conn.remote_l4_port}`;
+      : `[${conn.key.remote_ip}]`;
+  return `${conn.key.ip_proto} ${conn.key.local_l4_port} --> ${remote}:${conn.key.remote_l4_port}`;
 }
 
 function connSortFn(a: ConnectionMeasurements, b: ConnectionMeasurements) {
@@ -98,8 +90,8 @@ const Flows: React.FC = () => {
               .sort(connSortFn)
               .filter((conn) => {
                 return (
-                  (showTcp && conn.ip_proto == "TCP") ||
-                  (showUdp && conn.ip_proto == "UDP")
+                  (showTcp && conn.key.ip_proto == "TCP") ||
+                  (showUdp && conn.key.ip_proto == "UDP")
                 );
               })
               .map((conn) => {
@@ -119,7 +111,7 @@ const Flows: React.FC = () => {
                   displayedKey
                 );
                 return (
-                  <TableRow key={getUniqueConnKey(conn)}>
+                  <TableRow key={connKeyToStr(conn.key)}>
                     <TableCell>{app}</TableCell>
                     <TableCell align="right">
                       {prettyPrintSiUnits(

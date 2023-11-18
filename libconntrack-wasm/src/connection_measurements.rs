@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::IpAddr};
+use std::collections::HashMap;
 
 use chrono::serde::ts_nanoseconds;
 use chrono::{DateTime, Utc};
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use typescript_type_def::TypeDef;
 
 use crate::traffic_stats::TrafficStatsSummary;
-use crate::IpProtocol;
+use crate::ConnectionKey;
 
 /***
  * The `struct ConnectionMeasurements` contains only the derived connection state
@@ -18,15 +18,9 @@ use crate::IpProtocol;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
 pub struct ConnectionMeasurements {
+    pub key: ConnectionKey,
     pub local_hostname: Option<String>,
-    #[type_def(type_of = "String")]
-    pub local_ip: IpAddr,
-    pub local_l4_port: u16,
     pub remote_hostname: Option<String>,
-    #[type_def(type_of = "String")]
-    pub remote_ip: IpAddr,
-    pub remote_l4_port: u16,
-    pub ip_proto: IpProtocol,
     pub probe_report_summary: ProbeReportSummary,
     pub user_annotation: Option<String>, // an human supplied comment on this connection
     pub user_agent: Option<String>, // when created via a web request, store the user-agent header
@@ -54,19 +48,19 @@ impl ConnectionMeasurements {
     pub fn get_five_tuple_string(&self) -> String {
         format!(
             "{} {} ({} :: {}) --> {} ({} :: {})",
-            self.ip_proto,
+            self.key.ip_proto,
             self.local_hostname
                 .clone()
                 .or(Some("-".to_string()))
                 .unwrap(),
-            self.local_ip,
-            self.local_l4_port,
+            self.key.local_ip,
+            self.key.local_l4_port,
             self.remote_hostname
                 .clone()
                 .or(Some("-".to_string()))
                 .unwrap(),
-            self.remote_ip,
-            self.remote_l4_port
+            self.key.remote_ip,
+            self.key.remote_l4_port
         )
     }
 }

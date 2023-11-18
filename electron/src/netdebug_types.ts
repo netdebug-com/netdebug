@@ -12,6 +12,13 @@ export type U8 = number;
 export type IpProtocol = ("ICMP" | "TCP" | "UDP" | "ICMP6" | {
     "Other": U8;
 });
+export type ConnectionKey = {
+    "local_ip": string;
+    "remote_ip": string;
+    "local_l4_port": U16;
+    "remote_l4_port": U16;
+    "ip_proto": IpProtocol;
+};
 export type F64 = number;
 export type ProbeReportEntry = ({
     "RouterReplyFound": {
@@ -114,13 +121,9 @@ export type TrafficStatsSummary = {
     "last_min_byte_rate": (F64 | null);
 };
 export type ConnectionMeasurements = {
+    "key": ConnectionKey;
     "local_hostname": (string | null);
-    "local_ip": string;
-    "local_l4_port": U16;
     "remote_hostname": (string | null);
-    "remote_ip": string;
-    "remote_l4_port": U16;
-    "ip_proto": IpProtocol;
     "probe_report_summary": ProbeReportSummary;
     "user_annotation": (string | null);
     "user_agent": (string | null);

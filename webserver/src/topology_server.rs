@@ -163,7 +163,7 @@ mod test {
     // Appropriated from the original storage-server code
     type TestRes = Result<(), Box<dyn std::error::Error>>;
     use chrono::Utc;
-    use libconntrack_wasm::traffic_stats::TrafficStatsSummary;
+    use libconntrack_wasm::{traffic_stats::TrafficStatsSummary, ConnectionKey};
 
     use super::*;
 
@@ -171,12 +171,14 @@ mod test {
         // generate some fake data
         ConnectionMeasurements {
             local_hostname: Some("foo".to_string()),
-            local_ip: IpAddr::from_str("1.2.3.4").unwrap(),
-            local_l4_port: 1111,
+            key: ConnectionKey {
+                local_ip: IpAddr::from_str("1.2.3.4").unwrap(),
+                local_l4_port: 1111,
+                remote_ip: IpAddr::from_str("5.6.7.8").unwrap(),
+                remote_l4_port: 2222,
+                ip_proto: libconntrack_wasm::IpProtocol::TCP,
+            },
             remote_hostname: Some("bar".to_string()),
-            remote_ip: IpAddr::from_str("5.6.7.8").unwrap(),
-            remote_l4_port: 2222,
-            ip_proto: libconntrack_wasm::IpProtocol::TCP,
             probe_report_summary: common_wasm::ProbeReportSummary::new(),
             user_annotation: None,
             user_agent: None,

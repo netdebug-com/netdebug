@@ -1,6 +1,7 @@
 // check how long it's been since our last message and send now or later
 
 import { MutableRefObject } from "react";
+import { ConnectionKey } from "./netdebug_types";
 
 // depending on our SLAs
 export function periodic_with_sla(
@@ -88,6 +89,15 @@ export function formatValue(
   } else {
     return val.toString();
   }
+}
+
+// build a unique connection key, using the same fields the
+// rust logic uses.
+export function connKeyToStr(key: ConnectionKey) {
+  return (
+    `${key.ip_proto}-[${key.local_ip}]:${key.local_l4_port}` +
+    `-[${key.remote_ip}]:${key.remote_l4_port}`
+  );
 }
 
 // External style sheets are for loser...
