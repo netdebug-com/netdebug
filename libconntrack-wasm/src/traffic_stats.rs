@@ -148,7 +148,7 @@ pub struct BandwidthHistory {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
-pub struct BidirBandwidthStatsHistory {
+pub struct BidirBandwidthHistory {
     pub rx: BandwidthHistory,
     pub tx: BandwidthHistory,
 }
@@ -335,18 +335,35 @@ impl BidirectionalStats {
         self.rx.as_mut().map(|s| s.advance_time(now));
     }
 
-    pub fn tx_stats_summary(&mut self, now: DateTime<Utc>) -> TrafficStatsSummary {
-        self.tx
-            .as_mut()
+    fn to_stats_summary(s: &mut Option<TrafficStats>, now: DateTime<Utc>) -> TrafficStatsSummary {
+        s.as_mut()
             .map(|s| s.as_stats_summary(now))
             .unwrap_or_default()
     }
 
+    pub fn tx_stats_summary(&mut self, now: DateTime<Utc>) -> TrafficStatsSummary {
+        Self::to_stats_summary(&mut self.tx, now)
+    }
+
     pub fn rx_stats_summary(&mut self, now: DateTime<Utc>) -> TrafficStatsSummary {
-        self.rx
-            .as_mut()
-            .map(|s| s.as_stats_summary(now))
-            .unwrap_or_default()
+        Self::to_stats_summary(&mut self.rx, now)
+    }
+
+    fn to_bandwidth_history(
+        s: &mut Option<TrafficStats>,
+        burst_time_window: Duration,
+        now: DateTime<Utc>,
+    ) -> BandwidthHistory {
+        s.as_mut()
+            .map(|s| s.as_bandwidth_history(now))
+            .unwrap_or_else(|| TrafficStats::new(now, burst_time_window).as_bandwidth_history(now))
+    }
+
+    pub fn as_bidir_bandwidth_history(&mut self, now: DateTime<Utc>) -> BidirBandwidthHistory {
+        BidirBandwidthHistory {
+            rx: Self::to_bandwidth_history(&mut self.rx, self.burst_time_window, now),
+            tx: Self::to_bandwidth_history(&mut self.tx, self.burst_time_window, now),
+        }
     }
 }
 
