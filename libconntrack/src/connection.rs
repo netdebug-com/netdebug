@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     num::Wrapping,
 };
 
@@ -12,7 +12,7 @@ use common_wasm::{
 
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{
-    aggregate_counters::AggregateCounterKind, traffic_stats::BidirectionalStats, DnsTrackerEntry,
+    aggregate_counters::AggregateCounterKind, traffic_stats::BidirectionalStats, ConnectionKey,
     IpProtocol,
 };
 #[cfg(not(test))]
@@ -30,102 +30,66 @@ use crate::{
     in_band_probe::ProbeMessage,
     owned_packet::OwnedParsedPacket,
     prober_helper::ProberHelper,
-    utils::{self, calc_rtt_ms, etherparse_ipheaders2ipaddr, timestamp_to_ms, PerfMsgCheck},
+    utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timestamp_to_ms, PerfMsgCheck},
 };
 
-const MAX_BURST_RATE_TIME_WINDOW_MILLIS: u64 = 10;
+pub const MAX_BURST_RATE_TIME_WINDOW_MILLIS: u64 = 10;
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct ConnectionKey {
-    pub local_ip: IpAddr,
-    pub remote_ip: IpAddr,
-    pub local_l4_port: u16,
-    pub remote_l4_port: u16,
-    pub ip_proto: u8,
-}
+/**
+ * Create a ConnectionKey from a remote socket addr and the global context
+ *
+ * NOTE: this code will not work in WASM b/c of the udp call
+ */
+pub async fn connection_key_from_remote_sockaddr(
+    local_l4_port: u16,
+    addr: &SocketAddr,
+    ip_proto: u8,
+) -> ConnectionKey {
+    // Annoying - it turns out it's hard in Warp to figure out which local IP a given
+    // connection is talking to - this technique should be close, but might
+    // have problems with funky routing tables, e.g., where the packets
+    // are coming in one interface but going out another
 
-impl std::fmt::Display for ConnectionKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let proto_desc = utils::ip_proto_to_string(self.ip_proto);
-        write!(
-            f,
-            "{} [{}]::{} --> [{}]::{} ",
-            proto_desc, self.local_ip, self.local_l4_port, self.remote_ip, self.remote_l4_port,
-        )
+    let remote_ip = addr.ip();
+    let local_ip = crate::utils::remote_ip_to_local(remote_ip).unwrap();
+
+    ConnectionKey {
+        local_ip,
+        remote_ip,
+        local_l4_port,
+        remote_l4_port: addr.port(),
+        ip_proto: IpProtocol::from_wire(ip_proto),
     }
 }
 
-impl ConnectionKey {
-    /**
-     * Create a ConnectionKey from a remote socket addr and the global context
-     *
-     * NOTE: this code will not work in WASM b/c of the udp call
-     */
-    pub async fn new(local_l4_port: u16, addr: &SocketAddr, ip_proto: u8) -> Self {
-        // Annoying - it turns out it's hard in Warp to figure out which local IP a given
-        // connection is talking to - this technique should be close, but might
-        // have problems with funky routing tables, e.g., where the packets
-        // are coming in one interface but going out another
-
-        let remote_ip = addr.ip();
-        let local_ip = crate::utils::remote_ip_to_local(remote_ip).unwrap();
-
-        ConnectionKey {
-            local_ip,
-            remote_ip,
-            local_l4_port,
-            remote_l4_port: addr.port(),
-            ip_proto,
-        }
-    }
-
-    pub fn from_protocol_socket_info(proto_info: &ProtocolSocketInfo) -> Self {
-        match proto_info {
-            ProtocolSocketInfo::Tcp(tcp) => {
-                if tcp.local_addr != tcp.remote_addr {
-                    ConnectionKey {
-                        local_ip: tcp.local_addr,
-                        remote_ip: tcp.remote_addr,
-                        local_l4_port: tcp.local_port,
-                        remote_l4_port: tcp.remote_port,
-                        ip_proto: etherparse::IpNumber::Tcp as u8,
-                    }
-                } else {
-                    // this is commonly local_ip=remote_ip=localhost
-                    // so sort the ports to create a cannoical key
-                    let local_port = std::cmp::min(tcp.local_port, tcp.remote_port);
-                    let remote_port = std::cmp::max(tcp.local_port, tcp.remote_port);
-                    ConnectionKey {
-                        local_ip: tcp.local_addr,
-                        remote_ip: tcp.remote_addr,
-                        local_l4_port: local_port,
-                        remote_l4_port: remote_port,
-                        ip_proto: etherparse::IpNumber::Tcp as u8,
-                    }
+pub fn connection_key_from_protocol_socket_info(proto_info: &ProtocolSocketInfo) -> ConnectionKey {
+    match proto_info {
+        ProtocolSocketInfo::Tcp(tcp) => {
+            if tcp.local_addr != tcp.remote_addr {
+                ConnectionKey {
+                    local_ip: tcp.local_addr,
+                    remote_ip: tcp.remote_addr,
+                    local_l4_port: tcp.local_port,
+                    remote_l4_port: tcp.remote_port,
+                    ip_proto: IpProtocol::TCP,
+                }
+            } else {
+                // this is commonly local_ip=remote_ip=localhost
+                // so sort the ports to create a cannoical key
+                let local_port = std::cmp::min(tcp.local_port, tcp.remote_port);
+                let remote_port = std::cmp::max(tcp.local_port, tcp.remote_port);
+                ConnectionKey {
+                    local_ip: tcp.local_addr,
+                    remote_ip: tcp.remote_addr,
+                    local_l4_port: local_port,
+                    remote_l4_port: remote_port,
+                    ip_proto: IpProtocol::TCP,
                 }
             }
-            ProtocolSocketInfo::Udp(_udp) => {
-                panic!("Not supported for UDP yet - check out https://github.com/ohadravid/netstat2-rs/issues/11")
-            }
         }
-    }
-
-    pub fn to_string_with_dns(&self, dns_cache: &HashMap<IpAddr, DnsTrackerEntry>) -> String {
-        let local = if let Some(entry) = dns_cache.get(&self.local_ip) {
-            entry.hostname.clone()
-        } else {
-            format!("[{}]", self.local_ip)
-        };
-        let remote = if let Some(entry) = dns_cache.get(&self.remote_ip) {
-            entry.hostname.clone()
-        } else {
-            format!("[{}]", self.remote_ip)
-        };
-        let proto_desc = utils::ip_proto_to_string(self.ip_proto);
-        format!(
-            "{} {}::{} --> {}::{} ",
-            proto_desc, local, self.local_l4_port, remote, self.remote_l4_port,
-        )
+        ProtocolSocketInfo::Udp(_udp) => {
+            panic!("Not supported for UDP yet - check out https://github.com/ohadravid/netstat2-rs/issues/11")
+        }
     }
 }
 
@@ -972,7 +936,7 @@ impl Connection {
             remote_hostname: self.remote_hostname.clone(),
             remote_ip: self.connection_key.remote_ip,
             remote_l4_port: self.connection_key.remote_l4_port,
-            ip_proto: IpProtocol::from_wire(self.connection_key.ip_proto),
+            ip_proto: self.connection_key.ip_proto,
             probe_report_summary: self.probe_report_summary.clone(),
             user_annotation: self.user_annotation.clone(),
             user_agent: self.user_agent.clone(),
@@ -987,6 +951,7 @@ impl Connection {
 
 #[cfg(test)]
 pub mod test {
+    use std::net::IpAddr;
     use std::str::FromStr;
 
     use super::*;

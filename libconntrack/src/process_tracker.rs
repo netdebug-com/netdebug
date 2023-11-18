@@ -3,6 +3,7 @@ use std::{collections::HashMap, time::Instant};
 
 use chrono::Duration;
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units};
+use libconntrack_wasm::{ConnectionKey, IpProtocol};
 #[cfg(not(test))]
 use log::{debug, warn};
 use netstat2::{AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo};
@@ -12,7 +13,7 @@ use std::{println as debug, println as warn};
 use tokio::sync::mpsc::channel;
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 
-use crate::connection::ConnectionKey;
+use crate::connection::connection_key_from_protocol_socket_info;
 use crate::connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender};
 use crate::utils::{make_perf_check_stats, PerfCheckStats, PerfMsgCheck};
 use crate::{perf_check, send_or_log_async, send_or_log_sync};
@@ -162,7 +163,7 @@ impl ProcessTracker {
     }
 
     fn lookup_from_cache(&self, key: &ConnectionKey) -> Option<ProcessTrackerEntry> {
-        if key.ip_proto == etherparse::IpNumber::Tcp as u8 {
+        if key.ip_proto == IpProtocol::from_wire(etherparse::IpNumber::Tcp as u8) {
             self.tcp_cache.get(key).map(|entry| entry.clone())
         } else {
             // Udp is stored only by local IP + local Port - try looking that up
@@ -234,7 +235,7 @@ impl ProcessTracker {
                     if tcp_si.remote_port != 0 {
                         // don't record sockets that are just listenning
                         let key =
-                            ConnectionKey::from_protocol_socket_info(&si.protocol_socket_info);
+                            connection_key_from_protocol_socket_info(&si.protocol_socket_info);
                         if new_tcp_cache.contains_key(&key) && associated_apps.is_empty() {
                             debug!(
                                 "process_tracker:: Skipping stray duplicate update!?: {} -- {:?}",
@@ -409,7 +410,7 @@ mod test {
             remote_ip: server_addr.ip(),
             local_l4_port,
             remote_l4_port,
-            ip_proto: etherparse::IpNumber::Tcp as u8,
+            ip_proto: IpProtocol::TCP,
         };
         //
 
@@ -448,7 +449,7 @@ mod test {
             remote_ip,
             local_l4_port: 3333,
             remote_l4_port: 4444,
-            ip_proto: IpProtocol::TCP.to_wire(),
+            ip_proto: IpProtocol::TCP,
         };
         assert_eq!(process_tracker.lookup_queue.len(), 0);
         // cache is empty, so lookup should queue

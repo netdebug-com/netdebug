@@ -13,7 +13,7 @@ use common_wasm::{
 
 use libconntrack_wasm::{
     aggregate_counters::{AggregateCounterKind, TrafficCounters},
-    ConnectionMeasurements,
+    ConnectionKey, ConnectionMeasurements,
 };
 #[cfg(not(test))]
 use log::{debug, warn};
@@ -26,7 +26,7 @@ use std::{println as debug, println as warn}; // Workaround to use prinltn! for 
 
 use crate::{
     analyze::analyze,
-    connection::{Connection, ConnectionKey},
+    connection::Connection,
     dns_tracker::DnsTrackerMessage,
     in_band_probe::ProbeMessage,
     owned_packet::{ConnectionKeyError, OwnedParsedPacket},
