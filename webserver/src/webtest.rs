@@ -19,6 +19,7 @@
  */
 use chrono::Utc;
 use common_wasm::{analysis_messages::AnalysisInsights, Message, ProbeRoundReport};
+use libconntrack_wasm::ConnectionKey;
 use std::{
     net::{IpAddr, SocketAddr},
     time::Duration,
@@ -29,7 +30,7 @@ use warp::ws::{self, WebSocket};
 use crate::context::Context;
 use futures_util::{stream::SplitStream, SinkExt, StreamExt};
 use libconntrack::{
-    connection::ConnectionKey,
+    connection::connection_key_from_remote_sockaddr,
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
     utils::PerfMsgCheck,
 };
@@ -69,7 +70,14 @@ pub async fn handle_websocket(
             let a = unmap_mapped_v4(a);
             (
                 a.to_string(),
-                Some(ConnectionKey::new(local_l4_port, &a, etherparse::ip_number::TCP).await),
+                Some(
+                    connection_key_from_remote_sockaddr(
+                        local_l4_port,
+                        &a,
+                        etherparse::ip_number::TCP,
+                    )
+                    .await,
+                ),
             )
         }
     };

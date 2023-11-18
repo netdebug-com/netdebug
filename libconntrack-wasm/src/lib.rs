@@ -1,8 +1,11 @@
 pub mod aggregate_counters;
+pub mod connection_key;
 pub mod connection_measurements;
 pub mod traffic_stats;
 
+pub use connection_key::*;
 pub use connection_measurements::*;
+pub use traffic_stats::*;
 
 use std::fmt::Display;
 
@@ -93,7 +96,9 @@ pub fn pretty_print_si_units(x: Option<f64>, units: &str) -> String {
  * ///  assert_eq!(TCP, IpProtocol::from_wire(TCP.to_wire()));
  */
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TypeDef)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TypeDef,
+)]
 pub enum IpProtocol {
     ICMP,
     TCP,

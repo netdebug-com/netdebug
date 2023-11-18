@@ -5,13 +5,10 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use etherparse::{
-    Icmpv4Header, Icmpv6Header, IpHeader, IpNumber, TcpHeader, TransportHeader, UdpHeader,
-};
+use etherparse::{Icmpv4Header, Icmpv6Header, IpHeader, TcpHeader, TransportHeader, UdpHeader};
+use libconntrack_wasm::{ConnectionKey, IpProtocol};
 use log::warn;
 use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
-
-use crate::connection::ConnectionKey;
 
 /// Errors when trying to create a `ConnectionKey` from a OwnedParsedPacket
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,7 +266,7 @@ impl OwnedParsedPacket {
                             remote_ip,
                             local_l4_port,
                             remote_l4_port,
-                            ip_proto: IpNumber::Tcp as u8,
+                            ip_proto: IpProtocol::TCP,
                         },
                         source_is_local,
                     ))
@@ -280,7 +277,7 @@ impl OwnedParsedPacket {
                             remote_ip,
                             remote_l4_port: local_l4_port, // swap b/c we guessed backwards
                             local_l4_port: remote_l4_port,
-                            ip_proto: IpNumber::Tcp as u8,
+                            ip_proto: IpProtocol::TCP,
                         },
                         false,
                     ))
@@ -298,7 +295,7 @@ impl OwnedParsedPacket {
                         remote_ip,
                         local_l4_port,
                         remote_l4_port,
-                        ip_proto: IpNumber::Udp as u8,
+                        ip_proto: IpProtocol::UDP,
                     },
                     source_is_local, // TODO: figure out UDP + src_ip == dst_ip case
                 ))
@@ -750,7 +747,7 @@ mod test {
         let local_addrs = HashSet::from_iter([IpAddr::from_str("192.168.1.1").unwrap()]);
         let (conn_key, src_is_local) = pkt.to_connection_key(&local_addrs).unwrap();
         assert!(src_is_local);
-        assert_eq!(conn_key.ip_proto, etherparse::ip_number::UDP);
+        assert_eq!(conn_key.ip_proto, IpProtocol::UDP);
         assert_eq!(conn_key.local_l4_port, 123);
         assert_eq!(conn_key.remote_l4_port, 443);
         assert_eq!(conn_key.local_ip, IpAddr::from_str("192.168.1.1").unwrap());
@@ -760,7 +757,7 @@ mod test {
         let local_addrs = HashSet::from_iter([IpAddr::from_str("192.168.1.2").unwrap()]);
         let (conn_key, src_is_local) = pkt.to_connection_key(&local_addrs).unwrap();
         assert!(!src_is_local);
-        assert_eq!(conn_key.ip_proto, etherparse::ip_number::UDP);
+        assert_eq!(conn_key.ip_proto, IpProtocol::UDP);
         assert_eq!(conn_key.local_l4_port, 443);
         assert_eq!(conn_key.remote_l4_port, 123);
         assert_eq!(conn_key.local_ip, IpAddr::from_str("192.168.1.2").unwrap());
@@ -790,7 +787,7 @@ mod test {
         let local_addrs = HashSet::from_iter([IpAddr::V6(src)]);
         let (conn_key, src_is_local) = pkt.to_connection_key(&local_addrs).unwrap();
         assert!(src_is_local);
-        assert_eq!(conn_key.ip_proto, etherparse::ip_number::TCP);
+        assert_eq!(conn_key.ip_proto, IpProtocol::TCP);
         assert_eq!(conn_key.local_l4_port, 123);
         assert_eq!(conn_key.remote_l4_port, 443);
         assert_eq!(conn_key.local_ip, IpAddr::V6(src));
@@ -800,7 +797,7 @@ mod test {
         let local_addrs = HashSet::from_iter([IpAddr::V6(dst)]);
         let (conn_key, src_is_local) = pkt.to_connection_key(&local_addrs).unwrap();
         assert!(!src_is_local);
-        assert_eq!(conn_key.ip_proto, etherparse::ip_number::TCP);
+        assert_eq!(conn_key.ip_proto, IpProtocol::TCP);
         assert_eq!(conn_key.local_l4_port, 443);
         assert_eq!(conn_key.remote_l4_port, 123);
         assert_eq!(conn_key.local_ip, IpAddr::V6(dst));

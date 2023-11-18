@@ -13,10 +13,9 @@ use tokio::{
 };
 
 use chrono::{DateTime, Duration, Utc};
-use libconntrack_wasm::DnsTrackerEntry;
+use libconntrack_wasm::{ConnectionKey, DnsTrackerEntry};
 
 use crate::{
-    connection::ConnectionKey,
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
     send_or_log_sync,
     utils::PerfMsgCheck,
@@ -714,6 +713,7 @@ mod test {
     use common_wasm::timeseries_stats::ExportedStatRegistry;
     use dns_parser::QueryType;
     use etherparse::TransportHeader;
+    use libconntrack_wasm::IpProtocol;
     use tokio::sync::mpsc::channel;
 
     use crate::{
@@ -747,7 +747,7 @@ mod test {
             remote_ip: IpAddr::from_str("8.8.8.8").unwrap(),
             local_l4_port: 1234,
             remote_l4_port: 53,
-            ip_proto: 6,
+            ip_proto: IpProtocol::TCP,
         };
         let t0 = Utc.timestamp_opt(0, 0).unwrap();
         dns_tracker
@@ -1033,7 +1033,7 @@ mod test {
             remote_ip: IpAddr::from_str("8.8.8.8").unwrap(),
             local_l4_port: 1234,
             remote_l4_port: 53,
-            ip_proto: 6,
+            ip_proto: IpProtocol::TCP,
         };
         let timestamp = DateTime::<Utc>::UNIX_EPOCH;
         dns_tracker
@@ -1082,7 +1082,7 @@ mod test {
             remote_ip: IpAddr::from_str("8.8.8.8").unwrap(),
             local_l4_port: 1234,
             remote_l4_port: 53,
-            ip_proto: 6,
+            ip_proto: IpProtocol::TCP,
         };
         dns_tracker
             .lookup_for_connection_tracker(dns_ptr_ip, key.clone(), tx)

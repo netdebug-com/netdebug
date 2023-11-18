@@ -57,18 +57,6 @@ pub fn timestamp_to_ms(ts: DateTime<Utc>) -> f64 {
     ts.timestamp_micros() as f64 / 1000.
 }
 
-// really should exist in some library somewhere
-pub fn ip_proto_to_string(ip_proto: u8) -> String {
-    use etherparse::IpNumber::*;
-    if ip_proto == Tcp as u8 {
-        String::from("Tcp")
-    } else if ip_proto == Udp as u8 {
-        String::from("Udp")
-    } else {
-        format!("ip_proto={}", ip_proto)
-    }
-}
-
 pub fn packet_is_tcp_rst(packet: &OwnedParsedPacket) -> bool {
     if let Some(rst) = &(packet.transport)
         .as_ref()
