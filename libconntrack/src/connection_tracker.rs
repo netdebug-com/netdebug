@@ -1246,9 +1246,9 @@ pub mod test {
             StoreConnectionMeasurements {
                 connection_measurements: m,
             } => {
-                assert_eq!(m.local_ip, IpAddr::from_str("192.168.1.238").unwrap());
-                assert_eq!(m.remote_ip, IpAddr::from_str("34.121.150.27").unwrap());
-                assert_eq!(m.remote_l4_port, 443);
+                assert_eq!(m.key.local_ip, IpAddr::from_str("192.168.1.238").unwrap());
+                assert_eq!(m.key.remote_ip, IpAddr::from_str("34.121.150.27").unwrap());
+                assert_eq!(m.key.remote_l4_port, 443);
             }
             _wut => panic!("Expected StoreConnectionMeasurements, got {:?}", _wut),
         }

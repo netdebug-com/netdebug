@@ -112,10 +112,7 @@ fn visit_all_connections<F: FnMut(&String, &ConnectionMeasurements)>(
             stmt.query_and_then::<(String, ConnectionMeasurements), BoxError, _, _>([], |row| {
                 let json = row.get::<usize, String>(1)?;
                 let ts = row.get::<usize, String>(0)?;
-                Ok((
-                    ts,
-                    serde_json::from_str::<ConnectionMeasurements>(&json).unwrap(),
-                ))
+                Ok((ts, serde_json::from_str::<ConnectionMeasurements>(&json)?))
             })?;
         for entry in entries {
             let (ts, entry) = entry?;
@@ -197,8 +194,7 @@ fn run_dot(
     if no_filter {
         visit_all_connections(db_files, |_ts, connection| {
             process_connection(&mut graph, connection);
-        })
-        .unwrap();
+        })?;
     } else {
         visit_all_connections(db_files, |ts, connection| {
             filter_weird_and_routerless_connections(
@@ -208,11 +204,10 @@ fn run_dot(
                     process_connection(&mut graph, connection);
                 },
             );
-        })
-        .unwrap();
+        })?;
     }
     if print_graph {
-        graph.print_dot(&mut std::io::stdout()).unwrap();
+        graph.print_dot(&mut std::io::stdout())?;
     }
     if print_stats {
         graph.print_stats();
@@ -222,12 +217,12 @@ fn run_dot(
 
 fn process_connection(graph: &mut TheGraph, entry: &ConnectionMeasurements) {
     // FIXME: this ingores some legit IPs as well for now. But we'll survive
-    if entry.remote_ip.to_string().starts_with("192.168.")
-        || entry.remote_ip.to_string().starts_with("fe80::")
+    if entry.key.remote_ip.to_string().starts_with("192.168.")
+        || entry.key.remote_ip.to_string().starts_with("fe80::")
     {
         return;
     }
-    if entry.remote_ip.to_string().contains(":") {
+    if entry.key.remote_ip.to_string().contains(":") {
         // lets skip IPv6 for now
         return;
     }
@@ -250,7 +245,7 @@ fn process_connection(graph: &mut TheGraph, entry: &ConnectionMeasurements) {
                     path_entry.is_endhost = true;
                     // For endhosts, probe.sender_ip is None. So we need to use
                     // remote_ip
-                    path_entry.ip = Some(entry.remote_ip.to_string().clone());
+                    path_entry.ip = Some(entry.key.remote_ip.to_string().clone());
                 }
                 _ => (),
             }
@@ -581,15 +576,16 @@ fn list_db_contents(db_files: &Vec<String>) {
     visit_all_connections(db_files, |_ts, connection| {
         let mut found_endhost = false;
         for probe_round in &connection.probe_report_summary.raw_reports {
+            // TODO: maybe use ConnectionMeasurment::get_five_tuple_string instead?
             println!(
                 "Connection: {} {:?} ({}:{}) --> {:?} ({}:{})",
-                connection.ip_proto,
+                connection.key.ip_proto,
                 connection.local_hostname,
-                connection.local_ip,
-                connection.local_l4_port,
+                connection.key.local_ip,
+                connection.key.local_l4_port,
                 connection.remote_hostname,
-                connection.remote_ip,
-                connection.remote_l4_port
+                connection.key.remote_ip,
+                connection.key.remote_l4_port
             );
 
             for ttl in probe_round.probes.keys().sorted() {
@@ -603,7 +599,7 @@ fn list_db_contents(db_files: &Vec<String>) {
                 let ip = if let Some(ip) = probe.get_ip() {
                     ip.to_string()
                 } else if matches!(probe, ProbeReportEntry::EndHostReplyFound { .. }) {
-                    connection.remote_ip.to_string()
+                    connection.key.remote_ip.to_string()
                 } else {
                     "-".to_string()
                 };

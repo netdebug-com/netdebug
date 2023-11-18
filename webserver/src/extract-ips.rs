@@ -31,7 +31,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         })?;
         for entry in entries {
             let entry = entry?;
-            remote_ips.insert(entry.remote_ip);
+            remote_ips.insert(entry.key.remote_ip);
             for probe_round in entry.probe_report_summary.raw_reports {
                 for (_ttl, probe) in &probe_round.probes {
                     if let Some(sender_ip) = probe.get_ip().clone() {
