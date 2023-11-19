@@ -7,6 +7,7 @@ use std::{sync::Arc, time::Duration};
 
 use bandwidth_graph::BandwidthGraph;
 use dns_tracker::DnsTracker;
+use libconntrack_wasm::aggregate_counters::TrafficCounters;
 use stat_counters::StatCounters;
 use tabs::{Tab, Tabs, TabsContext};
 use web_sys::{MessageEvent, WebSocket};
@@ -114,8 +115,8 @@ fn handle_ws_message(e: MessageEvent, ws: WebSocket, tabs: Tabs) -> Result<(), J
                 VersionCheck(ver) => handle_version_check(ver),
                 DumpFlowsReply(_) => todo!(),
                 DumpDnsCache(cache) => dns_tracker::handle_dump_dns_cache_reply(cache, ws, tabs),
-                DumpAggregateCountersReply(counters) => {
-                    bandwidth_graph::handle_aggregate_counters(counters, ws, tabs)
+                DumpAggregateCountersReply(_counters) => {
+                    bandwidth_graph::handle_aggregate_counters(TrafficCounters::new(), ws, tabs)
                 }
                 DumpStatCountersReply(counter_map) => {
                     stat_counters::handle_dump_stat_counters_reply(counter_map, ws, tabs)
