@@ -1,6 +1,9 @@
 name: GitHub Rust CI
 run-name: ${{ github.actor }} GitHub Actions 🚀
-on: [push, pull_request]
+on:
+  pull_request:
+  push:
+    branches: ["main"]
 jobs:
   Explore-GitHub-Actions:
     runs-on: ubuntu-latest
@@ -25,7 +28,7 @@ jobs:
       - name:
           Install libpcap
           # everything after pcap is for tauri to build
-        run: sudo apt-get update && sudo apt-get install -y libpcap-dev libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
       - name: Cargo build
