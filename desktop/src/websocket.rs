@@ -19,12 +19,11 @@ use libconntrack::{
     send_or_log_async, send_or_log_sync,
     utils::PerfMsgCheck,
 };
-use libconntrack_wasm::aggregate_counters::TrafficCounters;
 use log::{debug, info, warn};
 use tokio::sync::mpsc::{self, channel, UnboundedSender};
 use warp::ws::{self, Message, WebSocket};
 
-use desktop_common::{GuiToServerMessages, ServerToGuiMessages};
+use desktop_common::{bidir_bandwidth_to_chartjs, GuiToServerMessages, ServerToGuiMessages};
 
 use crate::topology_client::{TopologyServerMessage, TopologyServerSender};
 
@@ -181,9 +180,10 @@ async fn handle_dump_aggregate_connection_tracker_counters(
             e
         );
     }
-    if let Some(_counters) = reply_rx.recv().await {
+    if let Some(counters) = reply_rx.recv().await {
+        let chartjs_bandwidth = bidir_bandwidth_to_chartjs(counters);
         if let Err(e) = tx.send(ServerToGuiMessages::DumpAggregateCountersReply(
-            TrafficCounters::new(),
+            chartjs_bandwidth,
         )) {
             warn!("Error talking to GUI: {}", e);
         }

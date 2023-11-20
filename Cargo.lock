@@ -108,6 +108,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "approx"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -375,7 +384,7 @@ name = "common-wasm"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "itertools 0.10.5",
+ "itertools",
  "linked-hash-map",
  "serde",
  "serde_json",
@@ -567,7 +576,7 @@ dependencies = [
  "futures",
  "futures-util",
  "indexmap 2.1.0",
- "itertools 0.11.0",
+ "itertools",
  "libconntrack",
  "libconntrack-wasm",
  "log",
@@ -586,6 +595,10 @@ dependencies = [
 name = "desktop_common"
 version = "0.1.0"
 dependencies = [
+ "approx",
+ "chrono",
+ "common-wasm",
+ "itertools",
  "libconntrack-wasm",
  "serde",
  "serde_json",
@@ -1094,15 +1107,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1c173a5686ce8bfa551b3563d0c2170bf24ca44da99c7ca4bfdab5418c3fe57"
@@ -1155,7 +1159,7 @@ dependencies = [
  "etherparse",
  "futures",
  "futures-util",
- "itertools 0.11.0",
+ "itertools",
  "libc",
  "libconntrack-wasm",
  "libproc",
@@ -2456,7 +2460,7 @@ version = "0.1.0"
 dependencies = [
  "common-wasm",
  "console_error_panic_hook",
- "itertools 0.11.0",
+ "itertools",
  "js-sys",
  "serde",
  "serde_json",
@@ -2476,7 +2480,7 @@ dependencies = [
  "console_error_panic_hook",
  "desktop_common",
  "futures",
- "itertools 0.11.0",
+ "itertools",
  "libconntrack-wasm",
  "serde",
  "serde_json",
@@ -2509,7 +2513,7 @@ dependencies = [
  "futures",
  "futures-util",
  "indexmap 2.1.0",
- "itertools 0.11.0",
+ "itertools",
  "libconntrack",
  "libconntrack-wasm",
  "log",

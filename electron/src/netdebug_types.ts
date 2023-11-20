@@ -166,3 +166,43 @@ export type GuiToServerMessages = ({
 } | {
     "WhatsMyIp": [];
 });
+export type ChartJsPoint = {
+
+    /**
+     * x-value. For bandwidth plots this is seconds in the past where the last bucket is `now`, i.e., 0.0
+     * And a value of -2.5 is 2.5secs in the past. (Note these values are all <= 0)
+     */
+    "x": F64;
+
+    /**
+     * y-value. For bandwidth plots this is bit-per-second
+     */
+    "y": F64;
+};
+
+/**
+ * Represents the data for a single bandwidth chart with data arranged for direct plotting
+ * with `chart.js`.
+ */
+export type ChartJsBandwidth = {
+
+    /**
+     * The label of this chart. E.g., `Last 5 Seconds`
+     */
+    "label": string;
+
+    /**
+     * The maximum value of the y axis (which represents bits/s)
+     */
+    "y_max_bps": F64;
+
+    /**
+     * The received / download bandwidth history as chart.js points
+     */
+    "rx": (ChartJsPoint)[];
+
+    /**
+     * The sent / upload bandwidth history as chart.js points
+     */
+    "tx": (ChartJsPoint)[];
+};

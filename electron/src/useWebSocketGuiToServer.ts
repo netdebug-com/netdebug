@@ -32,6 +32,7 @@ export type WebSocketGuiToServerArgs<T> = {
 export function useWebSocketGuiToServer<T>(args: WebSocketGuiToServerArgs<T>) {
   const timeout_id = useRef(null);
   const last_send = useRef(null);
+  const first_time = useRef(true);
 
   const sendRequest = () => {
     const msg = JSON.stringify(args.reqMsgType);
@@ -49,9 +50,11 @@ export function useWebSocketGuiToServer<T>(args: WebSocketGuiToServerArgs<T>) {
       const data = JSON.parse(msg.data);
       console.debug("Got message from websocket: ", Object.keys(data));
       if (args.respMsgType in data) {
-        if (args.autoRefresh) {
+        if (args.autoRefresh || first_time) {
+          first_time.current = false;
           args.responseCb(data[args.respMsgType]);
-          //setFlowEntries(data.DumpFlowsReply);
+        }
+        if (args.autoRefresh) {
           periodic_with_sla(
             args.respMsgType,
             timeout_id,
@@ -61,6 +64,12 @@ export function useWebSocketGuiToServer<T>(args: WebSocketGuiToServerArgs<T>) {
             sendRequest,
           );
         }
+      } else {
+        console.log(
+          "Did not find response type: ",
+          args.respMsgType,
+          " in data",
+        );
       }
     },
 
@@ -76,7 +85,7 @@ export function useWebSocketGuiToServer<T>(args: WebSocketGuiToServerArgs<T>) {
   });
 
   useEffect(() => {
-    if (args.autoRefresh) {
+    if (args.autoRefresh || first_time.current) {
       sendRequest();
     }
     return () => {
