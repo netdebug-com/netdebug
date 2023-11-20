@@ -1,7 +1,6 @@
 use common_wasm::timeseries_stats::ExportedBuckets;
 use libconntrack_wasm::{
-    aggregate_counters::AggregateCounterKind, BidirBandwidthHistory, ConnectionMeasurements,
-    DnsTrackerEntry,
+    AggregateCounterKind, BidirBandwidthHistory, ConnectionMeasurements, DnsTrackerEntry,
 };
 /**
  * Anything in this file must compile for both native rust/x86 AND WASM

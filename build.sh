@@ -15,9 +15,7 @@ fi
 
 cargo build $@
 wasm-pack build --target=web webserver/web-client ${build_opt}
-wasm-pack build --target=web desktop/web-gui ${build_opt}
 # add cargo tauri build here?  or cargo tauri dev?
 
 # Electron hackery
 cp $outpath/desktop electron/extra-resources
-cp -r desktop/web-gui/pkg electron/src/

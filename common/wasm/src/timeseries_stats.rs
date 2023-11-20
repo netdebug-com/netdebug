@@ -43,7 +43,7 @@ impl TimeSource for DateTime<Utc> {
     }
 }
 
-#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CounterBucket {
     pub sum: u64,
     pub max: u64,
@@ -97,23 +97,12 @@ pub type BucketIndex = usize;
  * `BucketedTimeSeries`
  */
 
-#[serde_as]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypeDef)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BucketedTimeSeries<TS>
 where
     TS: TimeSource + Clone + Copy,
 {
-    /**
-     * Instant can't be serialized and has no default, so we can't just skip it.  But we can
-     * make it an Option<Instant> which has a default and just panic if someone tries to update
-     * the timeseries when created_time is None.
-     *
-     * A bit fugly, but I'm moving on to bigger things.
-     */
-    #[serde(skip)]
-    pub created_time: Option<TS>,
-    #[type_def(type_of = "u64")]
-    #[serde_as(as = "serde_with::DurationMicroSeconds<u64>")]
+    pub created_time: TS,
     pub bucket_time_window: Duration,
     pub buckets: Vec<CounterBucket>,
     pub num_buckets: BucketIndex,
@@ -143,7 +132,7 @@ where
         num_buckets: usize,
     ) -> BucketedTimeSeries<TS> {
         BucketedTimeSeries {
-            created_time: Some(created_time),
+            created_time: created_time,
             // store Duration in Micros for faster calcs
             bucket_time_window,
             buckets: vec![CounterBucket::new(); num_buckets],
@@ -162,12 +151,7 @@ where
     /// `now` points tp
     pub fn update_buckets(&mut self, now: TS) -> usize {
         // how much time from system start?
-        let offset_time = TS::sub(
-            now,
-            self.created_time
-                .expect("Can't updated a serialized BucketedTimeSeries"),
-        )
-        .as_micros();
+        let offset_time = TS::sub(now, self.created_time).as_micros();
         // break that down by the time series time window
         // thought about storing bucket_time_window as micros to avoid the conversion here but was premature optimization
         let quantized_time = offset_time / self.bucket_time_window.as_micros();
@@ -267,36 +251,6 @@ where
         entries
     }
 
-    /**
-     * NOTE that this is subtly but critically different from ```CounterBucket::get_max()```
-     *
-     * The former grabs the max value across the counter values that are inserted
-     * while this grabs the max sum across all of the counters.
-     */
-
-    pub fn get_max_bucket(&self) -> u64 {
-        let mut max = 0;
-        for b in &self.buckets {
-            max = b.sum.max(max);
-        }
-        max
-    }
-
-    /****
-     * Average over time, for the the length of the bucket's time
-     */
-
-    pub fn get_avg_per_duration(&self) -> f64 {
-        let sum = self.get_sum() as f64;
-        // has enough time passed that we could have used all of the buckets?
-        if self.last_num_wraps == 0 {
-            // No - compute a partial time
-            sum / self.last_used_bucket as f64
-        } else {
-            sum / self.num_buckets as f64
-        }
-    }
-
     /// Check if we've seen at least one full window (i.e., `num_bucket * time_per_bucket`) of
     /// data-points.
     pub fn full_window_seen(&self) -> bool {
@@ -330,33 +284,6 @@ where
 
     pub fn total_duration(&self) -> Duration {
         return self.bucket_time_window * self.num_buckets as u32;
-    }
-
-    /***
-     * Convert the data in the buckets into a time series of the format
-     * that chartjs expected, e.g.,
-     * # json
-     * [ { x: 10, y: 20 }
-     *   ....
-     * ]
-     *
-     * This involves re-ordering the data so that the most recent data (e.g., current
-     * bucket) is all the way on the right (x=max) and the oldest is all the way on
-     * the left (x= min)
-     */
-
-    pub fn to_chartjs_data(&self, x_scale: usize, y_scale: f64) -> Vec<serde_json::Value> {
-        self.buckets
-            .iter()
-            .enumerate()
-            .map(|(bucket_index, b)| {
-                serde_json::json!({
-                    "y": b.sum as f64 / y_scale,
-                    "x": bucket_index * x_scale
-                }
-                )
-            })
-            .collect()
     }
 }
 
