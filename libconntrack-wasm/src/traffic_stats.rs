@@ -193,8 +193,12 @@ impl TrafficStats {
                 Duration::from_millis(10),
                 500,
             ),
-            last_min: BucketedTimeSeries::new_with_create_time(now, Duration::from_secs(1), 60),
-            last_hour: BucketedTimeSeries::new_with_create_time(now, Duration::from_secs(60), 60),
+            last_min: BucketedTimeSeries::new_with_create_time(
+                now,
+                Duration::from_millis(500),
+                120,
+            ),
+            last_hour: BucketedTimeSeries::new_with_create_time(now, Duration::from_secs(30), 120),
         }
     }
 
@@ -586,18 +590,21 @@ mod test {
         assert_eq!(last_5_sec_pkts.buckets[200..], [1; 300]);
 
         // Last min buckets
-        assert_eq!(last_min_bytes.bucket_time_window, Duration::from_secs(1));
-        assert_eq!(last_min_bytes.buckets[0..57], [0; 57]);
-        assert_eq!(last_min_bytes.buckets[57..60], [10_000; 3]);
-        assert_eq!(last_min_pkts.buckets[0..57], [0; 57]);
-        assert_eq!(last_min_pkts.buckets[57..60], [100; 3]);
+        assert_eq!(
+            last_min_bytes.bucket_time_window,
+            Duration::from_millis(500)
+        );
+        assert_eq!(last_min_bytes.buckets[0..113], [0; 113]);
+        assert_eq!(last_min_bytes.buckets[114..120], [5_000; 6]);
+        assert_eq!(last_min_pkts.buckets[0..113], [0; 113]);
+        assert_eq!(last_min_pkts.buckets[114..120], [50; 6]);
 
         // Last hour buckets
-        assert_eq!(last_hour_bytes.bucket_time_window, Duration::from_secs(60));
+        assert_eq!(last_hour_bytes.bucket_time_window, Duration::from_secs(30));
         assert_eq!(last_hour_bytes.buckets[0..59], [0; 59]);
-        assert_eq!(last_hour_bytes.buckets[59], 30_000);
-        assert_eq!(last_hour_pkts.buckets[0..59], [0; 59]);
-        assert_eq!(last_hour_pkts.buckets[59], 300);
+        assert_eq!(last_hour_bytes.buckets[119], 30_000);
+        assert_eq!(last_hour_pkts.buckets[0..119], [0; 119]);
+        assert_eq!(last_hour_pkts.buckets[119], 300);
 
         // advance time, everything should be 0
         t += Duration::from_secs(4000);
@@ -609,10 +616,10 @@ mod test {
         let last_hour_bytes = hist.byte_buckets.get("Last Hour").unwrap();
         let last_hour_pkts = hist.pkt_buckets.get("Last Hour").unwrap();
         assert_eq!(last_5_sec_bytes.buckets, [0; 500]);
-        assert_eq!(last_min_bytes.buckets, [0; 60]);
-        assert_eq!(last_hour_bytes.buckets, [0; 60]);
+        assert_eq!(last_min_bytes.buckets, [0; 120]);
+        assert_eq!(last_hour_bytes.buckets, [0; 120]);
         assert_eq!(last_5_sec_pkts.buckets, [0; 500]);
-        assert_eq!(last_min_pkts.buckets, [0; 60]);
-        assert_eq!(last_hour_pkts.buckets, [0; 60]);
+        assert_eq!(last_min_pkts.buckets, [0; 120]);
+        assert_eq!(last_hour_pkts.buckets, [0; 120]);
     }
 }
