@@ -12,8 +12,8 @@ use common_wasm::{
 };
 
 use libconntrack_wasm::{
-    aggregate_counters::{AggregateCounterKind, TrafficCounters},
-    ConnectionKey, ConnectionMeasurements,
+    aggregate_counters::AggregateCounterKind, traffic_stats::BidirectionalStats,
+    BidirBandwidthHistory, ConnectionKey, ConnectionMeasurements,
 };
 #[cfg(not(test))]
 use log::{debug, warn};
@@ -26,7 +26,7 @@ use std::{println as debug, println as warn}; // Workaround to use prinltn! for 
 
 use crate::{
     analyze::analyze,
-    connection::Connection,
+    connection::{Connection, MAX_BURST_RATE_TIME_WINDOW_MILLIS},
     dns_tracker::DnsTrackerMessage,
     in_band_probe::ProbeMessage,
     owned_packet::{ConnectionKeyError, OwnedParsedPacket},
@@ -91,11 +91,11 @@ pub enum ConnectionTrackerMsg {
         application: Option<ProcessTrackerEntry>, // will be None if lookup fails, which we need for stats
     },
     GetTrafficCounters {
-        tx: mpsc::UnboundedSender<TrafficCounters>,
+        tx: mpsc::UnboundedSender<BidirBandwidthHistory>,
     },
     GetDnsTrafficCounters {
         tx: mpsc::Sender<
-            HashMap<AggregateCounterKind, (TrafficCounters, Vec<ConnectionMeasurements>)>,
+            HashMap<AggregateCounterKind, (BidirBandwidthHistory, Vec<ConnectionMeasurements>)>,
         >,
     },
 }
@@ -149,7 +149,7 @@ pub struct ConnectionTracker<'a> {
     tx: ConnectionTrackerSender, // so we can tell others how to send msgs to us
     rx: ConnectionTrackerReceiver, // to read messages sent to us
     // used to track traffic grouped by, e.g., DNS destination
-    aggregate_traffic_counters: HashMap<AggregateCounterKind, TrafficCounters>,
+    aggregate_traffic_stats: HashMap<AggregateCounterKind, BidirectionalStats>,
     /// Trackes number of successfully parsed packets. I.e., packets from
     /// which we could extract a ConnectionKey
     sucessfully_parsed_packets: StatHandle,
@@ -196,9 +196,11 @@ impl<'a> ConnectionTracker<'a> {
             tx,
             rx,
             // we always have at least the top-level ConnectionTracker traffic counters
-            aggregate_traffic_counters: HashMap::from([(
+            aggregate_traffic_stats: HashMap::from([(
                 AggregateCounterKind::ConnectionTracker,
-                TrafficCounters::new(),
+                BidirectionalStats::new(std::time::Duration::from_millis(
+                    MAX_BURST_RATE_TIME_WINDOW_MILLIS,
+                )),
             )]),
             sucessfully_parsed_packets: stats.add_stat(
                 "succesfully_parsed",
@@ -310,8 +312,12 @@ impl<'a> ConnectionTracker<'a> {
                     }
                 };
                 for group in &connection.aggregate_groups {
-                    if let Some(counters) = self.aggregate_traffic_counters.get_mut(group) {
-                        counters.update_bytes(src_is_local, packet.len as u64);
+                    if let Some(traffic_stats) = self.aggregate_traffic_stats.get_mut(group) {
+                        traffic_stats.add_packet_with_time(
+                            src_is_local,
+                            packet.len as u64,
+                            packet.timestamp,
+                        );
                     } else {
                         warn!(
                             "Group counters out of sync between connection {} and tracker: missing {:?}", 
@@ -484,9 +490,11 @@ impl<'a> ConnectionTracker<'a> {
                             // add this group and make sure the connection tracker is tracking it
                             let group = AggregateCounterKind::DnsDstDomain { name: domain };
                             connection.aggregate_groups.insert(group.clone());
-                            self.aggregate_traffic_counters
-                                .entry(group)
-                                .or_insert_with(TrafficCounters::new);
+                            self.aggregate_traffic_stats.entry(group).or_insert(
+                                BidirectionalStats::new(std::time::Duration::from_millis(
+                                    MAX_BURST_RATE_TIME_WINDOW_MILLIS,
+                                )),
+                            );
                         }
                         Err(e) => warn!("Unparsible DNS name: {} :: {}", &remote_hostname, e),
                     }
@@ -511,17 +519,15 @@ impl<'a> ConnectionTracker<'a> {
         self.tx.clone()
     }
 
-    fn get_conntrack_traffic_counters(&self, tx: UnboundedSender<TrafficCounters>) {
-        let mut traffic_counters = self
-            .aggregate_traffic_counters
+    fn get_conntrack_traffic_counters(&self, tx: UnboundedSender<BidirBandwidthHistory>) {
+        let mut traffic_stats = self
+            .aggregate_traffic_stats
             .get(&AggregateCounterKind::ConnectionTracker)
             .unwrap() // unwrap is ok b/c we should always have this counter
             .clone();
-        let now = Utc::now();
         // force send and recv counters to be up to date with now and time sync'd
-        traffic_counters.send.update_with_time(0, now);
-        traffic_counters.recv.update_with_time(0, now);
-        if let Err(e) = tx.send(traffic_counters) {
+        traffic_stats.advance_time(Utc::now());
+        if let Err(e) = tx.send(traffic_stats.as_bidir_bandwidth_history(Utc::now())) {
             warn!(
                 "Tried to send traffic_counters back to caller but got {}",
                 e
@@ -561,12 +567,15 @@ impl<'a> ConnectionTracker<'a> {
     fn get_aggregate_traffic_counters(
         &mut self,
         match_rule: impl Fn(&AggregateCounterKind) -> bool,
-        tx: Sender<HashMap<AggregateCounterKind, (TrafficCounters, Vec<ConnectionMeasurements>)>>,
+        tx: Sender<
+            HashMap<AggregateCounterKind, (BidirBandwidthHistory, Vec<ConnectionMeasurements>)>,
+        >,
     ) {
-        let mut counters: HashMap<
+        let mut bandwidth_history: HashMap<
             AggregateCounterKind,
-            (TrafficCounters, Vec<ConnectionMeasurements>),
+            (BidirBandwidthHistory, Vec<ConnectionMeasurements>),
         > = HashMap::new();
+        let now = Utc::now();
         for (_key, connection) in self.connections.iter_mut() {
             let m = connection.to_connection_measurements(Utc::now(), None);
             for kind in &connection.aggregate_groups {
@@ -574,18 +583,24 @@ impl<'a> ConnectionTracker<'a> {
                     continue;
                 }
                 // if we've already seen this kind before
-                if let Some((_traffic_counters, measurments)) = counters.get_mut(kind) {
+                if let Some((_traffic_counters, measurments)) = bandwidth_history.get_mut(kind) {
                     // just add this connection to the list
                     measurments.push(m.clone());
                 } else {
                     // else look up the traffic counters and add this connection to the new list
-                    if let Some(traffic_counters) = self.aggregate_traffic_counters.get(kind) {
-                        counters.insert(kind.clone(), (traffic_counters.clone(), vec![m.clone()]));
+                    if let Some(traffic_stats) = self.aggregate_traffic_stats.get_mut(kind) {
+                        bandwidth_history.insert(
+                            kind.clone(),
+                            (
+                                traffic_stats.as_bidir_bandwidth_history(now),
+                                vec![m.clone()],
+                            ),
+                        );
                     }
                 }
             }
         }
-        if let Err(e) = tx.try_send(counters) {
+        if let Err(e) = tx.try_send(bandwidth_history) {
             warn!(
                 "Failed to return the aggregate counters to their caller!?: {}",
                 e

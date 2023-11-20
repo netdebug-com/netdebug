@@ -19,6 +19,7 @@ use libconntrack::{
     send_or_log_async, send_or_log_sync,
     utils::PerfMsgCheck,
 };
+use libconntrack_wasm::aggregate_counters::TrafficCounters;
 use log::{debug, info, warn};
 use tokio::sync::mpsc::{self, channel, UnboundedSender};
 use warp::ws::{self, Message, WebSocket};
@@ -180,8 +181,10 @@ async fn handle_dump_aggregate_connection_tracker_counters(
             e
         );
     }
-    if let Some(counters) = reply_rx.recv().await {
-        if let Err(e) = tx.send(ServerToGuiMessages::DumpAggregateCountersReply(counters)) {
+    if let Some(_counters) = reply_rx.recv().await {
+        if let Err(e) = tx.send(ServerToGuiMessages::DumpAggregateCountersReply(
+            TrafficCounters::new(),
+        )) {
             warn!("Error talking to GUI: {}", e);
         }
     } else {
@@ -229,7 +232,7 @@ async fn handle_gui_dump_dns_flows(
         "connection_tracker",
         GetDnsTrafficCounters { tx: reply_tx }
     );
-    let measurements = match reply_rx.recv().await {
+    let _measurements = match reply_rx.recv().await {
         Some(keys) => keys,
         None => {
             warn!("ConnectionTracker GetConnectionsKeys returned null!?");
@@ -242,7 +245,7 @@ async fn handle_gui_dump_dns_flows(
         Duration::from_millis(100)
     );
     if let Err(e) = tx.send(ServerToGuiMessages::DumpDnsAggregateCountersReply(
-        measurements,
+        HashMap::new(),
     )) {
         warn!("Sending to GUI trigged: {}", e);
     }
