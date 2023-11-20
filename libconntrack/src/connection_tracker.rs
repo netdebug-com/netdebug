@@ -12,8 +12,8 @@ use common_wasm::{
 };
 
 use libconntrack_wasm::{
-    aggregate_counters::AggregateCounterKind, traffic_stats::BidirectionalStats,
-    BidirBandwidthHistory, ConnectionKey, ConnectionMeasurements,
+    traffic_stats::BidirectionalStats, AggregateCounterKind, BidirBandwidthHistory, ConnectionKey,
+    ConnectionMeasurements,
 };
 #[cfg(not(test))]
 use log::{debug, warn};

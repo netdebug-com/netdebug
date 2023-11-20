@@ -12,8 +12,7 @@ use common_wasm::{
 
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{
-    aggregate_counters::AggregateCounterKind, traffic_stats::BidirectionalStats, ConnectionKey,
-    IpProtocol,
+    traffic_stats::BidirectionalStats, AggregateCounterKind, ConnectionKey, IpProtocol,
 };
 #[cfg(not(test))]
 use log::{debug, warn};

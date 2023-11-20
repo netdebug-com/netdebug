@@ -8,7 +8,6 @@ debug = true
 members = [
   "common",
   "desktop",
-  "desktop/web-gui",
   "ip-asn-lookup",
   "libconntrack",
   "probe-o-matic",
