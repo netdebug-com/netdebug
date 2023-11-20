@@ -27,19 +27,6 @@ type SharedExportedStatRegistries = Arc<Vec<ExportedStatRegistry>>;
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
-    /// the base of the WASM build directory, where web-client{.js,_bs.wasm} live
-    #[arg(long, default_value = "desktop/html")]
-    pub html_root: String,
-
-    /// the base of the WASM build directory, where web-client{.js,_bs.wasm} live
-    #[arg(long, default_value = "desktop/web-gui/pkg")]
-    pub wasm_root: String,
-
-    /// Controls whether static content (html, css) and wasm are served by the HTTP
-    /// server or not.
-    #[arg(long, default_value_t = false)]
-    pub no_wasm_html_serving: bool,
-
     /// which TCP port to listen on
     #[arg(long, default_value_t = 33434)] // traceroute port, for fun
     pub listen_port: u16,
@@ -146,35 +133,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     let listen_addr = ([127, 0, 0, 1], args.listen_port);
 
-    // Warp's filter and their types are so convoluted that I could not find
-    // another way to make this work than this. Stupid warp
-    if args.no_wasm_html_serving {
-        warp::serve(make_common_desktop_http_routes(
-            tx,
-            dns_tx,
-            process_tx,
-            topology_client,
-            Arc::new(counter_registries.registries()),
-        ))
-        .run(listen_addr)
-        .await
-    } else {
-        warp::serve(
-            make_common_desktop_http_routes(
-                tx,
-                dns_tx,
-                process_tx,
-                topology_client,
-                Arc::new(counter_registries.registries()),
-            )
-            .or(make_desktop_wasm_html_http_routes(
-                &args.wasm_root,
-                &args.html_root,
-            )),
-        )
-        .run(listen_addr)
-        .await;
-    }
+    warp::serve(make_common_desktop_http_routes(
+        tx,
+        dns_tx,
+        process_tx,
+        topology_client,
+        Arc::new(counter_registries.registries()),
+    ))
+    .run(listen_addr)
+    .await;
     Ok(())
 }
 
@@ -211,17 +178,6 @@ pub fn make_common_desktop_http_routes(
         make_counter_routes(counter_registries).with(warp::log("counters/get_counters"));
 
     ws.or(counter_path)
-}
-
-pub fn make_desktop_wasm_html_http_routes(
-    wasm_root: &str,
-    html_root: &str,
-) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-    let webclient =
-        libwebserver::http_routes::make_webclient_route(wasm_root).with(warp::log("webclient"));
-    let static_path = warp::fs::dir(html_root.to_owned()).with(warp::log("static"));
-
-    webclient.or(static_path)
 }
 
 // this function just wraps the connection tracker to make sure the types are understood
