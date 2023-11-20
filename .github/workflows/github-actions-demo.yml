@@ -18,16 +18,16 @@ jobs:
         # Check the formatting early; this should be done by vscode and/or githooks, but ... sigh
         run: cargo fmt --check
       - name: Formatting check (prettier)
-        run: npx prettier --check .
-      - run: echo "🖥️ The workflow is now ready to test your code on the runner."
+        uses: actionsx/prettier@v3
+        with:
+          # prettier CLI arguments.
+          args: --check .
       - name: Get wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
         with:
           # Optional version of wasm-pack to install(eg. 'v0.9.1', 'latest')
           version: "latest"
-      - name:
-          Install libpcap
-          # everything after pcap is for tauri to build
+      - name: Install libpcap
         run: sudo apt-get update && sudo apt-get install -y libpcap-dev
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
