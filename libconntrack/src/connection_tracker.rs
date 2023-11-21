@@ -107,7 +107,7 @@ pub enum ConnectionTrackerMsg {
 
 fn send_connection_storage_msg(topology_client: &Option<TopologyServerSender>, c: &mut Connection) {
     if let Some(tx) = topology_client.as_ref() {
-        let measurement = c.to_connection_measurements(Utc::now(), None);
+        let measurement = Box::new(c.to_connection_measurements(Utc::now(), None));
         if !measurement.probe_report_summary.raw_reports.is_empty() {
             // only send the connection info if we have at least one successful probe round
             debug!(
