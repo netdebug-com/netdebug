@@ -427,6 +427,9 @@ impl Connection {
                     && !tcp.syn
                     && !tcp.fin
                 {
+                    // Clippy wants to collapse this `if let` and the `if let TcpOptionElement` into a single `if`
+                    // but I think that would look overly convoluted... So we tell clippy to ignore it
+                    #[allow(clippy::collapsible_match)]
                     if let Some(Ok(selective_ack)) = tcp.options_iterator().find(|opt| {
                         matches!(&opt, Ok(TcpOptionElement::SelectiveAcknowledgement(_, _)))
                     }) {

@@ -230,9 +230,11 @@ fn process_connection(graph: &mut TheGraph, entry: &ConnectionMeasurements) {
         let mut path_vec = Vec::new();
         for ttl in probe_round.probes.keys().sorted() {
             let probe = probe_round.probes.get(ttl).unwrap();
-            let mut path_entry = PathEntry::default();
-            path_entry.dist = *ttl;
-            path_entry.ip = probe.get_ip().map(|ip| ip.to_string());
+            let mut path_entry = PathEntry {
+                dist: *ttl,
+                ip: probe.get_ip().map(|ip| ip.to_string()),
+                ..Default::default()
+            };
             use ProbeReportEntry::*;
             match probe {
                 EndHostReplyFound { .. } | EndHostNoProbe { .. } => {
