@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
-import { ChartJsBandwidth } from "../netdebug_types";
+import { ChartJsBandwidth, ChartJsPoint } from "../netdebug_types";
 import { Scatter } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -13,6 +13,7 @@ import {
   Title,
 } from "chart.js";
 import { SwitchHelper } from "../SwitchHelper";
+import { getSiScale, prettyPrintSiUnits } from "../utils";
 
 ChartJS.register(
   PointElement,
@@ -24,27 +25,60 @@ ChartJS.register(
   Title,
 );
 
-function getChartjsData(bw: ChartJsBandwidth) {
+function getChartjsData(bw: ChartJsBandwidth, scale: BwChartScale) {
   return {
     datasets: [
-      { label: "Download Bandwidth", data: bw.rx },
-      { label: "Upload Bandwidth", data: bw.tx },
+      {
+        label: "Download Bandwidth",
+        data: scaleAndTrimeTimeseries(bw.rx, scale),
+      },
+      {
+        label: "Upload Bandwidth",
+        data: scaleAndTrimeTimeseries(bw.tx, scale),
+      },
     ],
   };
 }
 
-function formatBps(value: number /*, index: number*/) {
-  const mbps = value / 1e6;
-  return mbps.toString();
-}
+/// Helper struct  for scaling the raw values from the desktop process
+type BwChartScale = {
+  // the scale factor to use for the y-axis. Raw data points should be divided by this
+  y_scale: number;
+  // the SI suffix of the scaled y number (e.g., `M` for mega)
+  y_suffix: string;
+  // the scale factor to use for the x-axis (time). Raw data points should be divided by this
+  time_scale: number;
+  // the time unit of the scale time. either
+  time_unit: "minutes" | "seconds";
+};
 
-function formatTimeTicks(value: number) {
-  return -value;
-}
-
-function getChartOptions(bw: ChartJsBandwidth, y_max_bps: number) {
-  const title = bw.label;
+function getChartScale(bw: ChartJsBandwidth): BwChartScale {
+  const [y_scale, y_suffix] = getSiScale(bw.y_max_bps);
   return {
+    y_scale: y_scale,
+    y_suffix: y_suffix,
+    // we use 120sec as the cutoff between displaying in seconds vs. minutes
+    time_scale: bw.total_duration_sec > 120 ? 60 : 1,
+    time_unit: bw.total_duration_sec > 120 ? "minutes" : "seconds",
+  };
+}
+
+// Apply the scale factor to the timeseries and also trim the
+// last datapoint. The last datapoint represents an incomplete bucket, so we should not
+// display it.
+function scaleAndTrimeTimeseries(
+  points: ChartJsPoint[],
+  scale: BwChartScale,
+): ChartJsPoint[] {
+  const ret = points.map(({ x, y }) => {
+    return { x: x / scale.time_scale, y: y / scale.y_scale };
+  });
+  ret.pop();
+  return ret;
+}
+
+function getChartOptions(bw: ChartJsBandwidth, scale: BwChartScale) {
+  const opts = {
     showLine: true,
     // make TS: happy: animation can be false or some other type but never `true` so
     // we need to add the `as const` type assertion to make TS happy.
@@ -55,33 +89,53 @@ function getChartOptions(bw: ChartJsBandwidth, y_max_bps: number) {
     plugins: {
       title: {
         display: true,
-        text: title,
+        text: bw.label,
+      },
+      tooltip: {
+        callbacks: {
+          // @ts-expect-error chartjs are too convoluted. No idea what type context should be
+          label: (context) => {
+            let label = context.dataset.label || "";
+            if (context.parsed.x !== null) {
+              label += `: ${-context.parsed.x} ${scale.time_unit} ago`;
+            }
+            if (context.parsed.y !== null) {
+              label +=
+                ": " +
+                // scale y-axis back to Bit/s then apply the prettyPrintSiUnit function
+                prettyPrintSiUnits(context.parsed.y * scale.y_scale, "Bit/s");
+            }
+            return label;
+          },
+        },
       },
     },
     scales: {
       x: {
         title: {
           display: true,
-          text: "seconds ago",
+          text: scale.time_unit + " ago",
         },
         ticks: {
-          callback: formatTimeTicks,
+          callback: (t: number) => -t,
         },
+        max: 0,
       },
       y: {
         title: {
           display: true,
-          text: "MBit/s",
+          text: scale.y_suffix + "Bit/s",
         },
         suggestedMin: 0,
-        // use the next integer Mbps value
-        suggestedMax: 1e6 * Math.ceil(y_max_bps / 1e6),
-        ticks: {
-          callback: formatBps,
-        },
       },
     },
   };
+  if (bw.total_duration_sec === 3600) {
+    // For 1hr timescale: force the x-axis to start at -3600, i.e., 1hr ago
+    // @ts-expect-error TS complains x.min isn't in the object literal
+    opts.scales.x.min = -3600 / scale.time_unit;
+  }
+  return opts;
 }
 
 const Bandwidth: React.FC = () => {
@@ -91,15 +145,12 @@ const Bandwidth: React.FC = () => {
     autoRefresh: autoRefresh,
     reqMsgType: { DumpAggregateCounters: [] },
     respMsgType: "DumpAggregateCountersReply",
-    min_time_between_requests_ms: 500,
-    max_time_between_requests_ms: 5000,
+    min_time_between_requests_ms: 200,
+    max_time_between_requests_ms: 1000,
     responseCb: setBandwidthHist,
   });
   // Default font size is tiny. Lets make the chart readable.
   ChartJS.defaults.font.size = 16;
-  const y_max_bps = Math.ceil(
-    Math.max(...bandwidthHist.map((bw) => bw.y_max_bps)),
-  );
 
   return (
     <>
@@ -111,6 +162,7 @@ const Bandwidth: React.FC = () => {
       />
       <div>
         {bandwidthHist.map((bw) => {
+          const scale = getChartScale(bw);
           return (
             <div
               key={bw.label}
@@ -120,8 +172,8 @@ const Bandwidth: React.FC = () => {
             >
               <Scatter
                 key={bw.label}
-                data={getChartjsData(bw)}
-                options={getChartOptions(bw, y_max_bps)}
+                data={getChartjsData(bw, scale)}
+                options={getChartOptions(bw, scale)}
               />
               <hr />
             </div>

@@ -10,6 +10,29 @@ test("prettyPrintSiUnits", () => {
   expect(prettyPrintSiUnits(rate, "foo/s")).toBe("23 Kfoo/s");
   rate = 19;
   expect(prettyPrintSiUnits(rate, "foo/s")).toBe("19 foo/s");
+
+  // test boundrary conditions
+  rate = 1e3;
+  expect(prettyPrintSiUnits(rate, "foo/s")).toBe("1 Kfoo/s");
+  rate = 1e6;
+  expect(prettyPrintSiUnits(rate, "foo/s")).toBe("1 Mfoo/s");
+  rate = 1e9;
+  expect(prettyPrintSiUnits(rate, "foo/s")).toBe("1 Gfoo/s");
+
+  // test rounding
+  rate = 1234;
+  // default is 1 fraction digit
+  expect(prettyPrintSiUnits(rate, "foo/s")).toBe("1.2 Kfoo/s");
+  expect(prettyPrintSiUnits(rate, "foo/s", 2)).toBe("1.23 Kfoo/s");
+
+  let x = 1e-3;
+  expect(prettyPrintSiUnits(x, "sec")).toBe("1 msec");
+  x = 0.1234;
+  expect(prettyPrintSiUnits(x, "sec")).toBe("123.4 msec");
+  x = 2e-6;
+  expect(prettyPrintSiUnits(x, "sec")).toBe("2 μsec");
+  x = 3e-9;
+  expect(prettyPrintSiUnits(x, "sec")).toBe("3 nsec");
 });
 
 test("reshapeCounter", () => {
