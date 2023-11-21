@@ -112,9 +112,7 @@ macro_rules! send_or_log_sync {
     // stats AND SLA
     ($tx:expr, $msg:expr, $data:expr, $stats:expr, $sla:expr) => {
         (|| {
-            if let Err(e) = $tx.try_send(crate::libconntrack::utils::PerfMsgCheck::with_sla(
-                $data, $sla,
-            )) {
+            if let Err(e) = $tx.try_send($crate::utils::PerfMsgCheck::with_sla($data, $sla)) {
                 warn!("Failed to send data to {} :: err {}", $msg, e);
                 $stats.add_value(1);
             }

@@ -18,6 +18,9 @@ use crate::connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender};
 use crate::utils::{make_perf_check_stats, PerfCheckStats, PerfMsgCheck};
 use crate::{perf_check, send_or_log_async, send_or_log_sync};
 
+pub type ProcessTrackerTcpCache = HashMap<ConnectionKey, ProcessTrackerEntry>;
+pub type ProcessTrackerUdpCache = HashMap<(IpAddr, u16), ProcessTrackerEntry>;
+
 #[derive(Clone, Debug)]
 pub enum ProcessTrackerMessage {
     LookupOne {
@@ -32,10 +35,7 @@ pub enum ProcessTrackerMessage {
     },
     DumpCache {
         // return the tcp_cache and the udp_cache
-        tx: UnboundedSender<(
-            HashMap<ConnectionKey, ProcessTrackerEntry>,
-            HashMap<(IpAddr, u16), ProcessTrackerEntry>,
-        )>,
+        tx: UnboundedSender<(ProcessTrackerTcpCache, ProcessTrackerUdpCache)>,
     },
 }
 
