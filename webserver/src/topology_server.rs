@@ -107,7 +107,7 @@ impl TopologyServer {
         .await;
     }
 
-    async fn handle_store_measurement(&self, entry: ConnectionMeasurements) {
+    async fn handle_store_measurement(&self, entry: Box<ConnectionMeasurements>) {
         debug!("{:?}", entry);
         let db_res = self
             .db
@@ -200,7 +200,7 @@ mod test {
         let measurements = fake_measurement_data();
         // write to topology server db
         topology_server
-            .handle_store_measurement(measurements.clone())
+            .handle_store_measurement(Box::new(measurements.clone()))
             .await;
 
         // now read it back out by hand

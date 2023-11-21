@@ -8,7 +8,7 @@ use crate::ConnectionMeasurements;
 pub enum DesktopToTopologyServer {
     Hello,
     StoreConnectionMeasurement {
-        connection_measurements: ConnectionMeasurements,
+        connection_measurements: Box<ConnectionMeasurements>,
     },
 }
 

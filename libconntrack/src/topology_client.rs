@@ -27,7 +27,7 @@ pub enum TopologyServerMessage {
         reply_tx: Sender<PerfMsgCheck<(IpAddr, String)>>,
     },
     StoreConnectionMeasurements {
-        connection_measurements: ConnectionMeasurements,
+        connection_measurements: Box<ConnectionMeasurements>,
     },
 }
 

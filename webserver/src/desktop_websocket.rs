@@ -79,7 +79,7 @@ async fn handle_desktop_message(
  * Just forward on to the TopologyServer for storage
  */
 async fn handle_store(
-    connection_measurements: libconntrack_wasm::ConnectionMeasurements,
+    connection_measurements: Box<libconntrack_wasm::ConnectionMeasurements>,
     topology_server: &TopologyServerSender,
 ) {
     send_or_log_async!(
