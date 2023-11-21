@@ -337,6 +337,13 @@ pub struct MockRawSocketProber {
 }
 
 #[cfg(test)]
+impl Default for MockRawSocketProber {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
 impl MockRawSocketProber {
     pub fn new() -> MockRawSocketProber {
         let (tx, rx) = channel(1024);

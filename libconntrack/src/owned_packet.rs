@@ -75,6 +75,7 @@ impl std::hash::Hash for OwnedParsedPacket {
 fn pcap_timestamp_to_utc(pcap_header: &pcap::PacketHeader) -> DateTime<Utc> {
     use chrono::TimeZone;
     Utc.timestamp_opt(
+        #[allow(clippy::useless_conversion)] // needed because timeval differs between OSes
         pcap_header.ts.tv_sec.into(),
         (pcap_header.ts.tv_usec * 1000) as u32,
     )
@@ -487,7 +488,7 @@ impl OwnedParsedPacket {
     // TODO: this looks like the TryFrom trait but actually isn't it which might confuse people
     pub(crate) fn try_from(pkt: pcap::Packet) -> Result<Box<OwnedParsedPacket>, Box<dyn Error>> {
         let parsed = etherparse::PacketHeaders::from_ethernet_slice(pkt.data)?;
-        Ok(Box::new(OwnedParsedPacket::new(parsed, pkt.header.clone())))
+        Ok(Box::new(OwnedParsedPacket::new(parsed, *pkt.header)))
     }
 
     #[cfg(test)]

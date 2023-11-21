@@ -42,7 +42,8 @@ pub async fn make_webserver_http_routes(
 
     // this is the order that the filters try to match; it's important that
     // it's in this order to make sure the cookie auth works right
-    let routes = webtest
+
+    webtest
         .or(desktop_ws)
         .or(webclient_ws)
         .or(counters)
@@ -50,8 +51,7 @@ pub async fn make_webserver_http_routes(
         .or(static_path)
         .or(root)
         .or(login)
-        .or(login_form);
-    routes
+        .or(login_form)
 }
 
 pub fn make_counter_routes(
@@ -71,7 +71,7 @@ fn make_webclient_ws_route(
     context: &Context,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::path("ws")
-        .and(with_context(&context))
+        .and(with_context(context))
         .and(warp::header("user-agent"))
         .and(warp::ws())
         .and(warp::filters::addr::remote())
@@ -81,7 +81,7 @@ fn make_desktop_ws_route(
     context: &Context,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::path("desktop")
-        .and(with_context(&context))
+        .and(with_context(context))
         .and(warp::header("user-agent"))
         .and(warp::ws())
         .and(warp::filters::addr::remote())
@@ -94,7 +94,7 @@ fn make_login_route(
     // POST login data to http://localhost/login to get auth cookie
     warp::post()
         .and(warp::path("login"))
-        .and(with_context(&context))
+        .and(with_context(context))
         .and(warp::body::json())
         .and_then(login_handler)
 }
@@ -103,7 +103,7 @@ fn make_root_route(
     context: &Context,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::any()
-        .and(with_context(&context))
+        .and(with_context(context))
         .and(cookie(COOKIE_LOGIN_NAME))
         .and_then(root)
 }
@@ -112,7 +112,7 @@ fn make_webtest_route(
     context: &Context,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::path("webtest")
-        .and(with_context(&context))
+        .and(with_context(context))
         .and(cookie(COOKIE_LOGIN_NAME))
         .and_then(webtest)
 }
@@ -162,9 +162,9 @@ fn with_handler(
 */
 
 fn _with_string(
-    s: &String,
+    s: &str,
 ) -> impl Filter<Extract = (String,), Error = std::convert::Infallible> + Clone {
-    let s = s.clone();
+    let s = s.to_owned();
     warp::any().map(move || s.clone())
 }
 
@@ -344,7 +344,7 @@ mod test {
         assert_eq!(resp.status(), StatusCode::OK);
         // useful for debugging : cargo t -- --show-output
         for (k, v) in resp.headers().into_iter() {
-            println!("{} = {}", k, v.to_str().unwrap().to_string());
+            println!("{} = {}", k, v.to_str().unwrap());
         }
         assert!(resp.headers().contains_key("set-cookie"));
         let cookie = resp.headers().get("set-cookie").unwrap();

@@ -412,10 +412,7 @@ mod test {
         ];
 
         for (test, valid) in test_pairs {
-            assert_eq!(
-                dns_to_cannonical_domain(&test.to_string()),
-                Ok(valid.to_string())
-            );
+            assert_eq!(dns_to_cannonical_domain(test), Ok(valid.to_string()));
         }
     }
 }

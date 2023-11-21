@@ -589,16 +589,16 @@ impl<'a> DnsTracker<'a> {
  * Note to self: there's got to be a cleaner/safer way to do this
  */
 
-fn dns_ptr_decode(name: &String) -> Result<IpAddr, Box<dyn std::error::Error>> {
+fn dns_ptr_decode(name: &str) -> Result<IpAddr, Box<dyn std::error::Error>> {
     let name = name.to_lowercase(); // can't be chained with .trim_end_matches()
     let name = name.trim_end_matches('.'); // remove trailing period if there
     if name.ends_with(DNS_PTR_V4_DOMAIN) {
         let tokens = name.split('.').collect::<Vec<&str>>();
         Ok(IpAddr::try_from([
-            u8::from_str_radix(tokens[3], 10)?,
-            u8::from_str_radix(tokens[2], 10)?,
-            u8::from_str_radix(tokens[1], 10)?,
-            u8::from_str_radix(tokens[0], 10)?,
+            u8::from_str(tokens[3])?,
+            u8::from_str(tokens[2])?,
+            u8::from_str(tokens[1])?,
+            u8::from_str(tokens[0])?,
         ])?)
     } else if name.ends_with(DNS_PTR_V6_DOMAIN) {
         let tokens = name.split('.').collect::<Vec<&str>>();
@@ -824,7 +824,7 @@ mod test {
         // TODO: sanity check this data; for now just parsing is enough
 
         // now make sure we can serialize/deserialize it all
-        for (_ip, dns_entry) in &dns_tracker.reverse_map {
+        for dns_entry in dns_tracker.reverse_map.values() {
             let json = serde_json::to_string(dns_entry).unwrap();
             println!("{}", json);
             let new_value: DnsTrackerEntry = serde_json::from_str(&json).unwrap();
@@ -954,19 +954,19 @@ mod test {
 
         let request = dns_parser::Packet::parse(&buf).unwrap();
         assert_eq!(request.questions.len(), 1);
-        let question = request.questions.iter().next().unwrap();
+        let question = request.questions.first().unwrap();
         assert_eq!(question.qtype, QueryType::A);
         assert_eq!(question.qclass, dns_parser::QueryClass::IN);
         assert_eq!(question.qname.to_string(), "example.com".to_string());
         assert_eq!(request.answers.len(), 0);
         assert_eq!(request.additional.len(), 0);
         assert_eq!(request.header.id, 0x0102);
-        assert_eq!(request.header.recursion_desired, true);
+        assert!(request.header.recursion_desired);
 
         let buf = make_dns_lookup_request("example.com.".to_string(), QueryType::A, Some(0x0102))
             .unwrap();
         let request_trailing_period = dns_parser::Packet::parse(&buf).unwrap();
-        let new_question = request_trailing_period.questions.iter().next().unwrap();
+        let new_question = request_trailing_period.questions.first().unwrap();
         assert_eq!(question.qname.to_string(), new_question.qname.to_string());
 
         // last, make sure we get an error if we have too long of a label
@@ -980,7 +980,7 @@ mod test {
         let v4_addr = IpAddr::from_str("1.2.3.4").unwrap();
         let buf = make_dns_ptr_lookup_request(v4_addr, None).unwrap();
         let request = dns_parser::Packet::parse(&buf).unwrap();
-        let question = request.questions.iter().next().unwrap();
+        let question = request.questions.first().unwrap();
         assert_eq!(
             question.qname.to_string(),
             "4.3.2.1.in-addr.arpa".to_string()
@@ -988,7 +988,7 @@ mod test {
         let v6_addr = IpAddr::from_str("0011:2233:4455:6677:8899:aabb:ccdd:effe").unwrap();
         let buf = make_dns_ptr_lookup_request(v6_addr, None).unwrap();
         let request = dns_parser::Packet::parse(&buf).unwrap();
-        let question = request.questions.iter().next().unwrap();
+        let question = request.questions.first().unwrap();
         assert_eq!(
             question.qname.to_string(),
             // from `dig -x 0011:2233:4455:6677:8899:aabb:ccdd:effe`

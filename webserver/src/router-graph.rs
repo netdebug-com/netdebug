@@ -156,10 +156,8 @@ fn filter_weird_and_routerless_connections<F: FnMut(&String, &ConnectionMeasurem
             if !probe.get_comment().is_empty() {
                 found_weird = true;
             }
-            if busted_endhost_check1 {
-                if matches!(probe, ProbeReportEntry::NoReply { .. }) {
-                    busted_endhost_check2 = false; // doesn't match the pattern
-                }
+            if busted_endhost_check1 && matches!(probe, ProbeReportEntry::NoReply { .. }) {
+                busted_endhost_check2 = false; // doesn't match the pattern
             }
             if *ttl == 1 && matches!(probe, ProbeReportEntry::EndHostReplyFound { .. }) {
                 // busted endhost has a signature in two parts;
@@ -222,7 +220,7 @@ fn process_connection(graph: &mut TheGraph, entry: &ConnectionMeasurements) {
     {
         return;
     }
-    if entry.key.remote_ip.to_string().contains(":") {
+    if entry.key.remote_ip.to_string().contains(':') {
         // lets skip IPv6 for now
         return;
     }
@@ -234,11 +232,7 @@ fn process_connection(graph: &mut TheGraph, entry: &ConnectionMeasurements) {
             let probe = probe_round.probes.get(ttl).unwrap();
             let mut path_entry = PathEntry::default();
             path_entry.dist = *ttl;
-            path_entry.ip = if let Some(ip) = probe.get_ip() {
-                Some(ip.to_string())
-            } else {
-                None
-            };
+            path_entry.ip = probe.get_ip().map(|ip| ip.to_string());
             use ProbeReportEntry::*;
             match probe {
                 EndHostReplyFound { .. } | EndHostNoProbe { .. } => {
@@ -251,14 +245,12 @@ fn process_connection(graph: &mut TheGraph, entry: &ConnectionMeasurements) {
             }
             if path_vec.is_empty() {
                 path_vec.push(path_entry);
+            } else if path_vec.last().unwrap().is_endhost {
+                // previous entry was an endhost. So this entry and all following ones
+                // will also be dupACKs from the endhost. So, break the loop.
+                break;
             } else {
-                if path_vec.last().unwrap().is_endhost {
-                    // previous entry was an endhost. So this entry and all following ones
-                    // will also be dupACKs from the endhost. So, break the loop.
-                    break;
-                } else {
-                    path_vec.push(path_entry);
-                }
+                path_vec.push(path_entry);
             }
         }
         // Find the last element in that path that has a sender IP. This is for cases where we
@@ -332,8 +324,8 @@ pub struct TheGraph {
     empty_set: HashSet<NodeKey>,
 }
 
-impl TheGraph {
-    pub fn new() -> Self {
+impl Default for TheGraph {
+    fn default() -> Self {
         let mut nodes = HashMap::new();
         let root = Rc::new("LOCAL".to_string());
         nodes.insert(
@@ -357,6 +349,12 @@ impl TheGraph {
             in_edges: HashMap::new(),
             empty_set: HashSet::new(),
         }
+    }
+}
+
+impl TheGraph {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn add_path(&mut self, path: &Vec<PathEntry>) {
@@ -526,10 +524,8 @@ fn compute_stats(db_files: &Vec<String>, verbose: bool) {
                 if !probe.get_comment().is_empty() {
                     found_weird = true;
                 }
-                if busted_endhost_check1 {
-                    if matches!(probe, NoReply { .. }) {
-                        busted_endhost_check2 = false; // doesn't match the pattern
-                    }
+                if busted_endhost_check1 && matches!(probe, NoReply { .. }) {
+                    busted_endhost_check2 = false; // doesn't match the pattern
                 }
                 if *ttl == 1 && matches!(probe, EndHostReplyFound { .. }) {
                     // busted endhost has a signature in two parts;
@@ -616,7 +612,7 @@ fn list_db_contents(db_files: &Vec<String>) {
                     println!("      TTL {:2}: {} {} {}", ttl, probe_type, ip, rtt,);
                 }
             }
-            println!(""); // end with an empty line
+            println!(); // end with an empty line
             println!("----------------------------------------------");
         }
     })

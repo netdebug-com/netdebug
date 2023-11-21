@@ -335,8 +335,12 @@ impl BidirectionalStats {
 
     /// call `advance_time` on both directions (if the exist)
     pub fn advance_time(&mut self, now: DateTime<Utc>) {
-        self.tx.as_mut().map(|s| s.advance_time(now));
-        self.rx.as_mut().map(|s| s.advance_time(now));
+        if let Some(s) = self.tx.as_mut() {
+            s.advance_time(now)
+        }
+        if let Some(s) = self.rx.as_mut() {
+            s.advance_time(now)
+        }
     }
 
     fn to_stats_summary(s: &mut Option<TrafficStats>, now: DateTime<Utc>) -> TrafficStatsSummary {

@@ -666,8 +666,8 @@ pub mod test {
         let probe_round = connection.probe_round.as_ref().unwrap();
         assert_eq!(
             probe_round.outgoing_probe_timestamps.len(),
-            16 as usize // NOTE: this should be the constant not PROBE_MAX_TTL because
-                        // the ground truth is the packet capture, not the current const value
+            16 // NOTE: this should be the constant not PROBE_MAX_TTL because
+               // the ground truth is the packet capture, not the current const value
         );
         for probes in probe_round.outgoing_probe_timestamps.values() {
             assert_eq!(probes.len(), 1);
@@ -733,9 +733,8 @@ pub mod test {
         let mut connection = connection_tracker
             .connections
             .values()
-            .cloned()
-            .into_iter()
             .next()
+            .cloned()
             .unwrap();
         // TODO; verify more about these pkts
         let _local_syn = connection.local_syn.as_ref().unwrap();
@@ -745,7 +744,7 @@ pub mod test {
         let probe_round = connection.probe_round.as_ref().unwrap();
         assert_eq!(
             probe_round.outgoing_probe_timestamps.len(),
-            16 as usize // this is hard coded by the pcap
+            16 // this is hard coded by the pcap
         );
         // verify we captured each of the incoming replies - note that we only got six replies!
         assert_eq!(probe_round.incoming_reply_timestamps.len(), 6);
@@ -910,7 +909,7 @@ pub mod test {
         let mut conn_key = None;
         while let Ok(pkt) = capture.next_packet() {
             let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
-            conn_key = Some(owned_pkt.to_connection_key(&local_addrs).unwrap().0);
+            conn_key = Some(owned_pkt.to_connection_key(local_addrs).unwrap().0);
             connection_tracker.add(owned_pkt);
         }
         assert!(conn_key.is_some());
@@ -990,7 +989,7 @@ pub mod test {
 
         // make sure all probes are accounted for
         for probe_id in 1..=PROBE_MAX_TTL {
-            assert!(all_probes.iter().find(|x| **x == probe_id).is_some());
+            assert!(all_probes.iter().any(|x| *x == probe_id));
         }
         assert_eq!(report.probes.len(), all_probes.len());
         // now check that probes are correctly catergorized
@@ -1097,7 +1096,7 @@ pub mod test {
         let test_hostname = "test-hostname.example.com".to_string();
         // populate the dns_tracker with the DNS info
         dns_tracker.reverse_map.insert(
-            remote_ip.clone(),
+            remote_ip,
             DnsTrackerEntry {
                 hostname: test_hostname.clone(),
                 created: Utc::now(),
@@ -1213,8 +1212,8 @@ pub mod test {
         assert!(packets[9].clone().transport.unwrap().tcp().unwrap().fin);
 
         // Read the first couple of packets. Ensure connection is created.
-        for i in 0..5 {
-            connection_tracker.add(packets[i].clone());
+        for pkt in packets.iter().take(5) {
+            connection_tracker.add(pkt.clone());
         }
         assert_eq!(connection_tracker.connections.len(), 1);
 

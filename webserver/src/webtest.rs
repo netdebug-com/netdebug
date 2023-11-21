@@ -38,13 +38,13 @@ use log::{debug, info, warn};
 
 fn unmap_mapped_v4(addr: &SocketAddr) -> SocketAddr {
     match addr {
-        SocketAddr::V4(_) => addr.clone(),
+        SocketAddr::V4(_) => *addr,
         SocketAddr::V6(sa6) => {
             let unmapped = sa6.ip().to_ipv4_mapped();
             if let Some(unmapped) = unmapped {
                 SocketAddr::new(IpAddr::V4(unmapped), sa6.port())
             } else {
-                addr.clone()
+                *addr
             }
         }
     }
@@ -385,7 +385,7 @@ fn handle_ping2(
     let rtt = make_time_ms() - server_timestamp_ms;
     let reply = Message::Ping3FromServer {
         server_rtt: rtt,
-        client_timestamp_ms: client_timestamp_ms,
+        client_timestamp_ms,
         probe_round,
         max_rounds,
     };
