@@ -25,6 +25,8 @@ use log::{debug, warn};
 use tokio::sync::mpsc::{channel, Sender};
 
 use tokio_rusqlite::Connection as DbConnection;
+
+use crate::congestion_analysis::congestion_summary_from_measurements;
 pub struct TopologyServer {
     tx: TopologyServerSender,
     rx: TopologyServerReceiver,
@@ -86,9 +88,12 @@ impl TopologyServer {
                     connection_measurements,
                 } => self.handle_store_measurement(connection_measurements).await,
                 InferCongestion {
-                    connection_measurements: _,
-                    reply_tx: _,
-                } => todo!(),
+                    connection_measurements,
+                    reply_tx,
+                } => {
+                    self.handle_infer_congestion(connection_measurements, reply_tx)
+                        .await
+                }
             }
         }
         warn!("Exiting TopologyServer:rx_loop()");
@@ -143,6 +148,24 @@ impl TopologyServer {
 
     pub fn get_tx(&self) -> TopologyServerSender {
         self.tx.clone()
+    }
+
+    /**
+     * Generate the CongestionSummary from the measurements.
+     * This call can block because we've already spawned a separate task for this upstream
+     */
+    async fn handle_infer_congestion(
+        &self,
+        connection_measurements: Vec<ConnectionMeasurements>,
+        reply_tx: Sender<
+            PerfMsgCheck<libconntrack_wasm::topology_server_messages::CongestionSummary>,
+        >,
+    ) {
+        let congestion_summary =
+            congestion_summary_from_measurements(connection_measurements, true);
+        if let Err(e) = reply_tx.send(PerfMsgCheck::new(congestion_summary)).await {
+            warn!("Failed to send congestion summary back to caller: {}", e);
+        }
     }
 }
 

@@ -120,11 +120,13 @@ pub fn congestion_summary_from_measurements(
     // now compute all of the stats
     for link in links
         .values_mut()
-        .sorted_by(CongestedLink::cmp_by_heuristic)
+        .sorted_by(CongestedLink::cmp_by_heuristic_mut)
     {
         recompute_compute_mean_and_peak(link);
     }
-    CongestionSummary { links }
+    CongestionSummary {
+        links: links.values().map(|l| l.clone()).collect_vec(),
+    }
 }
 
 fn update_link_congestion(
@@ -171,9 +173,12 @@ mod test {
         let data = make_simple_test_data();
         let congestion_summary = congestion_summary_from_measurements(data, true);
         assert_eq!(congestion_summary.links.len(), 10);
-        for key in congestion_summary.links.keys().sorted() {
-            let link = congestion_summary.links.get(&key).unwrap();
-            assert_eq!(key.src_to_dst_hop_count, 1);
+        for link in congestion_summary
+            .links
+            .iter()
+            .sorted_by(CongestedLink::cmp_by_heuristic)
+        {
+            assert_eq!(link.key.src_to_dst_hop_count, 1);
             assert_eq!(link.mean_latency.unwrap(), Duration::from_millis(1));
             assert_eq!(link.peak_latency.unwrap(), Duration::from_millis(1));
             assert_eq!(link.peak_to_mean_congestion_heuristic.unwrap(), 1.0);
