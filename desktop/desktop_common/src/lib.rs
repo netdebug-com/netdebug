@@ -1,3 +1,5 @@
+use std::{collections::HashMap, net::IpAddr, time::Duration};
+
 use common_wasm::timeseries_stats::ExportedBuckets;
 use libconntrack_wasm::{
     AggregateCounterKind, BidirBandwidthHistory, ConnectionMeasurements, DnsTrackerEntry,
@@ -8,7 +10,7 @@ use libconntrack_wasm::{
  * So no thread, deep OS calls, etc. here
  */
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, net::IpAddr};
+use serde_with::serde_as;
 use typescript_type_def::TypeDef;
 
 pub fn get_git_hash_version() -> String {
@@ -17,10 +19,17 @@ pub fn get_git_hash_version() -> String {
 
 /// Represents the data for a single bandwidth chart with data arranged for direct plotting
 /// with `chart.js`.
+#[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
 pub struct ChartJsBandwidth {
     /// The label of this chart. E.g., `Last 5 Seconds`
     pub label: String,
+    /// The total amount of time this Chart can hold, i.e., `bucket_time_window * num_buckets`.
+    /// This isn't necessarily the amount of data the chart is holding
+    #[type_def(type_of = "u64")]
+    #[serde_as(as = "serde_with::DurationSeconds<u64>")]
+    #[serde(rename = "total_duration_sec")]
+    pub total_time_window: Duration,
     /// The maximum value of the y axis (which represents bits/s)
     pub y_max_bps: f64,
     /// The received / download bandwidth history as chart.js points
@@ -86,8 +95,10 @@ pub fn bidir_bandwidth_to_chartjs(bbh: BidirBandwidthHistory) -> Vec<ChartJsBand
             .reduce(f64::max)
             .unwrap_or_default();
 
+        let total_time_window = tx_points.len() as u32 * tx_vec[i].1.bucket_time_window;
         ret.push(ChartJsBandwidth {
             label: tx_vec[i].0.clone(),
+            total_time_window,
             y_max_bps: max_y,
             rx: rx_points,
             tx: tx_points,
@@ -164,7 +175,6 @@ mod test {
     }
 
     fn mk_exported_buckets(dur_ms: u64, buckets: &[u64]) -> ExportedBuckets {
-        use std::time::Duration;
         ExportedBuckets {
             bucket_time_window: Duration::from_millis(dur_ms),
             buckets: Vec::from(buckets),

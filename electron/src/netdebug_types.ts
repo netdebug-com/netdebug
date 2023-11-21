@@ -192,6 +192,12 @@ export type ChartJsBandwidth = {
     "label": string;
 
     /**
+     * The total amount of time this Chart can hold, i.e., `bucket_time_window * num_buckets`.
+     * This isn't necessarily the amount of data the chart is holding
+     */
+    "total_duration_sec": U64;
+
+    /**
      * The maximum value of the y axis (which represents bits/s)
      */
     "y_max_bps": F64;

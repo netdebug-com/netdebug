@@ -24,6 +24,34 @@ export function periodic_with_sla(
   }
 }
 
+/// Given a number return a scale and suffix for the appropriate SI magnitude.
+/// E.g., 1234 would be [1000, "K"]. So 1234/1000 == 1.234 K
+export function getSiScale(x: number): [number, string] {
+  x = Math.abs(x);
+  if (x >= 1e9) {
+    return [1e9, "G"];
+  }
+  if (x >= 1e6) {
+    return [1e6, "M"];
+  }
+  if (x >= 1e3) {
+    return [1e3, "K"];
+  }
+  if (x >= 1) {
+    return [1, ""];
+  }
+  if (x >= 1e-3) {
+    return [1e-3, "m"];
+  }
+  if (x >= 1e-6) {
+    return [1e-6, "μ"];
+  }
+  if (x >= 1e-9) {
+    return [1e-9, "n"];
+  }
+  return [1, ""];
+}
+
 /// pretty print units using SI prefixes (K, M, G).
 // x: the number to format
 // unitSuffix: the suffix to add. E.g., "Bytes/s".
@@ -31,22 +59,18 @@ export function periodic_with_sla(
 export function prettyPrintSiUnits(
   x: number | null,
   unitSuffix: string,
+  maximumFractionDigits?: number,
 ): string {
   if (x === null || x === undefined) {
     return "None";
   }
   const opts = {
-    maximumFractionDigits: 1,
+    maximumFractionDigits: maximumFractionDigits ? maximumFractionDigits : 1,
   };
-  if (x > 1e9) {
-    return (x / 1e9).toLocaleString(undefined, opts) + " G" + unitSuffix;
-  } else if (x > 1e6) {
-    return (x / 1e6).toLocaleString(undefined, opts) + " M" + unitSuffix;
-  } else if (x > 1e3) {
-    return (x / 1e3).toLocaleString(undefined, opts) + " K" + unitSuffix;
-  } else {
-    return x.toLocaleString(undefined, opts) + " " + unitSuffix;
-  }
+  const [scale, suffix] = getSiScale(x);
+  return (
+    (x / scale).toLocaleString(undefined, opts) + " " + suffix + unitSuffix
+  );
 }
 
 // Utility function that takes a Map<string, number> containing stat counter values

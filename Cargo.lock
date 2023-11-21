@@ -602,6 +602,7 @@ dependencies = [
  "libconntrack-wasm",
  "serde",
  "serde_json",
+ "serde_with",
  "typescript-type-def",
 ]
 
