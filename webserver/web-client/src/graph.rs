@@ -23,9 +23,10 @@ pub struct PingData {
 // but good enough for our purposes
 impl Eq for PingData {}
 
+#[allow(clippy::derive_ord_xor_partial_ord)]
 impl Ord for PingData {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.rtt.total_cmp(&other.rtt)
+        self.partial_cmp(other).unwrap()
     }
 }
 
@@ -304,7 +305,7 @@ impl Graph {
         // pull data from probe summaries
         let mut nat: Option<(f64, f64, f64)> = None;
         let mut endhost: Option<(f64, f64, f64)> = None;
-        for (_ttl, probes) in &self.probe_report_summary.summary {
+        for probes in self.probe_report_summary.summary.values() {
             // use if let rather than match as there are a lot of different types of ProbeSummaries
             for probe in probes {
                 if let ProbeReportEntry::NatReplyFound {

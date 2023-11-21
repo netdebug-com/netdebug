@@ -66,7 +66,7 @@ fn look_for_nat(connection: &Connection) -> HashMap<u8, Vec<u32>> {
         .iter()
         .enumerate()
     {
-        for (_ttl, probe) in &probe_report.probes {
+        for probe in probe_report.probes.values() {
             use ProbeReportEntry::*;
             match &probe {
                 NatReplyFound { ttl, .. } => {
@@ -562,8 +562,7 @@ mod test {
         let insights = analyze(&connection);
         assert!(insights
             .iter()
-            .find(|i| matches!(i, AnalysisInsights::NoRouterReplies { .. }),)
-            .is_some());
+            .any(|i| matches!(&i, AnalysisInsights::NoRouterReplies { .. })));
     }
 
     #[test]

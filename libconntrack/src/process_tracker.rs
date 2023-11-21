@@ -164,7 +164,7 @@ impl ProcessTracker {
 
     fn lookup_from_cache(&self, key: &ConnectionKey) -> Option<ProcessTrackerEntry> {
         if key.ip_proto == IpProtocol::from_wire(etherparse::IpNumber::Tcp as u8) {
-            self.tcp_cache.get(key).map(|entry| entry.clone())
+            self.tcp_cache.get(key).cloned()
         } else {
             // Udp is stored only by local IP + local Port - try looking that up
             // only a single process can bind a specific port, so try that

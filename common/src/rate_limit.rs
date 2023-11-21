@@ -35,16 +35,16 @@ mod test {
     pub async fn test_simple_rate_limiter() {
         let mut srl = SimpleRateLimiter::new(Duration::from_millis(500));
         assert_eq!(srl.time_between_events, Duration::from_millis(500));
-        assert_eq!(srl.check_update(), true);
-        assert_eq!(srl.check_update(), false);
+        assert!(srl.check_update());
+        assert!(!srl.check_update());
         tokio::time::pause();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        assert_eq!(srl.check_update(), false);
+        assert!(!srl.check_update());
         tokio::time::sleep(Duration::from_millis(210)).await;
-        assert_eq!(srl.check_update(), true);
+        assert!(srl.check_update());
         tokio::time::sleep(Duration::from_millis(5000)).await;
-        assert_eq!(srl.check_update(), true);
+        assert!(srl.check_update());
         tokio::time::resume();
-        assert_eq!(srl.check_update(), false);
+        assert!(!srl.check_update());
     }
 }

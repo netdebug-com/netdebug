@@ -44,7 +44,7 @@ struct Args {
     pub ips: Vec<String>,
 }
 
-const GOOGLE_DNS_IPV6: &'static str = "2001:4860:4860::8888";
+const GOOGLE_DNS_IPV6: &str = "2001:4860:4860::8888";
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 4096;
 
 #[tokio::main]
@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     v4_sock
         .connect(("8.8.8.8", 53))
         .expect("Failed to bind v4 socket");
-    let v6_disabled = if let Err(_) = v6_sock.connect((GOOGLE_DNS_IPV6, 53)) {
+    let v6_disabled = if v6_sock.connect((GOOGLE_DNS_IPV6, 53)).is_err() {
         warn!("No IPv6 route found. Ignoring IPv6");
         true
     } else {
@@ -112,11 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?);
 
     let ips_to_probe: Vec<String> = if args.ips_from_stdin {
-        io::stdin()
-            .lines()
-            .into_iter()
-            .filter_map(|line_opt| line_opt.ok())
-            .collect()
+        io::stdin().lines().map_while(Result::ok).collect()
     } else {
         args.ips
     };

@@ -3,6 +3,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::{
+    cmp::Ordering,
     collections::HashMap,
     fmt::Display,
     sync::{Arc, Mutex},
@@ -132,7 +133,7 @@ where
         num_buckets: usize,
     ) -> BucketedTimeSeries<TS> {
         BucketedTimeSeries {
-            created_time: created_time,
+            created_time,
             // store Duration in Micros for faster calcs
             bucket_time_window,
             buckets: vec![CounterBucket::new(); num_buckets],
@@ -168,15 +169,20 @@ where
             // the window
             // tracking as https://github.com/netdebug-com/netdebug/issues/248
         } else if num_wraps == self.last_num_wraps {
-            // implicit: if bucket_index == self.last_bucket_used, then NOOP
-            if bucket_index > self.last_used_bucket {
-                // zero everything from just after the last bucket used to the new bucket (inclusive)
-                for b in (self.last_used_bucket + 1)..=bucket_index {
-                    self.buckets[b].clear();
+            match bucket_index.cmp(&self.last_used_bucket) {
+                Ordering::Greater => {
+                    // zero everything from just after the last bucket used to the new bucket (inclusive)
+                    for b in (self.last_used_bucket + 1)..=bucket_index {
+                        self.buckets[b].clear();
+                    }
                 }
-            } else if bucket_index < self.last_used_bucket {
-                // recently old data, could happen if the caller was delayed; just allow it without updating
-                // anything else
+                Ordering::Less => {
+                    // recently old data, could happen if the caller was delayed; just allow it without updating
+                    // anything else
+                }
+                Ordering::Equal => {
+                    // if bucket_index == self.last_bucket_used, then NOOP
+                }
             }
         } else if num_wraps == self.last_num_wraps + 1 {
             // we wrapped one time relative to last update
@@ -283,7 +289,7 @@ where
     }
 
     pub fn total_duration(&self) -> Duration {
-        return self.bucket_time_window * self.num_buckets as u32;
+        self.bucket_time_window * self.num_buckets as u32
     }
 }
 
@@ -1485,7 +1491,7 @@ mod test {
         assert_eq!(counters, expected);
 
         let counters_map = es.get_counter_map();
-        let expected_map = HashMap::from_iter(expected.clone().into_iter());
+        let expected_map = HashMap::from_iter(expected.clone());
         assert_eq!(counters_map, expected_map);
 
         // now test "append_counter" function

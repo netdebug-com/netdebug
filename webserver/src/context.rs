@@ -43,7 +43,7 @@ const MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE: usize = 8192;
 impl WebServerContext {
     pub fn new(args: &Args) -> Result<WebServerContext, Box<dyn Error>> {
         let pcap_device = match &args.pcap_device {
-            Some(d) => lookup_pcap_device_by_name(&d)?,
+            Some(d) => lookup_pcap_device_by_name(d)?,
             None => {
                 if args.production {
                     libconntrack::pcap::lookup_egress_device()?
@@ -83,7 +83,7 @@ impl WebServerContext {
             wasm_root: args.wasm_root.clone(),
             pcap_device,
             local_tcp_listen_port: args.listen_port,
-            local_ips: local_ips,
+            local_ips,
             connection_tracker: tx.clone(),
             topology_server: topology_server_tx.clone(),
             max_connections_per_tracker: args.max_connections_per_tracker,
@@ -202,7 +202,7 @@ impl UserDb {
         }
     }
 
-    pub fn new_password(passwd: &String) -> Result<String, pwhash::error::Error> {
+    pub fn new_password(passwd: &str) -> Result<String, pwhash::error::Error> {
         // generate a random salt
         let salt: String = rand::thread_rng()
             .sample_iter(&Alphanumeric)
@@ -217,12 +217,12 @@ impl UserDb {
         sha512_crypt::hash_with(hash_params, passwd)
     }
 
-    pub fn validate_password(&self, _user: &String, passwd: &String) -> bool {
+    pub fn validate_password(&self, _user: &str, passwd: &str) -> bool {
         // no 'users' yet - just test password
         sha512_crypt::verify(passwd, self.demo_password_hash.as_str())
     }
 
-    pub fn generate_auth_cooke(&self, _user: &String) -> String {
+    pub fn generate_auth_cooke(&self, _user: &str) -> String {
         // TODO - fix when we need real auth
         "SUCCESS".to_string()
     }
@@ -246,7 +246,7 @@ pub mod test {
     pub const TEST_PASSWD: &str = "test";
     pub fn make_test_context() -> Context {
         let test_pass = TEST_PASSWD;
-        let test_hash = UserDb::new_password(&test_pass.to_string()).unwrap();
+        let test_hash = UserDb::new_password(test_pass).unwrap();
         // create a connection tracker to nothing for the test context
         let (tx, _rx) = tokio::sync::mpsc::channel(128);
         let (topology_server_tx, _rx) = tokio::sync::mpsc::channel(128);

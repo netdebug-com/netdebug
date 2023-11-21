@@ -316,7 +316,7 @@ fn handle_version_check(git_hash: String, ws: &WebSocket) -> Result<(), JsValue>
             get_git_hash_version(),
         );
         Err(JsValue::from_str(
-            format!("need reload for new version").as_str(),
+            "need reload for new version".to_string().as_str(),
         ))
     }
 }

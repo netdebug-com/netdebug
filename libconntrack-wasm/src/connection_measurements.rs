@@ -49,16 +49,10 @@ impl ConnectionMeasurements {
         format!(
             "{} {} ({} :: {}) --> {} ({} :: {})",
             self.key.ip_proto,
-            self.local_hostname
-                .clone()
-                .or(Some("-".to_string()))
-                .unwrap(),
+            self.local_hostname.clone().unwrap_or("-".to_string()),
             self.key.local_ip,
             self.key.local_l4_port,
-            self.remote_hostname
-                .clone()
-                .or(Some("-".to_string()))
-                .unwrap(),
+            self.remote_hostname.clone().unwrap_or("-".to_string()),
             self.key.remote_ip,
             self.key.remote_l4_port
         )
