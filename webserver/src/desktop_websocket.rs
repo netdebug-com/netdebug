@@ -72,7 +72,18 @@ async fn handle_desktop_message(
         StoreConnectionMeasurement {
             connection_measurements: connection_measurement,
         } => handle_store(connection_measurement, topology_server).await,
+        InferCongestion {
+            connection_measurements,
+        } => handle_infer_congestion(ws_tx, connection_measurements, topology_server).await,
     }
+}
+
+async fn handle_infer_congestion(
+    _ws_tx: &Sender<TopologyServerToDesktop>,
+    _connection_measurements: Vec<libconntrack_wasm::ConnectionMeasurements>,
+    _topology_server: &Sender<PerfMsgCheck<TopologyServerMessage>>,
+) {
+    todo!()
 }
 
 /**

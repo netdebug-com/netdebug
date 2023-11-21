@@ -8,7 +8,7 @@ use futures::sink::SinkExt;
 use futures_util::stream::SplitSink;
 use futures_util::StreamExt;
 use libconntrack_wasm::topology_server_messages::{
-    DesktopToTopologyServer, TopologyServerToDesktop,
+    CongestionSummary, DesktopToTopologyServer, TopologyServerToDesktop,
 };
 use libconntrack_wasm::ConnectionMeasurements;
 use log::{info, warn};
@@ -28,6 +28,10 @@ pub enum TopologyServerMessage {
     },
     StoreConnectionMeasurements {
         connection_measurements: Box<ConnectionMeasurements>,
+    },
+    InferCongestion {
+        connection_measurements: Vec<ConnectionMeasurements>,
+        reply_tx: Sender<PerfMsgCheck<CongestionSummary>>,
     },
 }
 
@@ -262,6 +266,10 @@ impl TopologyServerConnection {
                 )
                 .await
             }
+            InferCongestion {
+                connection_measurements: _,
+                reply_tx: _,
+            } => todo!(),
         }
     }
 

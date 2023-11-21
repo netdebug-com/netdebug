@@ -85,6 +85,10 @@ impl TopologyServer {
                 StoreConnectionMeasurements {
                     connection_measurements,
                 } => self.handle_store_measurement(connection_measurements).await,
+                InferCongestion {
+                    connection_measurements: _,
+                    reply_tx: _,
+                } => todo!(),
             }
         }
         warn!("Exiting TopologyServer:rx_loop()");

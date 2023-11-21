@@ -384,7 +384,7 @@ name = "common-wasm"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "itertools",
+ "itertools 0.12.0",
  "linked-hash-map",
  "serde",
  "serde_json",
@@ -576,7 +576,7 @@ dependencies = [
  "futures",
  "futures-util",
  "indexmap 2.1.0",
- "itertools",
+ "itertools 0.11.0",
  "libconntrack",
  "libconntrack-wasm",
  "log",
@@ -598,7 +598,7 @@ dependencies = [
  "approx",
  "chrono",
  "common-wasm",
- "itertools",
+ "itertools 0.12.0",
  "libconntrack-wasm",
  "serde",
  "serde_json",
@@ -1116,6 +1116,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25db6b064527c5d482d0423354fcd07a89a2dfe07b67892e62411946db7f07b0"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1160,7 +1169,7 @@ dependencies = [
  "etherparse",
  "futures",
  "futures-util",
- "itertools",
+ "itertools 0.11.0",
  "libc",
  "libconntrack-wasm",
  "libproc",
@@ -1185,11 +1194,13 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "common-wasm",
+ "log",
  "serde",
  "serde_json",
  "serde_with",
  "typescript-type-def",
  "wasm-bindgen-test",
+ "wasm-logger",
 ]
 
 [[package]]
@@ -1626,9 +1637,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.4"
+version = "2.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a1be0afcd844b15cfce18bf8cccf2dfa887a00a6454a9ea135f122b948cee91"
+checksum = "74622ac275e4cc877aacd1f3f3ca66f99d34784611360104e7eaaea8a84f3f89"
 dependencies = [
  "psl-types",
 ]
@@ -1765,9 +1776,9 @@ checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustix"
-version = "0.38.24"
+version = "0.38.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ad981d6c340a49cdc40a1028d9c6084ec7e9fa33fcb839cab656a267071e234"
+checksum = "dc99bc2d4f1fed22595588a013687477aedf3cdcfb26558c559edb67b4d9b22e"
 dependencies = [
  "bitflags 2.4.1",
  "errno 0.3.7",
@@ -1805,18 +1816,18 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "serde"
-version = "1.0.192"
+version = "1.0.193"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bca2a08484b285dcb282d0f67b26cadc0df8b19f8c12502c13d966bf9482f001"
+checksum = "25dd9975e68d0cb5aa1120c288333fc98731bd1dd12f561e468ea4728c042b89"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.192"
+version = "1.0.193"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6c7207fbec9faa48073f3e3074cbe553af6ea512d7c21ba46e434e70ea9fbc1"
+checksum = "43576ca501357b9b071ac53cdc7da8ef0cbd9493d8df094cd821777ea6e894d3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2456,12 +2467,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-logger"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "074649a66bb306c8f2068c9016395fa65d8e08d2affcbf95acf3c24c3ab19718"
+dependencies = [
+ "log",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "web-client"
 version = "0.1.0"
 dependencies = [
  "common-wasm",
  "console_error_panic_hook",
- "itertools",
+ "itertools 0.11.0",
  "js-sys",
  "serde",
  "serde_json",
@@ -2494,7 +2516,7 @@ dependencies = [
  "futures",
  "futures-util",
  "indexmap 2.1.0",
- "itertools",
+ "itertools 0.11.0",
  "libconntrack",
  "libconntrack-wasm",
  "log",
