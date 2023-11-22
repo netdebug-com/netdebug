@@ -256,7 +256,7 @@ impl ProbeReportEntry {
         }
     }
 
-    fn get_rtt(&self) -> Option<f64> {
+    pub fn get_rtt_ms(&self) -> Option<f64> {
         use ProbeReportEntry::*;
         match self {
             RouterReplyFound { rtt_ms, .. }
@@ -543,7 +543,7 @@ impl ProbeReportSummary {
                     probe_type: probe.clone(),
                     ttl: *ttl,
                     ip: probe.get_ip(),
-                    rtts: if let Some(rtt_ms) = probe.get_rtt() {
+                    rtts: if let Some(rtt_ms) = probe.get_rtt_ms() {
                         vec![rtt_ms]
                     } else {
                         Vec::new()
