@@ -4,7 +4,9 @@ use std::path::Path;
 
 use desktop_common::{ChartJsBandwidth, GuiToServerMessages};
 
-use libconntrack_wasm::{ConnectionMeasurements, DnsTrackerEntry};
+use libconntrack_wasm::{
+    topology_server_messages::CongestionSummary, ConnectionMeasurements, DnsTrackerEntry,
+};
 use typescript_type_def::{write_definition_file, DefinitionFileOptions};
 
 /**
@@ -19,6 +21,7 @@ type ExportedTypes = (
     //ServerToGuiMessages,
     GuiToServerMessages,
     ChartJsBandwidth,
+    CongestionSummary,
 );
 
 const TYPESCRIPT_OUT_FILE: &str = "../electron/src/netdebug_types.ts";

@@ -79,11 +79,39 @@ async fn handle_desktop_message(
 }
 
 async fn handle_infer_congestion(
-    _ws_tx: &Sender<TopologyServerToDesktop>,
-    _connection_measurements: Vec<libconntrack_wasm::ConnectionMeasurements>,
-    _topology_server: &Sender<PerfMsgCheck<TopologyServerMessage>>,
+    ws_tx: &Sender<TopologyServerToDesktop>,
+    connection_measurements: Vec<libconntrack_wasm::ConnectionMeasurements>,
+    topology_server: &Sender<PerfMsgCheck<TopologyServerMessage>>,
 ) {
-    todo!()
+    // spawn this request off to a dedicated task as it might take a while to process
+    // and the client is completely async
+    let topology_server = topology_server.clone();
+    let ws_tx = ws_tx.clone();
+    tokio::spawn(async move {
+        let (reply_tx, mut reply_rx) = channel(1);
+        send_or_log_async!(
+            topology_server,
+            "handle_infer_congestion",
+            TopologyServerMessage::InferCongestion {
+                connection_measurements,
+                reply_tx
+            }
+        )
+        .await;
+        let congestion_summary = match reply_rx.recv().await {
+            Some(c) => c.perf_check_get("handle_infer_congstion"),
+            None => {
+                warn!("TopologyServer returned None!?");
+                return;
+            }
+        };
+        if let Err(e) = ws_tx
+            .send(TopologyServerToDesktop::InferCongestionReply { congestion_summary })
+            .await
+        {
+            warn!("Tried to write to websocket to desktop but got: {}", e);
+        }
+    });
 }
 
 /**

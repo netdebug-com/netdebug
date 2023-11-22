@@ -2,7 +2,8 @@ use std::{collections::HashMap, net::IpAddr, time::Duration};
 
 use common_wasm::timeseries_stats::ExportedBuckets;
 use libconntrack_wasm::{
-    AggregateCounterKind, BidirBandwidthHistory, ConnectionMeasurements, DnsTrackerEntry,
+    topology_server_messages::CongestionSummary, AggregateCounterKind, BidirBandwidthHistory,
+    ConnectionMeasurements, DnsTrackerEntry,
 };
 /**
  * Anything in this file must compile for both native rust/x86 AND WASM
@@ -120,6 +121,9 @@ pub enum ServerToGuiMessages {
     WhatsMyIpReply {
         ip: IpAddr,
     },
+    CongestedLinksReply {
+        congestion_summary: CongestionSummary,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TypeDef)]
@@ -130,6 +134,7 @@ pub enum GuiToServerMessages {
     DumpStatCounters(),
     DumpDnsAggregateCounters(),
     WhatsMyIp(),
+    CongestedLinksRequest(),
 }
 
 #[cfg(test)]

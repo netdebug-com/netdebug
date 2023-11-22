@@ -165,6 +165,8 @@ export type GuiToServerMessages = ({
     "DumpDnsAggregateCounters": [];
 } | {
     "WhatsMyIp": [];
+} | {
+    "CongestedLinksRequest": [];
 });
 export type ChartJsPoint = {
 
@@ -211,4 +213,87 @@ export type ChartJsBandwidth = {
      * The sent / upload bandwidth history as chart.js points
      */
     "tx": (ChartJsPoint)[];
+};
+export type CongestedLinkKey = {
+
+    /**
+     * The start of the link
+     */
+    "src_ip": string;
+
+    /**
+     * The other side/end of the 'link'
+     */
+    "dst_ip": string;
+
+    /**
+     * The number of router hops/ttl between the two
+     */
+    "src_to_dst_hop_count": U8;
+};
+
+/**
+ * * A CongestedLink tracks the latency and latency variance
+ *  * between two router/ttl hops.  They maybe directly
+ *  * connected, e.g., src_to_dst_hop_count=1, or indirectly
+ *  * connected (e.g., if we don't have data for routers inbetween).
+ *  *
+ *  * Higher variation in latency implies higher congestion!
+ *  *
+ *  * CongestedLink's are uni-directional: the link from A-->B may
+ *  * be more or less congested than the link from B-->A
+ *  *
+ *  * NOTE: src_latencies and dst_latencies Vec<>'s will always have
+ *  * the same size and are indexed so that src_latency[i] and dst_latency[i]
+ *  * will come from the same packet train/time so that they can be compared
+ *  * directly.
+ *  *
+ *  
+ */
+export type CongestionLatencyPair = {
+
+    /**
+     * Round-trip time from the origin to the first part of the link
+     */
+    "src_rtt_us": U64;
+
+    /**
+     * Round-trip time from the origin to the second part of the link
+     */
+    "dst_rtt_us": U64;
+};
+export type CongestedLink = {
+
+    /**
+     * The src + dst IPs and distance between them for this congested link
+     */
+    "key": CongestedLinkKey;
+
+    /**
+     * The latency measurements to the src_ip from a common origin, see Note above
+     */
+    "latencies": (CongestionLatencyPair)[];
+
+    /**
+     * The average latency from src to dst (subtracking src from dst latency)
+     */
+    "mean_latency_us"?: (U64 | null);
+
+    /**
+     * The peak latency from src to dst (subtracking src from dst latency)
+     */
+    "peak_latency_us"?: (U64 | null);
+
+    /**
+     * Peak-to-mean congestion heuristic - higher number --> more congestion
+     */
+    "peak_to_mean_congestion_heuristic": (F64 | null);
+};
+
+/**
+ * * A collection of information about congested linked.  
+ *  
+ */
+export type CongestionSummary = {
+    "links": (CongestedLink)[];
 };

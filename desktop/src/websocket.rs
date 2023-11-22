@@ -19,8 +19,9 @@ use libconntrack::{
     send_or_log_async, send_or_log_sync,
     utils::PerfMsgCheck,
 };
+use libconntrack_wasm::topology_server_messages::CongestionSummary;
 use log::{debug, info, warn};
-use tokio::sync::mpsc::{self, channel, UnboundedSender};
+use tokio::sync::mpsc::{self, channel, unbounded_channel, UnboundedSender};
 use warp::ws::{self, Message, WebSocket};
 
 use desktop_common::{bidir_bandwidth_to_chartjs, GuiToServerMessages, ServerToGuiMessages};
@@ -110,26 +111,79 @@ async fn handle_gui_to_server_msg(
     counter_registries: &Vec<ExportedStatRegistry>,
 ) {
     let start = std::time::Instant::now();
+    use GuiToServerMessages::*;
     match &msg {
-        GuiToServerMessages::DumpFlows() => {
+        DumpFlows() => {
             debug!("Got DumpFlows request");
             handle_gui_dumpflows(tx, connection_tracker).await;
         }
-        GuiToServerMessages::DumpDnsCache() => {
-            handle_gui_dump_dns_cache(tx, connection_tracker, dns_tracker).await
-        }
-        GuiToServerMessages::DumpAggregateCounters {} => {
+        DumpDnsCache() => handle_gui_dump_dns_cache(tx, connection_tracker, dns_tracker).await,
+        DumpAggregateCounters {} => {
             handle_dump_aggregate_connection_tracker_counters(tx, connection_tracker).await
         }
-        GuiToServerMessages::DumpStatCounters() => {
-            handle_dump_stat_counters(tx, counter_registries).await
+        DumpStatCounters() => handle_dump_stat_counters(tx, counter_registries).await,
+        DumpDnsAggregateCounters {} => handle_gui_dump_dns_flows(tx, connection_tracker).await,
+        WhatsMyIp() => handle_get_my_ip(tx, topology_client).await,
+        CongestedLinksRequest() => {
+            handle_congested_links_request(tx, topology_client, connection_tracker).await
         }
-        GuiToServerMessages::DumpDnsAggregateCounters {} => {
-            handle_gui_dump_dns_flows(tx, connection_tracker).await
-        }
-        GuiToServerMessages::WhatsMyIp() => handle_get_my_ip(tx, topology_client).await,
     }
     perf_check!("process gui message", start, Duration::from_millis(200));
+}
+
+/**
+ * The GUI asked for congested links: pull the ConnectionMeasurements from the connection tracker
+ * and ship them off to the topology server, wait for the reply, and send it back
+ */
+async fn handle_congested_links_request(
+    tx: &UnboundedSender<ServerToGuiMessages>,
+    topology_client: &TopologyServerSender,
+    connection_tracker: &ConnectionTrackerSender,
+) {
+    // 1. request connection measurements from conntracker
+    let (reply_tx, mut reply_rx) = unbounded_channel();
+    send_or_log_async!(
+        connection_tracker,
+        "handle_congested_links_request() - conntracker",
+        ConnectionTrackerMsg::GetConnectionMeasurements { tx: reply_tx }
+    )
+    .await;
+    let connection_measurements = match reply_rx.recv().await {
+        Some(m) => m,
+        None => {
+            warn!("ConnectionTracker::GetConnectionMeasurements returned None!?");
+            // UI is stateful; send them back an empty message just so they don't wait indefinitely...
+            if let Err(e) = tx.send(ServerToGuiMessages::CongestedLinksReply {
+                congestion_summary: CongestionSummary { links: Vec::new() },
+            }) {
+                warn!("Writing to GUI failed: {}", e);
+            }
+            return;
+        }
+    };
+    // 2. send the measurements to the topology server for analysis
+    let (reply_tx, mut reply_rx) = channel(1);
+    send_or_log_async!(
+        topology_client,
+        "handle_congestion_links_request() topology",
+        TopologyServerMessage::InferCongestion {
+            connection_measurements: connection_measurements,
+            reply_tx
+        }
+    )
+    .await;
+    let congestion_summary = match reply_rx.recv().await {
+        Some(c) => c.perf_check_get("handle_congested_links_request"),
+        None => {
+            warn!("TopologyClient::InferCongestion returned None!?");
+            // UI is stateful; send them back an empty message just so they don't wait indefinitely...
+            CongestionSummary { links: Vec::new() }
+        }
+    };
+    // 3. send the congestion summary back to the GUI
+    if let Err(e) = tx.send(ServerToGuiMessages::CongestedLinksReply { congestion_summary }) {
+        warn!("Failed to send CongestedLinksReply back to GUI: {}", e);
+    }
 }
 
 async fn handle_get_my_ip(

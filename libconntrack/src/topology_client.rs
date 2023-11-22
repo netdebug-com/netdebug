@@ -56,6 +56,7 @@ pub struct TopologyServerConnection {
     server_hello: Option<(IpAddr, String)>,
     /// A list of local agents that are waiting for the hello message info, e.g., the local IP
     waiting_for_hello: Vec<Sender<PerfMsgCheck<(IpAddr, String)>>>,
+    waiting_for_congestion_summary: Vec<Sender<PerfMsgCheck<CongestionSummary>>>,
     retry_stat: StatHandle,
     desktop2server_msgs_stat: StatHandle,
     desktop2server_store_msgs_stat: StatHandle,
@@ -80,6 +81,7 @@ impl TopologyServerConnection {
             max_retry_time,
             server_hello: None,
             waiting_for_hello: Vec::new(),
+            waiting_for_congestion_summary: Vec::new(),
             retry_stat: stats_registry.add_stat(
                 "connection_retries",
                 Units::None,
@@ -228,6 +230,9 @@ impl TopologyServerConnection {
                 client_ip,
                 user_agent,
             } => self.handle_topology_hello(client_ip, user_agent).await,
+            InferCongestionReply { congestion_summary } => {
+                self.handle_infer_congestion_reply(congestion_summary).await
+            }
         }
     }
 
@@ -267,9 +272,12 @@ impl TopologyServerConnection {
                 .await
             }
             InferCongestion {
-                connection_measurements: _,
-                reply_tx: _,
-            } => todo!(),
+                connection_measurements,
+                reply_tx,
+            } => {
+                self.handle_infer_congestion(&ws_tx, connection_measurements, reply_tx)
+                    .await
+            }
         }
     }
 
@@ -309,6 +317,53 @@ impl TopologyServerConnection {
         }
         self.server_hello = Some((client_ip, user_agent));
         self.waiting_for_hello.clear();
+    }
+
+    async fn handle_infer_congestion(
+        &mut self,
+        ws_tx: &Sender<PerfMsgCheck<DesktopToTopologyServer>>,
+        connection_measurements: Vec<ConnectionMeasurements>,
+        reply_tx: Sender<PerfMsgCheck<CongestionSummary>>,
+    ) {
+        self.waiting_for_congestion_summary.push(reply_tx);
+        send_or_log_async!(
+            ws_tx,
+            "handle_infer_congestion",
+            DesktopToTopologyServer::InferCongestion {
+                connection_measurements
+            }
+        )
+        .await;
+    }
+
+    /**
+     * Got a InferCongestionReply from server, send it to anyone waiting for it.
+     */
+
+    async fn handle_infer_congestion_reply(&mut self, congestion_summary: CongestionSummary) {
+        if self.waiting_for_congestion_summary.len() == 1 {
+            // common case, save some memcopies
+            let reply_tx = self.waiting_for_congestion_summary.pop().unwrap();
+            send_or_log_async!(
+                reply_tx,
+                "handle_infer_congestion_reply()",
+                congestion_summary
+            )
+            .await;
+        } else if self.waiting_for_congestion_summary.is_empty() {
+            warn!("Weird: Got a InferCongestionReply from server, but no one was waiting for it?");
+        } else {
+            // hopefully less common case, use clone()
+            for reply_tx in &self.waiting_for_congestion_summary {
+                send_or_log_async!(
+                    reply_tx,
+                    "handle_infer_congestion_reply()",
+                    congestion_summary.clone()
+                )
+                .await;
+            }
+            self.waiting_for_congestion_summary.clear();
+        }
     }
 }
 
