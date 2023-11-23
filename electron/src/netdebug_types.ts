@@ -7,90 +7,103 @@ export type U8 = number;
  * * A (hopefuly useful) subset of all of the possible IP Protocols
  *  * /// use IpProtocol::*;
  *  * ///  assert_eq!(TCP, IpProtocol::from_wire(TCP.to_wire()));
- *  
+ *
  */
-export type IpProtocol = ("ICMP" | "TCP" | "UDP" | "ICMP6" | {
-    "Other": U8;
-});
+export type IpProtocol =
+  | "ICMP"
+  | "TCP"
+  | "UDP"
+  | "ICMP6"
+  | {
+      Other: U8;
+    };
 export type ConnectionKey = {
-    "local_ip": string;
-    "remote_ip": string;
-    "local_l4_port": U16;
-    "remote_l4_port": U16;
-    "ip_proto": IpProtocol;
+  local_ip: string;
+  remote_ip: string;
+  local_l4_port: U16;
+  remote_l4_port: U16;
+  ip_proto: IpProtocol;
 };
 export type F64 = number;
-export type ProbeReportEntry = ({
-    "RouterReplyFound": {
-        "ttl": U8;
-        "out_timestamp_ms": F64;
-        "rtt_ms": F64;
-        "src_ip": string;
-        "comment": string;
+export type ProbeReportEntry =
+  | {
+      RouterReplyFound: {
+        ttl: U8;
+        out_timestamp_ms: F64;
+        rtt_ms: F64;
+        src_ip: string;
+        comment: string;
+      };
+    }
+  | {
+      NatReplyFound: {
+        ttl: U8;
+        out_timestamp_ms: F64;
+        rtt_ms: F64;
+        src_ip: string;
+        comment: string;
+      };
+    }
+  | {
+      NoReply: {
+        ttl: U8;
+        out_timestamp_ms: F64;
+        comment: string;
+      };
+    }
+  | {
+      NoOutgoing: {
+        ttl: U8;
+        comment: string;
+      };
+    }
+  | {
+      RouterReplyNoProbe: {
+        ttl: U8;
+        in_timestamp_ms: F64;
+        src_ip: string;
+        comment: string;
+      };
+    }
+  | {
+      NatReplyNoProbe: {
+        ttl: U8;
+        in_timestamp_ms: F64;
+        src_ip: string;
+        comment: string;
+      };
+    }
+  | {
+      EndHostReplyFound: {
+        ttl: U8;
+        out_timestamp_ms: F64;
+        rtt_ms: F64;
+        comment: string;
+      };
+    }
+  | {
+      EndHostNoProbe: {
+        ttl: U8;
+        in_timestamp_ms: F64;
+        comment: string;
+      };
     };
-} | {
-    "NatReplyFound": {
-        "ttl": U8;
-        "out_timestamp_ms": F64;
-        "rtt_ms": F64;
-        "src_ip": string;
-        "comment": string;
-    };
-} | {
-    "NoReply": {
-        "ttl": U8;
-        "out_timestamp_ms": F64;
-        "comment": string;
-    };
-} | {
-    "NoOutgoing": {
-        "ttl": U8;
-        "comment": string;
-    };
-} | {
-    "RouterReplyNoProbe": {
-        "ttl": U8;
-        "in_timestamp_ms": F64;
-        "src_ip": string;
-        "comment": string;
-    };
-} | {
-    "NatReplyNoProbe": {
-        "ttl": U8;
-        "in_timestamp_ms": F64;
-        "src_ip": string;
-        "comment": string;
-    };
-} | {
-    "EndHostReplyFound": {
-        "ttl": U8;
-        "out_timestamp_ms": F64;
-        "rtt_ms": F64;
-        "comment": string;
-    };
-} | {
-    "EndHostNoProbe": {
-        "ttl": U8;
-        "in_timestamp_ms": F64;
-        "comment": string;
-    };
-});
 export type U32 = number;
 export type ProbeRoundReport = {
-    "probes": Record<U8, ProbeReportEntry>;
-    "probe_round": U32;
-    "application_rtt": (F64 | null);
+  probes: Record<U8, ProbeReportEntry>;
+  probe_round: U32;
+  application_rtt: F64 | null;
 };
 export type ProbeReportSummaryNode = {
-    "probe_type": ProbeReportEntry;
-    "ttl": U8;
-    "ip": (string | null);
-    "rtts": (F64)[];
-    "comments": (string)[];
+  probe_type: ProbeReportEntry;
+  ttl: U8;
+  ip: string | null;
+  rtts: F64[];
+  comments: string[];
 };
 export type ProbeReportSummary = {
-    "raw_reports": (ProbeRoundReport)[];
-    "summary": Record<U8, (ProbeReportSummaryNode)[]>;
+  raw_reports: ProbeRoundReport[];
+  summary: Record<U8, ProbeReportSummaryNode[]>;
 };
 export type U64 = number;
 
@@ -100,86 +113,91 @@ export type U64 = number;
  * aggregated by IP, domain, whatever
  */
 export type TrafficStatsSummary = {
+  /**
+   * total number of bytes
+   */
+  bytes: U64;
 
-    /**
-     * total number of bytes
-     */
-    "bytes": U64;
+  /**
+   * total number of packets
+   */
+  pkts: U64;
 
-    /**
-     * total number of packets
-     */
-    "pkts": U64;
-
-    /**
-     * if the flow had enough packets and duration: the maximum
-     * burst we observed (over the configured time window)
-     */
-    "burst_pkt_rate": (F64 | null);
-    "burst_byte_rate": (F64 | null);
-    "last_min_pkt_rate": (F64 | null);
-    "last_min_byte_rate": (F64 | null);
+  /**
+   * if the flow had enough packets and duration: the maximum
+   * burst we observed (over the configured time window)
+   */
+  burst_pkt_rate: F64 | null;
+  burst_byte_rate: F64 | null;
+  last_min_pkt_rate: F64 | null;
+  last_min_byte_rate: F64 | null;
 };
 export type ConnectionMeasurements = {
-    "key": ConnectionKey;
-    "local_hostname": (string | null);
-    "remote_hostname": (string | null);
-    "probe_report_summary": ProbeReportSummary;
-    "user_annotation": (string | null);
-    "user_agent": (string | null);
-    "associated_apps": (Record<U32, (string | null)> | null);
+  key: ConnectionKey;
+  local_hostname: string | null;
+  remote_hostname: string | null;
+  probe_report_summary: ProbeReportSummary;
+  user_annotation: string | null;
+  user_agent: string | null;
+  associated_apps: Record<U32, string | null> | null;
 
-    /**
-     * Whether this connection has been (partially) closed. I.e., at least on FIN of RST ]
-     * was received.
-     */
-    "close_has_started": boolean;
+  /**
+   * Whether this connection has been (partially) closed. I.e., at least on FIN of RST ]
+   * was received.
+   */
+  close_has_started: boolean;
 
-    /**
-     * Whether this connection has completed the 4-way TCP teardown (2 FINs that were
-     * ACK'ed)
-     */
-    "four_way_close_done": boolean;
-    "start_tracking_time_ns": F64;
-    "last_packet_time_ns": F64;
-    "rx_stats"?: TrafficStatsSummary;
-    "tx_stats"?: TrafficStatsSummary;
+  /**
+   * Whether this connection has completed the 4-way TCP teardown (2 FINs that were
+   * ACK'ed)
+   */
+  four_way_close_done: boolean;
+  start_tracking_time_ns: F64;
+  last_packet_time_ns: F64;
+  rx_stats?: TrafficStatsSummary;
+  tx_stats?: TrafficStatsSummary;
 };
 export type I64 = number;
 export type DnsTrackerEntry = {
-    "hostname": string;
-    "created": string;
-    "from_ptr_record": boolean;
-    "rtt_usec"?: I64;
-    "ttl_sec"?: I64;
+  hostname: string;
+  created: string;
+  from_ptr_record: boolean;
+  rtt_usec?: I64;
+  ttl_sec?: I64;
 };
-export type GuiToServerMessages = ({
-    "tag": "DumpFlows";
-} | {
-    "tag": "DumpDnsCache";
-} | {
-    "tag": "DumpAggregateCounters";
-} | {
-    "tag": "DumpStatCounters";
-} | {
-    "tag": "DumpDnsAggregateCounters";
-} | {
-    "tag": "WhatsMyIp";
-} | {
-    "tag": "CongestedLinksRequest";
-});
+export type GuiToServerMessages =
+  | {
+      tag: "DumpFlows";
+    }
+  | {
+      tag: "DumpDnsCache";
+    }
+  | {
+      tag: "DumpAggregateCounters";
+    }
+  | {
+      tag: "DumpStatCounters";
+    }
+  | {
+      tag: "DumpDnsAggregateCounters";
+    }
+  | {
+      tag: "WhatsMyIp";
+    }
+  | {
+      tag: "CongestedLinksRequest";
+    };
 export type ChartJsPoint = {
+  /**
+   * x-value. For bandwidth plots this is seconds in the past where the last bucket is `now`, i.e., 0.0
+   * And a value of -2.5 is 2.5secs in the past. (Note these values are all <= 0)
+   */
+  x: F64;
 
-    /**
-     * x-value. For bandwidth plots this is seconds in the past where the last bucket is `now`, i.e., 0.0
-     * And a value of -2.5 is 2.5secs in the past. (Note these values are all <= 0)
-     */
-    "x": F64;
-
-    /**
-     * y-value. For bandwidth plots this is bit-per-second
-     */
-    "y": F64;
+  /**
+   * y-value. For bandwidth plots this is bit-per-second
+   */
+  y: F64;
 };
 
 /**
@@ -187,49 +205,47 @@ export type ChartJsPoint = {
  * with `chart.js`.
  */
 export type ChartJsBandwidth = {
+  /**
+   * The label of this chart. E.g., `Last 5 Seconds`
+   */
+  label: string;
 
-    /**
-     * The label of this chart. E.g., `Last 5 Seconds`
-     */
-    "label": string;
+  /**
+   * The total amount of time this Chart can hold, i.e., `bucket_time_window * num_buckets`.
+   * This isn't necessarily the amount of data the chart is holding
+   */
+  total_duration_sec: U64;
 
-    /**
-     * The total amount of time this Chart can hold, i.e., `bucket_time_window * num_buckets`.
-     * This isn't necessarily the amount of data the chart is holding
-     */
-    "total_duration_sec": U64;
+  /**
+   * The maximum value of the y axis (which represents bits/s)
+   */
+  y_max_bps: F64;
 
-    /**
-     * The maximum value of the y axis (which represents bits/s)
-     */
-    "y_max_bps": F64;
+  /**
+   * The received / download bandwidth history as chart.js points
+   */
+  rx: ChartJsPoint[];
 
-    /**
-     * The received / download bandwidth history as chart.js points
-     */
-    "rx": (ChartJsPoint)[];
-
-    /**
-     * The sent / upload bandwidth history as chart.js points
-     */
-    "tx": (ChartJsPoint)[];
+  /**
+   * The sent / upload bandwidth history as chart.js points
+   */
+  tx: ChartJsPoint[];
 };
 export type CongestedLinkKey = {
+  /**
+   * The start of the link
+   */
+  src_ip: string;
 
-    /**
-     * The start of the link
-     */
-    "src_ip": string;
+  /**
+   * The other side/end of the 'link'
+   */
+  dst_ip: string;
 
-    /**
-     * The other side/end of the 'link'
-     */
-    "dst_ip": string;
-
-    /**
-     * The number of router hops/ttl between the two
-     */
-    "src_to_dst_hop_count": U8;
+  /**
+   * The number of router hops/ttl between the two
+   */
+  src_to_dst_hop_count: U8;
 };
 
 /**
@@ -248,71 +264,72 @@ export type CongestedLinkKey = {
  *  * will come from the same packet train/time so that they can be compared
  *  * directly.
  *  *
- *  
+ *
  */
 export type CongestionLatencyPair = {
+  /**
+   * Round-trip time from the origin to the first part of the link
+   */
+  src_rtt_us: U64;
 
-    /**
-     * Round-trip time from the origin to the first part of the link
-     */
-    "src_rtt_us": U64;
-
-    /**
-     * Round-trip time from the origin to the second part of the link
-     */
-    "dst_rtt_us": U64;
+  /**
+   * Round-trip time from the origin to the second part of the link
+   */
+  dst_rtt_us: U64;
 };
 export type CongestedLink = {
+  /**
+   * The src + dst IPs and distance between them for this congested link
+   */
+  key: CongestedLinkKey;
 
-    /**
-     * The src + dst IPs and distance between them for this congested link
-     */
-    "key": CongestedLinkKey;
+  /**
+   * The latency measurements to the src_ip from a common origin, see Note above
+   */
+  latencies: CongestionLatencyPair[];
 
-    /**
-     * The latency measurements to the src_ip from a common origin, see Note above
-     */
-    "latencies": (CongestionLatencyPair)[];
+  /**
+   * The average latency from src to dst (subtracking src from dst latency)
+   */
+  mean_latency_us?: U64 | null;
 
-    /**
-     * The average latency from src to dst (subtracking src from dst latency)
-     */
-    "mean_latency_us"?: (U64 | null);
+  /**
+   * The peak latency from src to dst (subtracking src from dst latency)
+   */
+  peak_latency_us?: U64 | null;
 
-    /**
-     * The peak latency from src to dst (subtracking src from dst latency)
-     */
-    "peak_latency_us"?: (U64 | null);
-
-    /**
-     * Peak-to-mean congestion heuristic - higher number --> more congestion
-     */
-    "peak_to_mean_congestion_heuristic": (F64 | null);
+  /**
+   * Peak-to-mean congestion heuristic - higher number --> more congestion
+   */
+  peak_to_mean_congestion_heuristic: F64 | null;
 };
 
 /**
- * * A collection of information about congested linked.  
- *  
+ * * A collection of information about congested linked.
+ *
  */
 export type CongestionSummary = {
-    "links": (CongestedLink)[];
+  links: CongestedLink[];
 };
-export type AggregateStatKind = ({
-    "tag": "DnsDstDomain";
-    "name": string;
-} | {
-    "tag": "Application";
-    "name": string;
-} | {
-    "tag": "ConnectionTracker";
-});
+export type AggregateStatKind =
+  | {
+      tag: "DnsDstDomain";
+      name: string;
+    }
+  | {
+      tag: "Application";
+      name: string;
+    }
+  | {
+      tag: "ConnectionTracker";
+    };
 export type BidirTrafficStatsSummary = {
-    "rx": TrafficStatsSummary;
-    "tx": TrafficStatsSummary;
+  rx: TrafficStatsSummary;
+  tx: TrafficStatsSummary;
 };
 export type AggregateStatEntry = {
-    "kind": AggregateStatKind;
-    "bandwidth": (ChartJsBandwidth)[];
-    "summary": BidirTrafficStatsSummary;
-    "connections": (ConnectionMeasurements)[];
+  kind: AggregateStatKind;
+  bandwidth: ChartJsBandwidth[];
+  summary: BidirTrafficStatsSummary;
+  connections: ConnectionMeasurements[];
 };

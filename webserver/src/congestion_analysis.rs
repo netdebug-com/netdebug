@@ -23,6 +23,7 @@ use log::warn;
 pub fn recompute_compute_mean_and_peak(link: &mut CongestedLink) {
     let mut peak_micros = 0;
     let mut sum_micros = 0;
+    let mut count = 0;
     for latency_pair in &link.latencies {
         let dst_lat = latency_pair.dst_rtt;
         let src_lat = latency_pair.src_rtt;
@@ -32,20 +33,21 @@ pub fn recompute_compute_mean_and_peak(link: &mut CongestedLink) {
                 "Destination latency less than source latency!! dst={:?} src={:?} {:?}",
                 dst_lat, src_lat, link
             );
-            return;
+            continue;
         }
         let latency = dst_lat.as_micros() - src_lat.as_micros();
         sum_micros += latency;
+        count += 1;
         if peak_micros < latency {
             peak_micros = latency;
         }
     }
-    link.mean_latency = Some(Duration::from_micros(
-        sum_micros as u64 / link.latencies.len() as u64,
-    ));
-    link.peak_latency = Some(Duration::from_micros(peak_micros as u64));
-    link.peak_to_mean_congestion_heuristic =
-        Some(peak_micros as f64 * link.latencies.len() as f64 / sum_micros as f64);
+    if count > 0 {
+        link.mean_latency = Some(Duration::from_micros(sum_micros as u64 / count as u64));
+        link.peak_latency = Some(Duration::from_micros(peak_micros as u64));
+        link.peak_to_mean_congestion_heuristic =
+            Some(peak_micros as f64 * count as f64 / sum_micros as f64);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -125,7 +127,11 @@ pub fn congestion_summary_from_measurements(
         recompute_compute_mean_and_peak(link);
     }
     CongestionSummary {
-        links: links.values().map(|l| l.clone()).collect_vec(),
+        links: links
+            .values()
+            .sorted_by(CongestedLink::cmp_by_heuristic)
+            .map(|l| l.clone())
+            .collect_vec(),
     }
 }
 
