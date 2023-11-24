@@ -5,34 +5,22 @@ import useWebSocket from "react-use-websocket";
 
 // import sub-pages
 import Home from "./pages/Home";
-import Flows from "./pages/Flows";
 import Bandwidth from "./pages/Bandwidth";
 import Dns from "./pages/Dns";
 import Counters from "./pages/Counters";
+import FlowsNav from "./FlowsNav";
 
 const WS_URL = "ws://localhost:33434/ws";
 
 function App() {
-  useWebSocket(WS_URL, {
-    onOpen: () => {
-      console.log("WebSocket connection established.");
-    },
-
-    onMessage: (msg) => {
-      console.log("Got message from websocket: ", msg.data);
-    },
-    onClose: () => {
-      console.log("Closing websocket");
-    },
-  });
   return (
     <HashRouter>
       <div>
         <Navbar />
         <Routes>
-          <Route path="" element={<Home />} />
+          <Route index element={<Home />} />
           <Route path="/bandwidth" element={<Bandwidth />} />
-          <Route path="/flows" element={<Flows />} />
+          <Route path="/flows/*" element={<FlowsNav />} />
           <Route path="/dns" element={<Dns />} />
           <Route path="/counters" element={<Counters />} />
         </Routes>

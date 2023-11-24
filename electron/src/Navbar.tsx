@@ -1,38 +1,23 @@
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
-import { Link, matchPath, useLocation } from "react-router-dom";
+import { Link } from "react-router-dom";
+import { useMatchNavInfo } from "./router_utils";
 
-const TabData = [
-  ["Home", "/"],
-  ["Bandwidth", "/bandwidth"],
-  ["DNS", "/dns"],
-  ["Flows", "/flows"],
-  ["Counters", "/counters"],
+const TAB_NAV_INFO = [
+  { label: "Home", to: "/", exactMatch: true },
+  { label: "Bandwidth", to: "/bandwidth" },
+  { label: "DNS", to: "/dns" },
+  { label: "Flows", to: "/flows" },
+  { label: "Counters", to: "/counters" },
 ];
 
-function useRouteMatch(patterns: readonly string[]) {
-  const { pathname } = useLocation();
-
-  for (let i = 0; i < patterns.length; i += 1) {
-    const pattern = patterns[i];
-    const possibleMatch = matchPath(pattern, pathname);
-    if (possibleMatch !== null) {
-      return possibleMatch;
-    }
-  }
-
-  return null;
-}
-
 export default function MyTabs() {
-  const paths = TabData.map((tab) => tab[1]);
-  const routeMatch = useRouteMatch(paths);
-  const currentTab = routeMatch?.pattern?.path;
+  const currentTab = useMatchNavInfo(TAB_NAV_INFO);
   return (
     <Tabs sx={{ marginBottom: 1 }} value={currentTab}>
-      {TabData.map(([label, dst]) => {
+      {TAB_NAV_INFO.map(({ label, to }) => {
         return (
-          <Tab label={label} key={dst} value={dst} to={dst} component={Link} />
+          <Tab label={label} key={to} value={to} to={to} component={Link} />
         );
       })}
     </Tabs>
