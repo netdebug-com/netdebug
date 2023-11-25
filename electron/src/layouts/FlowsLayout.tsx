@@ -1,8 +1,7 @@
 import { ToggleButton, ToggleButtonGroup } from "@mui/material";
 import React from "react";
-import { Routes, Route, Link } from "react-router-dom";
-import { NavInfo, useMatchNavInfo } from "./router_utils";
-import Flows from "./pages/Flows";
+import { Link, Outlet } from "react-router-dom";
+import { NavInfo, useMatchNavInfo } from "../router_utils";
 
 const FLOW_ROUTE_INFOS: NavInfo[] = [
   { label: "By Flows", to: "", exactMatch: true },
@@ -11,16 +10,16 @@ const FLOW_ROUTE_INFOS: NavInfo[] = [
 ];
 
 const FlowsNav: React.FC = () => {
-  let curSelectedRoute = useMatchNavInfo(FLOW_ROUTE_INFOS);
-  if (!curSelectedRoute) {
-    curSelectedRoute = "";
+  let curSelected = useMatchNavInfo(FLOW_ROUTE_INFOS);
+  if (!curSelected) {
+    curSelected = "";
   }
   return (
     <div>
-      <div>
+      <nav>
         <ToggleButtonGroup
           color="primary"
-          value={curSelectedRoute}
+          value={curSelected}
           exclusive
           aria-label="Flow Groupings"
         >
@@ -32,12 +31,8 @@ const FlowsNav: React.FC = () => {
             );
           })}
         </ToggleButtonGroup>
-      </div>
-      <Routes>
-        <Route index element={<Flows />} />
-        <Route path="by_dest_domain" element={<h1>By Dest Domain</h1>} />
-        <Route path="by_app" element={<h1>By App</h1>} />
-      </Routes>
+      </nav>
+      <Outlet />
     </div>
   );
 };

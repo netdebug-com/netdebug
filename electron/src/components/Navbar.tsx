@@ -1,7 +1,7 @@
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
 import { Link } from "react-router-dom";
-import { useMatchNavInfo } from "./router_utils";
+import { useMatchNavInfo } from "../router_utils";
 
 const TAB_NAV_INFO = [
   { label: "Home", to: "/", exactMatch: true },
@@ -11,7 +11,7 @@ const TAB_NAV_INFO = [
   { label: "Counters", to: "/counters" },
 ];
 
-export default function MyTabs() {
+export default function Navbar() {
   const currentTab = useMatchNavInfo(TAB_NAV_INFO);
   return (
     <Tabs sx={{ marginBottom: 1 }} value={currentTab}>

@@ -12,7 +12,7 @@ import {
   headerStyleWithWidth,
   reshapeCounter,
 } from "../utils";
-import { SwitchHelper } from "../SwitchHelper";
+import { SwitchHelper } from "../components/SwitchHelper";
 import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 
 const Counters: React.FC = () => {

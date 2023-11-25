@@ -12,7 +12,7 @@ import {
   LineElement,
   Title,
 } from "chart.js";
-import { SwitchHelper } from "../SwitchHelper";
+import { SwitchHelper } from "../components/SwitchHelper";
 import { getSiScale, prettyPrintSiUnits } from "../utils";
 
 ChartJS.register(
