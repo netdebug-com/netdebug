@@ -595,14 +595,12 @@ dependencies = [
 name = "desktop_common"
 version = "0.1.0"
 dependencies = [
- "approx",
  "chrono",
  "common-wasm",
  "itertools 0.12.0",
  "libconntrack-wasm",
  "serde",
  "serde_json",
- "serde_with",
  "typescript-type-def",
 ]
 
@@ -1192,6 +1190,7 @@ dependencies = [
 name = "libconntrack-wasm"
 version = "0.1.0"
 dependencies = [
+ "approx",
  "chrono",
  "common-wasm",
  "log",

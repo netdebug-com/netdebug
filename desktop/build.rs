@@ -2,10 +2,11 @@
 use std::env;
 use std::path::Path;
 
-use desktop_common::{ChartJsBandwidth, GuiToServerMessages};
+use desktop_common::GuiToServerMessages;
 
 use libconntrack_wasm::{
-    topology_server_messages::CongestionSummary, ConnectionMeasurements, DnsTrackerEntry,
+    topology_server_messages::CongestionSummary, AggregateStatEntry, ChartJsBandwidth,
+    ConnectionMeasurements, DnsTrackerEntry,
 };
 use typescript_type_def::{write_definition_file, DefinitionFileOptions};
 
@@ -22,6 +23,7 @@ type ExportedTypes = (
     GuiToServerMessages,
     ChartJsBandwidth,
     CongestionSummary,
+    AggregateStatEntry,
 );
 
 const TYPESCRIPT_OUT_FILE: &str = "../electron/src/netdebug_types.ts";
