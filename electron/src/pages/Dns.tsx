@@ -55,7 +55,7 @@ const Dns: React.FC = () => {
 
   useWebSocketGuiToServer({
     autoRefresh: true,
-    reqMsgType: { DumpDnsCache: [] },
+    reqMsgType: { tag: "DumpDnsCache" },
     respMsgType: "DumpDnsCache",
     min_time_between_requests_ms: 500,
     max_time_between_requests_ms: 1000,

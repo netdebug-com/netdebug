@@ -49,7 +49,7 @@ const Flows: React.FC = () => {
 
   useWebSocketGuiToServer({
     autoRefresh: autoRefresh,
-    reqMsgType: { DumpFlows: [] },
+    reqMsgType: { tag: "DumpFlows" },
     respMsgType: "DumpFlowsReply",
     min_time_between_requests_ms: 1000,
     max_time_between_requests_ms: 2000,

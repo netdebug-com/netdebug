@@ -32,7 +32,7 @@ const Flows: React.FC = () => {
 
   useWebSocketGuiToServer({
     autoRefresh: autoRefresh,
-    reqMsgType: { DumpDnsAggregateCounters: [] },
+    reqMsgType: { tag: "DumpDnsAggregateCounters" },
     respMsgType: "DumpDnsAggregateCountersReply",
     min_time_between_requests_ms: 1000,
     max_time_between_requests_ms: 2000,
@@ -70,35 +70,38 @@ const Flows: React.FC = () => {
                 Recv Bandwidth
               </TableCell>
             </TableRow>
-            {statEntries.sort(statSortFn).map((entry) => {
-              const key =
-                typeof entry.kind === "object" && "DnsDstDomain" in entry.kind
-                  ? entry.kind["DnsDstDomain"]
-                  : null;
-              return (
-                <TableRow key={key}>
-                  <TableCell>{key}</TableCell>
-                  <TableCell align="right">
-                    {prettyPrintSiUnits(entry.summary.tx?.bytes, "B")}
-                  </TableCell>
-                  <TableCell align="right">
-                    {prettyPrintSiUnits(entry.summary.rx?.bytes, "B")}
-                  </TableCell>
-                  <TableCell align="right">
-                    {prettyPrintSiUnits(
-                      entry.summary.tx?.last_min_byte_rate,
-                      "Bytes/s",
-                    )}
-                  </TableCell>
-                  <TableCell align="right">
-                    {prettyPrintSiUnits(
-                      entry.summary.rx?.last_min_byte_rate,
-                      "Bytes/s",
-                    )}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
+            {statEntries
+              .sort(statSortFn)
+              .filter((entry) => entry.kind.tag === "DnsDstDomain")
+              .map((entry) => {
+                // the tenary operator here is to make typescript happy. Otherwise it'll complain
+                // that name doesn't exist on all enum variants.
+                const key: string =
+                  entry.kind.tag === "DnsDstDomain" ? entry.kind.name : "";
+                return (
+                  <TableRow key={key}>
+                    <TableCell>{key}</TableCell>
+                    <TableCell align="right">
+                      {prettyPrintSiUnits(entry.summary.tx?.bytes, "B")}
+                    </TableCell>
+                    <TableCell align="right">
+                      {prettyPrintSiUnits(entry.summary.rx?.bytes, "B")}
+                    </TableCell>
+                    <TableCell align="right">
+                      {prettyPrintSiUnits(
+                        entry.summary.tx?.last_min_byte_rate,
+                        "Bytes/s",
+                      )}
+                    </TableCell>
+                    <TableCell align="right">
+                      {prettyPrintSiUnits(
+                        entry.summary.rx?.last_min_byte_rate,
+                        "Bytes/s",
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
           </TableHead>
         </Table>
       </TableContainer>
