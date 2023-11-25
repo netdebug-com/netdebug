@@ -18,7 +18,7 @@ pub enum AggregateStatKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypeDef)]
 pub struct AggregateStatEntry {
     pub kind: AggregateStatKind,
-    pub bandwidth: BidirBandwidthHistory,
+    pub bandwidth: Vec<ChartJsBandwidth>,
     pub summary: BidirTrafficStatsSummary,
     pub connections: Vec<ConnectionMeasurements>,
 }

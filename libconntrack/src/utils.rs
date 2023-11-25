@@ -355,6 +355,11 @@ pub fn dns_to_cannonical_domain(hostname: &str) -> Result<String, String> {
     // Note that psl downloads a new copy of the list at it's publication time
     // so the list updates with each new release of psl - which should be fine for
     // our purposes (which are mostly cosmetic)
+    if hostname.ends_with("amazonaws.com") {
+        // FIXME: PSL failes to parse (at least some) hostnames with this domain. Hardcode it for now.
+        // https://github.com/netdebug-com/netdebug/issues/315
+        return Ok("amazonaws.com".to_owned());
+    }
     let domain = match psl::domain(hostname.as_bytes()) {
         Some(domain) => domain,
         None => {
