@@ -12,7 +12,7 @@ use common_wasm::{
 
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{
-    traffic_stats::BidirectionalStats, AggregateCounterKind, ConnectionKey, IpProtocol,
+    traffic_stats::BidirectionalStats, AggregateStatKind, ConnectionKey, IpProtocol,
 };
 #[cfg(not(test))]
 use log::{debug, warn};
@@ -157,7 +157,7 @@ pub struct Connection {
     pub remote_hostname: Option<String>, // the FQDN of the remote host, if we know it
     pub traffic_stats: BidirectionalStats,
     // which counter groups does this flow belong to, e.g., "google.com" and "chrome"
-    pub aggregate_groups: HashSet<AggregateCounterKind>,
+    pub aggregate_groups: HashSet<AggregateStatKind>,
 }
 
 impl Connection {
@@ -188,7 +188,7 @@ impl Connection {
                 MAX_BURST_RATE_TIME_WINDOW_MILLIS,
             )),
             // all connections are part of the connection tracker counter group
-            aggregate_groups: HashSet::from([AggregateCounterKind::ConnectionTracker]),
+            aggregate_groups: HashSet::from([AggregateStatKind::ConnectionTracker]),
         }
     }
 

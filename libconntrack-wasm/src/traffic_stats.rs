@@ -6,7 +6,22 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use typescript_type_def::TypeDef;
 
-use crate::pretty_print_si_units;
+use crate::{pretty_print_si_units, ConnectionMeasurements};
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TypeDef)]
+pub enum AggregateStatKind {
+    DnsDstDomain(String),
+    Application(String),
+    ConnectionTracker,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypeDef)]
+pub struct AggregateStatEntry {
+    pub kind: AggregateStatKind,
+    pub bandwidth: BidirBandwidthHistory,
+    pub summary: BidirTrafficStatsSummary,
+    pub connections: Vec<ConnectionMeasurements>,
+}
 
 /// Keeps track of the maximum observed burst rate (both bytes and packets) in a short
 /// time interval (`time_window`). E.g., if `time_window == 10ms` then it will track
@@ -367,6 +382,13 @@ impl BidirectionalStats {
             .unwrap_or_else(|| TrafficStats::new(now, burst_time_window).as_bandwidth_history(now))
     }
 
+    pub fn as_bidir_stats_summary(&mut self, now: DateTime<Utc>) -> BidirTrafficStatsSummary {
+        BidirTrafficStatsSummary {
+            rx: self.rx_stats_summary(now),
+            tx: self.tx_stats_summary(now),
+        }
+    }
+
     pub fn as_bidir_bandwidth_history(&mut self, now: DateTime<Utc>) -> BidirBandwidthHistory {
         BidirBandwidthHistory {
             rx: Self::to_bandwidth_history(&mut self.rx, self.burst_time_window, now),
@@ -461,6 +483,24 @@ mod test {
             TrafficStatsSummary {
                 bytes: 400,
                 pkts: 2,
+                ..Default::default()
+            }
+        );
+
+        let bidir_summary = bds.as_bidir_stats_summary(start);
+        assert_eq!(
+            bidir_summary.rx,
+            TrafficStatsSummary {
+                bytes: 400,
+                pkts: 2,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            bidir_summary.tx,
+            TrafficStatsSummary {
+                bytes: 100,
+                pkts: 1,
                 ..Default::default()
             }
         );
