@@ -113,18 +113,18 @@ async fn handle_gui_to_server_msg(
     let start = std::time::Instant::now();
     use GuiToServerMessages::*;
     match &msg {
-        DumpFlows() => {
+        DumpFlows => {
             debug!("Got DumpFlows request");
             handle_gui_dumpflows(tx, connection_tracker).await;
         }
-        DumpDnsCache() => handle_gui_dump_dns_cache(tx, connection_tracker, dns_tracker).await,
-        DumpAggregateCounters {} => {
+        DumpDnsCache => handle_gui_dump_dns_cache(tx, connection_tracker, dns_tracker).await,
+        DumpAggregateCounters => {
             handle_dump_aggregate_connection_tracker_counters(tx, connection_tracker).await
         }
-        DumpStatCounters() => handle_dump_stat_counters(tx, counter_registries).await,
-        DumpDnsAggregateCounters {} => handle_gui_dump_dns_flows(tx, connection_tracker).await,
-        WhatsMyIp() => handle_get_my_ip(tx, topology_client).await,
-        CongestedLinksRequest() => {
+        DumpStatCounters => handle_dump_stat_counters(tx, counter_registries).await,
+        DumpDnsAggregateCounters => handle_gui_dump_dns_flows(tx, connection_tracker).await,
+        WhatsMyIp => handle_get_my_ip(tx, topology_client).await,
+        CongestedLinksRequest => {
             handle_congested_links_request(tx, topology_client, connection_tracker).await
         }
     }

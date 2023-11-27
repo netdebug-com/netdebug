@@ -14,9 +14,9 @@ const Home: React.FC = () => {
       console.debug("WebSocket connection established.");
     },
     onMessage: (msg) => {
-      const data = JSON.parse(msg.data);
-      if ("WhatsMyIpReply" in data) {
-        setMyIp(data.WhatsMyIpReply.ip);
+      const parsed = JSON.parse(msg.data);
+      if (parsed.tag == "WhatsMyIpReply") {
+        setMyIp(parsed.data.ip);
       }
     },
     onClose: () => {
@@ -28,7 +28,7 @@ const Home: React.FC = () => {
     console.debug("Sending WhatsMyIp request");
     sendMessage(
       JSON.stringify({
-        WhatsMyIp: [],
+        tag: "WhatsMyIp",
       }),
     );
     last_send.current = window.performance.now();

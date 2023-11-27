@@ -154,19 +154,19 @@ export type DnsTrackerEntry = {
     "ttl_sec"?: I64;
 };
 export type GuiToServerMessages = ({
-    "DumpFlows": [];
+    "tag": "DumpFlows";
 } | {
-    "DumpDnsCache": [];
+    "tag": "DumpDnsCache";
 } | {
-    "DumpAggregateCounters": [];
+    "tag": "DumpAggregateCounters";
 } | {
-    "DumpStatCounters": [];
+    "tag": "DumpStatCounters";
 } | {
-    "DumpDnsAggregateCounters": [];
+    "tag": "DumpDnsAggregateCounters";
 } | {
-    "WhatsMyIp": [];
+    "tag": "WhatsMyIp";
 } | {
-    "CongestedLinksRequest": [];
+    "tag": "CongestedLinksRequest";
 });
 export type ChartJsPoint = {
 
@@ -298,10 +298,14 @@ export type CongestionSummary = {
     "links": (CongestedLink)[];
 };
 export type AggregateStatKind = ({
-    "DnsDstDomain": string;
+    "tag": "DnsDstDomain";
+    "name": string;
 } | {
-    "Application": string;
-} | "ConnectionTracker");
+    "tag": "Application";
+    "name": string;
+} | {
+    "tag": "ConnectionTracker";
+});
 export type BidirTrafficStatsSummary = {
     "rx": TrafficStatsSummary;
     "tx": TrafficStatsSummary;

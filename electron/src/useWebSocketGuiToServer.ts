@@ -47,12 +47,12 @@ export function useWebSocketGuiToServer<T>(args: WebSocketGuiToServerArgs<T>) {
     },
 
     onMessage: (msg) => {
-      const data = JSON.parse(msg.data);
-      console.debug("Got message from websocket: ", Object.keys(data));
-      if (args.respMsgType in data) {
+      const parsed = JSON.parse(msg.data);
+      console.debug("Got message from websocket:", parsed.tag);
+      if (args.respMsgType === parsed.tag) {
         if (args.autoRefresh || first_time) {
           first_time.current = false;
-          args.responseCb(data[args.respMsgType]);
+          args.responseCb(parsed.data);
         }
         if (args.autoRefresh) {
           periodic_with_sla(
@@ -66,9 +66,10 @@ export function useWebSocketGuiToServer<T>(args: WebSocketGuiToServerArgs<T>) {
         }
       } else {
         console.log(
-          "Did not find response type: ",
+          "Did not find response type:",
           args.respMsgType,
-          " in data",
+          "in data, got",
+          parsed.tag,
         );
       }
     },

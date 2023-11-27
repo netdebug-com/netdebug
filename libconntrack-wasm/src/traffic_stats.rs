@@ -9,6 +9,7 @@ use typescript_type_def::TypeDef;
 use crate::{pretty_print_si_units, ConnectionMeasurements};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TypeDef)]
+#[serde(tag = "tag", content = "name")]
 pub enum AggregateStatKind {
     DnsDstDomain(String),
     Application(String),

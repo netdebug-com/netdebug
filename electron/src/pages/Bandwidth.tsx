@@ -143,7 +143,7 @@ const Bandwidth: React.FC = () => {
   const [autoRefresh, setAutoRefresh] = useState(true);
   useWebSocketGuiToServer({
     autoRefresh: autoRefresh,
-    reqMsgType: { DumpAggregateCounters: [] },
+    reqMsgType: { tag: "DumpAggregateCounters" },
     respMsgType: "DumpAggregateCountersReply",
     min_time_between_requests_ms: 200,
     max_time_between_requests_ms: 1000,
