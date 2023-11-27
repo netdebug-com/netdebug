@@ -275,7 +275,7 @@ impl TopologyServerConnection {
                 connection_measurements,
                 reply_tx,
             } => {
-                self.handle_infer_congestion(&ws_tx, connection_measurements, reply_tx)
+                self.handle_infer_congestion(ws_tx, connection_measurements, reply_tx)
                     .await
             }
         }
