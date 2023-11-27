@@ -11,9 +11,10 @@ use common_wasm::{
     ProbeRoundReport,
 };
 
+use itertools::Itertools;
 use libconntrack_wasm::{
-    traffic_stats::BidirectionalStats, AggregateCounterKind, BidirBandwidthHistory, ConnectionKey,
-    ConnectionMeasurements,
+    traffic_stats::BidirectionalStats, AggregateStatEntry, AggregateStatKind,
+    BidirBandwidthHistory, ConnectionKey, ConnectionMeasurements,
 };
 #[cfg(not(test))]
 use log::{debug, warn};
@@ -94,9 +95,7 @@ pub enum ConnectionTrackerMsg {
         tx: mpsc::UnboundedSender<BidirBandwidthHistory>,
     },
     GetDnsTrafficCounters {
-        tx: mpsc::Sender<
-            HashMap<AggregateCounterKind, (BidirBandwidthHistory, Vec<ConnectionMeasurements>)>,
-        >,
+        tx: mpsc::Sender<Vec<AggregateStatEntry>>,
     },
 }
 
@@ -149,7 +148,7 @@ pub struct ConnectionTracker<'a> {
     tx: ConnectionTrackerSender, // so we can tell others how to send msgs to us
     rx: ConnectionTrackerReceiver, // to read messages sent to us
     // used to track traffic grouped by, e.g., DNS destination
-    aggregate_traffic_stats: HashMap<AggregateCounterKind, BidirectionalStats>,
+    aggregate_traffic_stats: HashMap<AggregateStatKind, BidirectionalStats>,
     /// Trackes number of successfully parsed packets. I.e., packets from
     /// which we could extract a ConnectionKey
     sucessfully_parsed_packets: StatHandle,
@@ -197,7 +196,7 @@ impl<'a> ConnectionTracker<'a> {
             rx,
             // we always have at least the top-level ConnectionTracker traffic counters
             aggregate_traffic_stats: HashMap::from([(
-                AggregateCounterKind::ConnectionTracker,
+                AggregateStatKind::ConnectionTracker,
                 BidirectionalStats::new(std::time::Duration::from_millis(
                     MAX_BURST_RATE_TIME_WINDOW_MILLIS,
                 )),
@@ -285,7 +284,7 @@ impl<'a> ConnectionTracker<'a> {
                     self.set_connection_application(key, application)
                 }
                 GetDnsTrafficCounters { tx } => self.get_aggregate_traffic_counters(
-                    |kind| matches!(kind, AggregateCounterKind::DnsDstDomain { .. }),
+                    |kind| matches!(kind, AggregateStatKind::DnsDstDomain { .. }),
                     tx,
                 ),
             }
@@ -488,7 +487,7 @@ impl<'a> ConnectionTracker<'a> {
                     match utils::dns_to_cannonical_domain(&remote_hostname) {
                         Ok(domain) => {
                             // add this group and make sure the connection tracker is tracking it
-                            let group = AggregateCounterKind::DnsDstDomain { name: domain };
+                            let group = AggregateStatKind::DnsDstDomain(domain);
                             connection.aggregate_groups.insert(group.clone());
                             self.aggregate_traffic_stats.entry(group).or_insert(
                                 BidirectionalStats::new(std::time::Duration::from_millis(
@@ -522,7 +521,7 @@ impl<'a> ConnectionTracker<'a> {
     fn get_conntrack_traffic_counters(&self, tx: UnboundedSender<BidirBandwidthHistory>) {
         let mut traffic_stats = self
             .aggregate_traffic_stats
-            .get(&AggregateCounterKind::ConnectionTracker)
+            .get(&AggregateStatKind::ConnectionTracker)
             .unwrap() // unwrap is ok b/c we should always have this counter
             .clone();
         // force send and recv counters to be up to date with now and time sync'd
@@ -566,41 +565,40 @@ impl<'a> ConnectionTracker<'a> {
 
     fn get_aggregate_traffic_counters(
         &mut self,
-        match_rule: impl Fn(&AggregateCounterKind) -> bool,
-        tx: Sender<
-            HashMap<AggregateCounterKind, (BidirBandwidthHistory, Vec<ConnectionMeasurements>)>,
-        >,
+        match_rule: impl Fn(&AggregateStatKind) -> bool,
+        tx: Sender<Vec<AggregateStatEntry>>,
     ) {
-        let mut bandwidth_history: HashMap<
-            AggregateCounterKind,
-            (BidirBandwidthHistory, Vec<ConnectionMeasurements>),
-        > = HashMap::new();
+        let mut entries: HashMap<AggregateStatKind, AggregateStatEntry> = HashMap::new();
         let now = Utc::now();
         for (_key, connection) in self.connections.iter_mut() {
-            let m = connection.to_connection_measurements(Utc::now(), None);
-            for kind in &connection.aggregate_groups {
-                if !match_rule(kind) {
+            // we clone aggregate_groups here. If we don't we borrow `connection` immutable, and
+            // we can't call `to_connection_measurements()` later (since that requires a mut borrow)
+            for kind in connection.aggregate_groups.clone() {
+                if !match_rule(&kind) {
                     continue;
                 }
+                let m = connection.to_connection_measurements(Utc::now(), None);
                 // if we've already seen this kind before
-                if let Some((_traffic_counters, measurments)) = bandwidth_history.get_mut(kind) {
+                if let Some(entry) = entries.get_mut(&kind) {
                     // just add this connection to the list
-                    measurments.push(m.clone());
+                    entry.connections.push(m);
                 } else {
                     // else look up the traffic counters and add this connection to the new list
-                    if let Some(traffic_stats) = self.aggregate_traffic_stats.get_mut(kind) {
-                        bandwidth_history.insert(
+                    if let Some(traffic_stats) = self.aggregate_traffic_stats.get_mut(&kind) {
+                        entries.insert(
                             kind.clone(),
-                            (
-                                traffic_stats.as_bidir_bandwidth_history(now),
-                                vec![m.clone()],
-                            ),
+                            AggregateStatEntry {
+                                kind,
+                                bandwidth: traffic_stats.as_bidir_bandwidth_history(now),
+                                summary: traffic_stats.as_bidir_stats_summary(now),
+                                connections: vec![m],
+                            },
                         );
                     }
                 }
             }
         }
-        if let Err(e) = tx.try_send(bandwidth_history) {
+        if let Err(e) = tx.try_send(entries.into_values().collect_vec()) {
             warn!(
                 "Failed to return the aggregate counters to their caller!?: {}",
                 e

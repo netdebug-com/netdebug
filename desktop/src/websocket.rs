@@ -167,7 +167,7 @@ async fn handle_congested_links_request(
         topology_client,
         "handle_congestion_links_request() topology",
         TopologyServerMessage::InferCongestion {
-            connection_measurements: connection_measurements,
+            connection_measurements,
             reply_tx
         }
     )
@@ -290,7 +290,7 @@ async fn handle_gui_dump_dns_flows(
         Some(keys) => keys,
         None => {
             warn!("ConnectionTracker GetConnectionsKeys returned null!?");
-            HashMap::new() // just pretend it returned nothing as a hack
+            Vec::new() // just pretend it returned nothing as a hack
         }
     };
     perf_check!(
@@ -299,7 +299,7 @@ async fn handle_gui_dump_dns_flows(
         Duration::from_millis(100)
     );
     if let Err(e) = tx.send(ServerToGuiMessages::DumpDnsAggregateCountersReply(
-        HashMap::new(),
+        Vec::new(),
     )) {
         warn!("Sending to GUI trigged: {}", e);
     }

@@ -17,13 +17,6 @@ pub mod topology_server_messages;
 /// the first and the last packets.
 pub const MIN_DURATION_FOR_AVG_RATE_MICROS: i64 = 10_000;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TypeDef)]
-pub enum AggregateCounterKind {
-    DnsDstDomain { name: String },
-    Application { name: String },
-    ConnectionTracker,
-}
-
 #[serde_with::serde_as]
 #[derive(Debug, Clone, Hash, Serialize, Deserialize, PartialEq, Eq, TypeDef)]
 pub struct DnsTrackerEntry {

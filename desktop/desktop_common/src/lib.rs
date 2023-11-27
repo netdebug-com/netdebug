@@ -2,7 +2,7 @@ use std::{collections::HashMap, net::IpAddr, time::Duration};
 
 use common_wasm::timeseries_stats::ExportedBuckets;
 use libconntrack_wasm::{
-    topology_server_messages::CongestionSummary, AggregateCounterKind, BidirBandwidthHistory,
+    topology_server_messages::CongestionSummary, AggregateStatEntry, BidirBandwidthHistory,
     ConnectionMeasurements, DnsTrackerEntry,
 };
 /**
@@ -115,9 +115,7 @@ pub enum ServerToGuiMessages {
     DumpDnsCache(HashMap<IpAddr, DnsTrackerEntry>),
     DumpAggregateCountersReply(Vec<ChartJsBandwidth>),
     DumpStatCountersReply(HashMap<String, u64>),
-    DumpDnsAggregateCountersReply(
-        HashMap<AggregateCounterKind, (BidirBandwidthHistory, Vec<ConnectionMeasurements>)>,
-    ),
+    DumpDnsAggregateCountersReply(Vec<AggregateStatEntry>),
     WhatsMyIpReply {
         ip: IpAddr,
     },
