@@ -12,7 +12,7 @@ import Table from "@mui/material/Table";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import TableCell from "@mui/material/TableCell";
-import { SwitchHelper } from "../SwitchHelper";
+import { SwitchHelper } from "../components/SwitchHelper";
 import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 
 // build a connection key for displaying in the table
