@@ -105,9 +105,9 @@ pub fn congestion_summary_from_measurements(
                 }
                 if let Some(ip) = probe.get_ip() {
                     if let Some(rtt) = probe.get_rtt_ms() {
-                        let mut current =
+                        let current =
                             HopInfo::new(ip, *ttl, Duration::from_micros((rtt * 1000.0) as u64));
-                        update_link_congestion(&mut links, &mut prev_found, &mut current);
+                        update_link_congestion(&mut links, &mut prev_found, &current);
                         next_found = Some(current);
                     }
                 }
@@ -130,7 +130,7 @@ pub fn congestion_summary_from_measurements(
         links: links
             .values()
             .sorted_by(CongestedLink::cmp_by_heuristic)
-            .map(|l| l.clone())
+            .cloned()
             .collect_vec(),
     }
 }
@@ -161,7 +161,7 @@ fn congested_link_key_from_hop_info(prev: &HopInfo, curr: &HopInfo) -> Congested
         prev.ip
     };
     CongestedLinkKey {
-        src_ip: src_ip,
+        src_ip,
         dst_ip: curr.ip,
         src_to_dst_hop_count: curr.ttl - prev.ttl,
     }
@@ -193,7 +193,7 @@ mod test {
 
     // one measurement, one trace, 10-ttls, 1-ms each hop
     fn make_simple_test_data() -> Vec<ConnectionMeasurements> {
-        let probes = (1..=10).into_iter().map(|ttl| {
+        let probes = (1..=10).map(|ttl| {
             let entry = ProbeReportEntry::RouterReplyFound {
                 ttl,
                 out_timestamp_ms: ttl as f64,

@@ -370,7 +370,7 @@ fn make_pid2process() -> Result<HashMap<u32, String>, Box<dyn std::error::Error>
         let line = line.unwrap(); // ok, b/c we checked above
 
         // TODO: find a real CSV parser library
-        let tokens = line.split(",").collect::<Vec<&str>>();
+        let tokens = line.split(',').collect::<Vec<&str>>();
         if tokens.len() < 3 {
             warn!(
                 "Too short CSV string in run_pid2process!? {}",
@@ -378,8 +378,8 @@ fn make_pid2process() -> Result<HashMap<u32, String>, Box<dyn std::error::Error>
             );
             continue;
         }
-        let process_name = tokens[0].replace("\"", "");
-        let pid: u32 = tokens[1].replace("\"", "").parse()?;
+        let process_name = tokens[0].replace('\"', "");
+        let pid: u32 = tokens[1].replace('\"', "").parse()?;
         pid2process.insert(pid, process_name);
     }
     Ok(pid2process)
