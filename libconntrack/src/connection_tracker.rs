@@ -13,8 +13,8 @@ use common_wasm::{
 
 use itertools::Itertools;
 use libconntrack_wasm::{
-    traffic_stats::BidirectionalStats, AggregateStatEntry, AggregateStatKind,
-    BidirBandwidthHistory, ConnectionKey, ConnectionMeasurements,
+    bidir_bandwidth_to_chartjs, traffic_stats::BidirectionalStats, AggregateStatEntry,
+    AggregateStatKind, BidirBandwidthHistory, ConnectionKey, ConnectionMeasurements,
 };
 #[cfg(not(test))]
 use log::{debug, warn};
@@ -589,7 +589,9 @@ impl<'a> ConnectionTracker<'a> {
                             kind.clone(),
                             AggregateStatEntry {
                                 kind,
-                                bandwidth: traffic_stats.as_bidir_bandwidth_history(now),
+                                bandwidth: bidir_bandwidth_to_chartjs(
+                                    traffic_stats.as_bidir_bandwidth_history(now),
+                                ),
                                 summary: traffic_stats.as_bidir_stats_summary(now),
                                 connections: vec![m],
                             },

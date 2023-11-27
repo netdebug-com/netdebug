@@ -286,10 +286,10 @@ async fn handle_gui_dump_dns_flows(
         "connection_tracker",
         GetDnsTrafficCounters { tx: reply_tx }
     );
-    let _measurements = match reply_rx.recv().await {
-        Some(keys) => keys,
+    let stat_entries = match reply_rx.recv().await {
+        Some(entries) => entries,
         None => {
-            warn!("ConnectionTracker GetConnectionsKeys returned null!?");
+            warn!("ConnectionTracker GetDnsTrafficCounters returned null!?");
             Vec::new() // just pretend it returned nothing as a hack
         }
     };
@@ -299,7 +299,7 @@ async fn handle_gui_dump_dns_flows(
         Duration::from_millis(100)
     );
     if let Err(e) = tx.send(ServerToGuiMessages::DumpDnsAggregateCountersReply(
-        Vec::new(),
+        stat_entries,
     )) {
         warn!("Sending to GUI trigged: {}", e);
     }
