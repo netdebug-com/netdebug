@@ -297,3 +297,67 @@ export type CongestedLink = {
 export type CongestionSummary = {
     "links": (CongestedLink)[];
 };
+export type AggregateStatKind = ({
+    "DnsDstDomain": string;
+} | {
+    "Application": string;
+} | "ConnectionTracker");
+
+/**
+ * A small helper struct that represents an exported (i.e., serde serialized)
+ * `BucketedTimeSeries`. One instance of this will represent either the `max`, `sum`,
+ * or `num_entries` values.
+ * The buckets will be in-order. I.e., `buckets[0]` is the oldest bucket, and
+ * `buckets[buckets.len()-1]` is the newest.
+ */
+export type ExportedBuckets = {
+    "bucket_time_window_us": U64;
+    "buckets": (U64)[];
+};
+
+/**
+ * Used for exported data (to UI, storage, etc.)
+ * A detailed history of the bandwdith/rate of a unidirectional flow.
+ * A flow can be anything: A 5-tuple, aggregated by IP, domain, whatever.
+ */
+export type BandwidthHistory = {
+
+    /**
+     * The timestamp of the end time of the exported bucktes. This might
+     * will usually be the current walltime and might not be the
+     * time of the last received packet.
+     */
+    "last_time_us": U64;
+
+    /**
+     * The total time the flow was active (time between first and last
+     * packet)
+     */
+    "total_duration_us": U64;
+
+    /**
+     * Maps a label to an exported bucket (for bytes) for a certain
+     * bucket size  
+     */
+    "byte_buckets": Record<string, ExportedBuckets>;
+
+    /**
+     * Maps a label to an exported bucket (for packets) for a certain
+     * bucket size  
+     */
+    "pkt_buckets": Record<string, ExportedBuckets>;
+};
+export type BidirBandwidthHistory = {
+    "rx": BandwidthHistory;
+    "tx": BandwidthHistory;
+};
+export type BidirTrafficStatsSummary = {
+    "rx": TrafficStatsSummary;
+    "tx": TrafficStatsSummary;
+};
+export type AggregateStatEntry = {
+    "kind": AggregateStatKind;
+    "bandwidth": BidirBandwidthHistory;
+    "summary": BidirTrafficStatsSummary;
+    "connections": (ConnectionMeasurements)[];
+};

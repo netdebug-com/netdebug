@@ -19,12 +19,12 @@ use libconntrack::{
     send_or_log_async, send_or_log_sync,
     utils::PerfMsgCheck,
 };
-use libconntrack_wasm::topology_server_messages::CongestionSummary;
+use libconntrack_wasm::{bidir_bandwidth_to_chartjs, topology_server_messages::CongestionSummary};
 use log::{debug, info, warn};
 use tokio::sync::mpsc::{self, channel, unbounded_channel, UnboundedSender};
 use warp::ws::{self, Message, WebSocket};
 
-use desktop_common::{bidir_bandwidth_to_chartjs, GuiToServerMessages, ServerToGuiMessages};
+use desktop_common::{GuiToServerMessages, ServerToGuiMessages};
 
 use crate::topology_client::{TopologyServerMessage, TopologyServerSender};
 

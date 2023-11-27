@@ -19,3 +19,4 @@ wasm-logger = "*"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.37"
+approx = "0.5.1"
