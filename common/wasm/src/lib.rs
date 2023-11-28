@@ -449,7 +449,7 @@ impl ProbeReportSummary {
      */
     pub fn update(&mut self, report: ProbeRoundReport) {
         for (ttl, probe) in &report.probes {
-            let nodes = self.summary.entry(*ttl).or_insert(Vec::new());
+            let nodes = self.summary.entry(*ttl).or_default();
             let mut inserted = false;
             for node in nodes {
                 // are these two ProbeReportEntry's the same variant?
@@ -555,7 +555,7 @@ impl ProbeReportSummary {
                     },
                 };
                 // get nodes again from the summary is it went into the above for loop's into_iter()
-                let nodes = self.summary.entry(*ttl).or_insert(Vec::new());
+                let nodes = self.summary.entry(*ttl).or_default();
                 nodes.push(node);
             }
         }
