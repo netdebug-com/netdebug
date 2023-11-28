@@ -38,9 +38,9 @@ jobs:
         run: |
           wasm-pack build webserver/web-client --target web
           # if you get '--target web' important!
-      - name: cargo clippy
+      - name: cargo clippy, fail on warnings
         run: |
-          cargo clippy
+          cargo clippy -- -D warnings
       - name: cargo test
         run: |
           cargo test
