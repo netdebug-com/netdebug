@@ -120,10 +120,7 @@ pub fn congestion_summary_from_measurements(
         }
     }
     // now compute all of the stats
-    for link in links
-        .values_mut()
-        .sorted_by(CongestedLink::cmp_by_heuristic_mut)
-    {
+    for link in links.values_mut() {
         recompute_compute_mean_and_peak(link);
     }
     CongestionSummary {
