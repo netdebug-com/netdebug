@@ -2242,18 +2242,15 @@ checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
 [[package]]
 name = "typescript-type-def"
 version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "356e00027bd9ef773605a353070dc87684b25561a59087ea3ee3dd5fe8854e83"
+source = "git+https://github.com/gregor-netdebug/rust-typescript-type-def?branch=ipaddr-support#0700e5b12b60dc102115dae59ce7a086acf65c00"
 dependencies = [
- "serde_json",
  "typescript-type-def-derive",
 ]
 
 [[package]]
 name = "typescript-type-def-derive"
 version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4e696c28431595138cc53892104528152cbcf26653ae0aa655e4eaede5b9f69"
+source = "git+https://github.com/gregor-netdebug/rust-typescript-type-def?branch=ipaddr-support#0700e5b12b60dc102115dae59ce7a086acf65c00"
 dependencies = [
  "darling 0.13.4",
  "ident_case",

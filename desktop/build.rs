@@ -2,29 +2,11 @@
 use std::env;
 use std::path::Path;
 
-use desktop_common::GuiToServerMessages;
+use desktop_common::{DesktopToGuiMessages, GuiToDesktopMessages};
 
-use libconntrack_wasm::{
-    topology_server_messages::CongestionSummary, AggregateStatEntry, ChartJsBandwidth,
-    ConnectionMeasurements, DnsTrackerEntry,
-};
 use typescript_type_def::{write_definition_file, DefinitionFileOptions};
 
-/**
- * NOTE: ServerToGuiMessages is a pain to type def because of the
- * Hash<IpAddr, DnsTrackerEntry>
- *
- * Just list the elements out manually for most of the value
- */
-type ExportedTypes = (
-    ConnectionMeasurements,
-    DnsTrackerEntry,
-    //ServerToGuiMessages,
-    GuiToServerMessages,
-    ChartJsBandwidth,
-    CongestionSummary,
-    AggregateStatEntry,
-);
+type ExportedTypes = (DesktopToGuiMessages, GuiToDesktopMessages);
 
 const TYPESCRIPT_OUT_FILE: &str = "../electron/src/netdebug_types.ts";
 
