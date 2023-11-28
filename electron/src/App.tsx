@@ -11,7 +11,7 @@ import Bandwidth from "./pages/Bandwidth";
 import Dns from "./pages/Dns";
 import Counters from "./pages/Counters";
 import Flows from "./pages/Flows";
-import ByDnsDomain from "./pages/ByDnsDomain";
+import FlowsByDnsDomain from "./pages/FlowsByDnsDomain";
 
 // layouts
 import RootLayout from "./layouts/RootLayout";
@@ -26,7 +26,7 @@ const router = createHashRouter(
       <Route path="bandwidth" element={<Bandwidth />} />
       <Route path="flows" element={<FlowsLayout />}>
         <Route index element={<Flows />} />
-        <Route path="by_dest_domain" element={<ByDnsDomain />} />
+        <Route path="by_dest_domain" element={<FlowsByDnsDomain />} />
         <Route path="by_app" element={<h1>By App</h1>} />
       </Route>
       <Route path="dns" element={<Dns />} />

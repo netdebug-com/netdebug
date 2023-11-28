@@ -24,7 +24,7 @@ function statSortFn(a: AggregateStatEntry, b: AggregateStatEntry) {
   return max_rate_fn(b) - max_rate_fn(a);
 }
 
-const Flows: React.FC = () => {
+const FlowsByDnsDomain: React.FC = () => {
   const [statEntries, setStatEntries] = useState(
     new Array<AggregateStatEntry>(),
   );
@@ -109,4 +109,4 @@ const Flows: React.FC = () => {
   );
 };
 
-export default Flows;
+export default FlowsByDnsDomain;
