@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { GuiToDesktopMessages } from "./netdebug_types";
+import { DesktopToGuiMessages, GuiToDesktopMessages } from "./netdebug_types";
 import useWebSocket from "react-use-websocket";
 import { WS_URL } from "./App";
 import { periodic_with_sla } from "./utils";
@@ -11,11 +11,8 @@ export type WebSocketGuiToServerArgs<T> = {
   autoRefresh: boolean;
   // The type of the request message to send.
   reqMsgType: GuiToDesktopMessages;
-  // The type of the response message. We currently just use string here
-  // because we can't generate typescript types for the responses yet
-  // (need to first remove some of the counter structs the old UI
-  // is still using.
-  respMsgType: string;
+  // The type of the response message.
+  respMsgType: DesktopToGuiMessages["tag"];
   // The callback we'll call with the parsed response.
   responseCb: (response: T) => void;
   // If auto-refresh is on: the time to wait between sending requests
