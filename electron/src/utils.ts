@@ -76,11 +76,16 @@ export function prettyPrintSiUnits(
 // Utility function that takes a Map<string, number> containing stat counter values
 // and reshapes them. It extracts the basename of the counter name (i.e., without the .60, .600,
 // .3600 suffixes) and returns a new map: `counter_basname -> Map<TimeWindowStrings, number>"
-export type TimeWindowStrings = ".60" | ".600" | ".3600" | "all";
-export function reshapeCounter(
-  counter_map: Map<string, number>,
-): Map<string, Map<TimeWindowStrings, number>> {
-  const ret = new Map<string, Map<TimeWindowStrings, number>>();
+export type CounterRow = {
+  id: string;
+  t60?: number;
+  t600?: number;
+  t3600?: number;
+  all?: number;
+};
+export type TimeWindowStrings = "t60" | "t600" | "t3600" | "all";
+export function reshapeCounter(counter_map: Map<string, number>): CounterRow[] {
+  const rowMap: Map<string, CounterRow> = new Map();
 
   for (const entry of counter_map) {
     let name = entry[0];
@@ -88,25 +93,25 @@ export function reshapeCounter(
     let what: TimeWindowStrings = "all";
     for (const suffix of [".60", ".600", ".3600"]) {
       if (name.endsWith(suffix)) {
-        what = suffix as TimeWindowStrings;
+        what = suffix.replace(".", "t") as TimeWindowStrings;
         name = name.replace(suffix, "");
         break;
       }
     }
-    if (!ret.has(name)) {
-      ret.set(name, new Map());
+    if (!rowMap.has(name)) {
+      rowMap.set(name, { id: name });
     }
-    ret.get(name).set(what, value);
+    rowMap.get(name)[what] = value;
   }
-  return ret;
+  return Array.from(rowMap.values());
 }
 
 // Format a numeric value as a string, adding thousand seperators if desired.
 export function formatValue(
-  val: number | undefined,
+  val: number | undefined | null,
   renderThousandSep: boolean,
 ): string {
-  if (val === undefined) {
+  if (val === undefined || val === null) {
     return "";
   } else if (renderThousandSep) {
     return val.toLocaleString();
@@ -132,6 +137,9 @@ export const headerStyle = {
   backgroundColor: "primary.main",
   color: "primary.contrastText",
   fontWeight: "bold",
+  // Apparently DataGrid overrides fontWeidht with the following
+  // css variable. So lets hack it to get the header to render in bold.
+  "--unstable_DataGrid-headWeight": "bold",
 };
 
 // Re-use the header style but a width
