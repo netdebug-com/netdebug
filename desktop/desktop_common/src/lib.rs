@@ -16,9 +16,9 @@ pub fn get_git_hash_version() -> String {
     env!("GIT_HASH").to_string()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TypeDef)]
 #[serde(tag = "tag", content = "data")]
-pub enum ServerToGuiMessages {
+pub enum DesktopToGuiMessages {
     VersionCheck(String),
     DumpFlowsReply(Vec<ConnectionMeasurements>),
     DumpDnsCache(HashMap<IpAddr, DnsTrackerEntry>),
@@ -35,7 +35,7 @@ pub enum ServerToGuiMessages {
 
 #[derive(Debug, Clone, Serialize, Deserialize, TypeDef)]
 #[serde(tag = "tag")]
-pub enum GuiToServerMessages {
+pub enum GuiToDesktopMessages {
     DumpFlows,
     DumpDnsCache,
     DumpAggregateCounters,
@@ -53,7 +53,7 @@ mod test {
     fn test_message_json() {
         println!(
             "{}",
-            serde_json::to_string(&GuiToServerMessages::DumpDnsCache).unwrap()
+            serde_json::to_string(&GuiToDesktopMessages::DumpDnsCache).unwrap()
         );
     }
 }

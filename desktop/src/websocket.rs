@@ -24,7 +24,7 @@ use log::{debug, info, warn};
 use tokio::sync::mpsc::{self, channel, unbounded_channel, UnboundedSender};
 use warp::ws::{self, Message, WebSocket};
 
-use desktop_common::{GuiToServerMessages, ServerToGuiMessages};
+use desktop_common::{DesktopToGuiMessages, GuiToDesktopMessages};
 
 use crate::topology_client::{TopologyServerMessage, TopologyServerSender};
 
@@ -39,7 +39,7 @@ use crate::topology_client::{TopologyServerMessage, TopologyServerSender};
 
 pub async fn websocket_sender(
     mut ws_tx: SplitSink<WebSocket, Message>,
-) -> UnboundedSender<ServerToGuiMessages> {
+) -> UnboundedSender<DesktopToGuiMessages> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -65,7 +65,7 @@ pub async fn websocket_sender(
  */
 async fn handle_websocket_rx_messages(
     mut ws_rx: SplitStream<WebSocket>,
-    tx: UnboundedSender<ServerToGuiMessages>,
+    tx: UnboundedSender<DesktopToGuiMessages>,
     connection_tracker: ConnectionTrackerSender,
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     _process_tracker: ProcessTrackerSender,
@@ -77,7 +77,7 @@ async fn handle_websocket_rx_messages(
             Ok(msg) => {
                 if msg.is_text() {
                     let json = msg.to_str().expect("msg.is_text() lies!");
-                    match serde_json::from_str::<GuiToServerMessages>(json) {
+                    match serde_json::from_str::<GuiToDesktopMessages>(json) {
                         Ok(msg) => {
                             handle_gui_to_server_msg(
                                 msg,
@@ -103,15 +103,15 @@ async fn handle_websocket_rx_messages(
 }
 
 async fn handle_gui_to_server_msg(
-    msg: GuiToServerMessages,
-    tx: &UnboundedSender<ServerToGuiMessages>,
+    msg: GuiToDesktopMessages,
+    tx: &UnboundedSender<DesktopToGuiMessages>,
     connection_tracker: &ConnectionTrackerSender,
     dns_tracker: &UnboundedSender<DnsTrackerMessage>,
     topology_client: &TopologyServerSender,
     counter_registries: &Vec<ExportedStatRegistry>,
 ) {
     let start = std::time::Instant::now();
-    use GuiToServerMessages::*;
+    use GuiToDesktopMessages::*;
     match &msg {
         DumpFlows => {
             debug!("Got DumpFlows request");
@@ -136,7 +136,7 @@ async fn handle_gui_to_server_msg(
  * and ship them off to the topology server, wait for the reply, and send it back
  */
 async fn handle_congested_links_request(
-    tx: &UnboundedSender<ServerToGuiMessages>,
+    tx: &UnboundedSender<DesktopToGuiMessages>,
     topology_client: &TopologyServerSender,
     connection_tracker: &ConnectionTrackerSender,
 ) {
@@ -153,7 +153,7 @@ async fn handle_congested_links_request(
         None => {
             warn!("ConnectionTracker::GetConnectionMeasurements returned None!?");
             // UI is stateful; send them back an empty message just so they don't wait indefinitely...
-            if let Err(e) = tx.send(ServerToGuiMessages::CongestedLinksReply {
+            if let Err(e) = tx.send(DesktopToGuiMessages::CongestedLinksReply {
                 congestion_summary: CongestionSummary { links: Vec::new() },
             }) {
                 warn!("Writing to GUI failed: {}", e);
@@ -181,13 +181,13 @@ async fn handle_congested_links_request(
         }
     };
     // 3. send the congestion summary back to the GUI
-    if let Err(e) = tx.send(ServerToGuiMessages::CongestedLinksReply { congestion_summary }) {
+    if let Err(e) = tx.send(DesktopToGuiMessages::CongestedLinksReply { congestion_summary }) {
         warn!("Failed to send CongestedLinksReply back to GUI: {}", e);
     }
 }
 
 async fn handle_get_my_ip(
-    tx: &UnboundedSender<ServerToGuiMessages>,
+    tx: &UnboundedSender<DesktopToGuiMessages>,
     topology_client: &mpsc::Sender<PerfMsgCheck<crate::topology_client::TopologyServerMessage>>,
 ) {
     let (reply_tx, mut reply_rx) = channel(1);
@@ -201,7 +201,7 @@ async fn handle_get_my_ip(
     match reply_rx.recv().await {
         Some(perf_msg) => {
             let (ip, _) = perf_msg.perf_check_get("handle_get_my_ip");
-            if let Err(e) = tx.send(ServerToGuiMessages::WhatsMyIpReply { ip }) {
+            if let Err(e) = tx.send(DesktopToGuiMessages::WhatsMyIpReply { ip }) {
                 warn!("Failed to send WhatsMyIpReply to GUI: {}", e);
             }
         }
@@ -210,18 +210,18 @@ async fn handle_get_my_ip(
 }
 
 async fn handle_dump_stat_counters(
-    tx: &UnboundedSender<ServerToGuiMessages>,
+    tx: &UnboundedSender<DesktopToGuiMessages>,
     counter_registries: &Vec<ExportedStatRegistry>,
 ) {
     counter_registries.update_time();
-    let msg = ServerToGuiMessages::DumpStatCountersReply(counter_registries.get_counter_map());
+    let msg = DesktopToGuiMessages::DumpStatCountersReply(counter_registries.get_counter_map());
     if let Err(e) = tx.send(msg) {
         warn!("Failed to send the DNS cache back to the GUI!?: {}", e);
     }
 }
 
 async fn handle_dump_aggregate_connection_tracker_counters(
-    tx: &UnboundedSender<ServerToGuiMessages>,
+    tx: &UnboundedSender<DesktopToGuiMessages>,
     connection_tracker: &ConnectionTrackerSender,
 ) {
     let start = std::time::Instant::now();
@@ -236,7 +236,7 @@ async fn handle_dump_aggregate_connection_tracker_counters(
     }
     if let Some(counters) = reply_rx.recv().await {
         let chartjs_bandwidth = bidir_bandwidth_to_chartjs(counters);
-        if let Err(e) = tx.send(ServerToGuiMessages::DumpAggregateCountersReply(
+        if let Err(e) = tx.send(DesktopToGuiMessages::DumpAggregateCountersReply(
             chartjs_bandwidth,
         )) {
             warn!("Error talking to GUI: {}", e);
@@ -255,7 +255,7 @@ async fn handle_dump_aggregate_connection_tracker_counters(
  * Gui has asked for a copy of the DNS cache - poke the dns_tracker and send it to them
  */
 async fn handle_gui_dump_dns_cache(
-    tx: &UnboundedSender<ServerToGuiMessages>,
+    tx: &UnboundedSender<DesktopToGuiMessages>,
     _connection_tracker: &ConnectionTrackerSender,
     dns_tracker: &UnboundedSender<DnsTrackerMessage>,
 ) {
@@ -268,13 +268,13 @@ async fn handle_gui_dump_dns_cache(
     } else {
         dns_rx.recv().await.expect("valid dns_cache")
     };
-    if let Err(e) = tx.send(ServerToGuiMessages::DumpDnsCache(cache)) {
+    if let Err(e) = tx.send(DesktopToGuiMessages::DumpDnsCache(cache)) {
         warn!("Failed to send the DNS cache back to the GUI!?: {}", e);
     }
 }
 
 async fn handle_gui_dump_dns_flows(
-    tx: &UnboundedSender<ServerToGuiMessages>,
+    tx: &UnboundedSender<DesktopToGuiMessages>,
     connection_tracker: &ConnectionTrackerSender,
 ) {
     let func_start = Instant::now();
@@ -298,7 +298,7 @@ async fn handle_gui_dump_dns_flows(
         func_start,
         Duration::from_millis(100)
     );
-    if let Err(e) = tx.send(ServerToGuiMessages::DumpDnsAggregateCountersReply(
+    if let Err(e) = tx.send(DesktopToGuiMessages::DumpDnsAggregateCountersReply(
         stat_entries,
     )) {
         warn!("Sending to GUI trigged: {}", e);
@@ -306,7 +306,7 @@ async fn handle_gui_dump_dns_flows(
 }
 
 async fn handle_gui_dumpflows(
-    tx: &UnboundedSender<ServerToGuiMessages>,
+    tx: &UnboundedSender<DesktopToGuiMessages>,
     connection_tracker: &ConnectionTrackerSender,
 ) {
     let func_start = Instant::now();
@@ -329,7 +329,7 @@ async fn handle_gui_dumpflows(
         Duration::from_millis(200)
     );
     // TODO: think about whether we can implement PerfMsgCheck over to the WASM/JS side of things
-    if let Err(e) = tx.send(ServerToGuiMessages::DumpFlowsReply(measurements)) {
+    if let Err(e) = tx.send(DesktopToGuiMessages::DumpFlowsReply(measurements)) {
         warn!("Sending to GUI trigged: {}", e);
     }
 }
@@ -366,7 +366,7 @@ pub async fn websocket_handler(
         .await;
     });
 
-    if let Err(e) = tx.send(ServerToGuiMessages::VersionCheck(
+    if let Err(e) = tx.send(DesktopToGuiMessages::VersionCheck(
         desktop_common::get_git_hash_version(),
     )) {
         warn!("Error sending version check: {}", e);
