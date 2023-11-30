@@ -51,6 +51,7 @@
         "@emotion/react": "^11.11.1",
         "@emotion/styled": "^11.11.0",
         "@mui/material": "^5.14.16",
+        "@mui/x-data-grid": "^6.18.2",
         "chart.js": "^4.4.0",
         "electron-is-dev": "^2.0.0",
         "electron-squirrel-startup": "^1.0.0",
