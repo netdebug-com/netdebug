@@ -221,6 +221,11 @@ export type AggregateStatEntry = {
 export type CongestedLinkKey = {
 
     /**
+     * The hop-count from the origin to the src_ip
+     */
+    "src_hop_count": U8;
+
+    /**
      * The start of the link
      */
     "src_ip": string;
@@ -265,6 +270,18 @@ export type CongestionLatencyPair = {
      * Round-trip time from the origin to the second part of the link
      */
     "dst_rtt_us": U64;
+
+    /**
+     * which connection did this come from?  Might want to include a
+     * 'start_time' here as well to better uniquely identify it but
+     * hopefully ok for now
+     */
+    "connection_key": ConnectionKey;
+
+    /**
+     * Which probe-round did this come from?
+     */
+    "probe_round": U32;
 };
 export type CongestedLink = {
 
@@ -287,11 +304,6 @@ export type CongestedLink = {
      * The peak latency from src to dst (subtracking src from dst latency)
      */
     "peak_latency_us"?: (U64 | null);
-
-    /**
-     * Peak-to-mean congestion heuristic - higher number --> more congestion
-     */
-    "peak_to_mean_congestion_heuristic": (F64 | null);
 };
 
 /**

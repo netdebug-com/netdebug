@@ -9,6 +9,7 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import TableCell from "@mui/material/TableCell";
 import {
+  calcStyleByThreshold,
   headerStyle,
   headerStyleWithWidth,
   prettyPrintSiUnits,
@@ -57,22 +58,6 @@ const Home: React.FC = () => {
     last_send.current = window.performance.now();
   };
 
-  // Test the rtt vs. the yellow/red thresholds and return the matching style
-  const calcStyleByCongestion = (congestion: number) => {
-    if (congestion >= 2.0) {
-      // hard coded threshold; should be ok - it's ratio
-      return (
-        <div style={{ color: "red", backgroundColor: "black" }}>
-          {congestion}
-        </div>
-      );
-    } else if (congestion >= 1.5) {
-      return <div style={{ color: "orange" }}>{congestion / 1000}</div>;
-    } else {
-      return <div>{congestion}</div>;
-    }
-  };
-
   function make_link_key(link: CongestedLink): string {
     return (
       link.key.src_ip +
@@ -103,6 +88,9 @@ const Home: React.FC = () => {
           <TableHead>
             <TableRow style={headerStyle}>
               <TableCell sx={headerStyleWithWidth(0.3)} align="left">
+                TTL Distance
+              </TableCell>
+              <TableCell sx={headerStyleWithWidth(0.3)} align="left">
                 Link
               </TableCell>
               <TableCell sx={headerStyleWithWidth(0.1)} align="right">
@@ -112,19 +100,19 @@ const Home: React.FC = () => {
                 Peak Latency
               </TableCell>
               <TableCell sx={headerStyleWithWidth(0.1)} align="right">
-                Max Congestion
-              </TableCell>
-              <TableCell sx={headerStyleWithWidth(0.1)} align="right">
                 # of Samples
               </TableCell>
-              <TableCell sx={headerStyleWithWidth(0.5)} align="right">
-                Peak/Mean ratio (bigger is worse)
+              <TableCell sx={headerStyleWithWidth(0.1)} align="right">
+                Max Congestion
               </TableCell>
             </TableRow>
             {congestedLinks.sort(linkSortFn).map((link) => {
               const linkKey = make_link_key(link);
+              const peak_mean_delta =
+                link.peak_latency_us - link.mean_latency_us;
               return (
                 <TableRow key={linkKey}>
+                  <TableCell>{link.key.src_hop_count}</TableCell>
                   <TableCell>{linkKey}</TableCell>
                   <TableCell align="right">
                     {prettyPrintSiUnits(link.mean_latency_us * 1e-6, "s", 2)}
@@ -132,19 +120,13 @@ const Home: React.FC = () => {
                   <TableCell align="right">
                     {prettyPrintSiUnits(link.peak_latency_us * 1e-6, "s", 2)}
                   </TableCell>
-                  <TableCell align="right">
-                    +
-                    {prettyPrintSiUnits(
-                      (link.peak_latency_us - link.mean_latency_us) * 1e-6,
-                      "s",
-                      2,
-                    )}
-                  </TableCell>
                   <TableCell align="right">{link.latencies.length}</TableCell>
-                  <TableCell align="right">
-                    {calcStyleByCongestion(
-                      link.peak_to_mean_congestion_heuristic,
-                    )}
+                  <TableCell
+                    align="right"
+                    // 10ms is yellow, 50ms is red
+                    sx={calcStyleByThreshold(peak_mean_delta, 10000, 50000)}
+                  >
+                    +{prettyPrintSiUnits(peak_mean_delta * 1e-6, "s", 2)}
                   </TableCell>
                 </TableRow>
               );
