@@ -129,6 +129,25 @@ export function connKeyToStr(key: ConnectionKey) {
   );
 }
 
+export const dataGridDefaultSxProp = {
+  minWidth: 650,
+  "& .MuiDataGrid-columnHeaders": {
+    // https://mui.com/material-ui/customization/palette/
+    backgroundColor: "primary.main",
+    color: "primary.contrastText",
+    fontWeight: "bold",
+    // Apparently DataGrid overrides fontWeidht with the following
+    // css variable. So lets hack it to get the header to render in bold.
+    "--unstable_DataGrid-headWeight": "bold",
+  },
+  "& .MuiDataGrid-sortIcon": {
+    color: "primary.contrastText",
+  },
+  "& .MuiDataGrid-menuIconButton": {
+    color: "primary.contrastText",
+  },
+};
+
 // External style sheets are for loser...
 export const headerStyle = {
   // Looks like MUI has a color palette and we can refer to these
