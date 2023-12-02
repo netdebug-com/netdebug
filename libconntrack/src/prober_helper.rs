@@ -9,6 +9,8 @@ const PROBE_DEST_EVERY_MILLIS: u64 = 15_000;
 const PROBE_FIRST_HOPS_EVERY_MILLIS: u64 = 2_000;
 const MIN_TTL_WHEN_RATE_LIMITED: u8 = 4;
 
+/// Helper struct to limit the amount of probes we send to a particular destination
+/// host and to the first couple of hops.
 #[derive(Clone, Debug)]
 pub struct ProberHelper {
     per_dst_rate_limit: HashMap<IpAddr, SimpleRateLimiter>,
@@ -27,6 +29,9 @@ impl ProberHelper {
         }
     }
 
+    /// Check and update the rate limiter for sending probes to a particular dst host.
+    /// If this method returns `true` we can send a probe, if it returns `false`, we
+    /// should not probe the destination.
     pub fn check_update_dst_ip(&mut self, dst_ip: IpAddr) -> bool {
         let dst_limiter = self
             .per_dst_rate_limit
@@ -37,6 +42,8 @@ impl ProberHelper {
         dst_limiter.check_update()
     }
 
+    /// When sending probes: what should be the min TTL for outgoing probes. This
+    /// limits how frequently we probe the first couple of hops.
     pub fn get_min_ttl(&mut self) -> u8 {
         if self.probe_first_hops_limit.check_update() {
             1

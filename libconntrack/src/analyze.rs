@@ -12,16 +12,16 @@ use itertools::Itertools;
 
 use common_wasm::{
     analysis_messages::{AnalysisInsights, Blame, Goodness, ProbeReportLatencies},
-    ProbeReportEntry, ProbeReportSummaryNode,
+    ProbeReportEntry, ProbeReportSummary, ProbeReportSummaryNode,
 };
 use log::debug;
 
 use crate::connection::Connection;
 
-pub fn analyze(connection: &Connection) -> Vec<AnalysisInsights> {
+pub fn analyze(probe_report_summary: &ProbeReportSummary) -> Vec<AnalysisInsights> {
     let mut insights = Vec::new();
 
-    if connection.probe_report_summary.raw_reports.is_empty() {
+    if probe_report_summary.raw_reports.is_empty() {
         // No probes recorded!?  That will hamper our ability to learn anything
         insights.push(AnalysisInsights::NoProbes);
     }
@@ -32,7 +32,7 @@ pub fn analyze(connection: &Connection) -> Vec<AnalysisInsights> {
     // window scaling insights
     // dropped egress probes
 
-    let nats = look_for_nat(connection);
+    let nats = look_for_nat(probe_report_summary);
     let mut best_nat = Vec::<u32>::new();
     for (ttl, probe_reports) in &nats {
         insights.push(AnalysisInsights::HasNat { ttl: *ttl });
@@ -42,8 +42,8 @@ pub fn analyze(connection: &Connection) -> Vec<AnalysisInsights> {
     }
     // just focus on the TTL with the most nat replies
 
-    insights.append(&mut naive_latency_analysis(connection));
-    insights.append(&mut explain_latency(connection, best_nat));
+    insights.append(&mut naive_latency_analysis(probe_report_summary));
+    insights.append(&mut explain_latency(probe_report_summary, best_nat));
 
     insights
 }
@@ -57,15 +57,10 @@ pub fn analyze(connection: &Connection) -> Vec<AnalysisInsights> {
  * Return value is a Map of <TTL> --> Vec of probe reports that had a NAT
  */
 
-fn look_for_nat(connection: &Connection) -> HashMap<u8, Vec<u32>> {
+fn look_for_nat(probe_report_summary: &ProbeReportSummary) -> HashMap<u8, Vec<u32>> {
     let mut nats = HashMap::new();
 
-    for (probe_round, probe_report) in connection
-        .probe_report_summary
-        .raw_reports
-        .iter()
-        .enumerate()
-    {
+    for (probe_round, probe_report) in probe_report_summary.raw_reports.iter().enumerate() {
         for probe in probe_report.probes.values() {
             use ProbeReportEntry::*;
             match &probe {
@@ -107,7 +102,7 @@ struct ApplicationLatencyAnalysis {
  */
 
 fn compute_application_latency(
-    connection: &Connection,
+    probe_report_summary: &ProbeReportSummary,
     nats: Option<Vec<u32>>,
 ) -> ApplicationLatencyAnalysis {
     let mut min = f64::MAX;
@@ -118,11 +113,10 @@ fn compute_application_latency(
     let report_rounds = if let Some(nats) = nats {
         nats
     } else {
-        (0..connection.probe_report_summary.raw_reports.len() as u32).collect()
+        (0..probe_report_summary.raw_reports.len() as u32).collect()
     };
     for probe_round in &report_rounds {
-        let report = connection
-            .probe_report_summary
+        let report = probe_report_summary
             .raw_reports
             .get(*probe_round as usize)
             .unwrap();
@@ -148,8 +142,7 @@ fn compute_application_latency(
     let mut avg_probe_round_approximation_error = f64::MAX;
     let mut avg_probe_round = 0_u32;
     for probe_round in report_rounds {
-        let report = connection
-            .probe_report_summary
+        let report = probe_report_summary
             .raw_reports
             .get(probe_round as usize)
             .unwrap();
@@ -195,25 +188,28 @@ fn compute_application_latency(
  * vs. the endhost's processing delay.
  */
 
-fn explain_latency(connection: &Connection, nats: Vec<u32>) -> Vec<AnalysisInsights> {
+fn explain_latency(
+    probe_report_summary: &ProbeReportSummary,
+    nats: Vec<u32>,
+) -> Vec<AnalysisInsights> {
     let mut insights = Vec::new();
 
     const MIN_NATS_FOR_ANALYSIS: usize = 50; // made up number, e.g. at least 50% of 100 probe rounds
     let application_latency = if nats.len() < MIN_NATS_FOR_ANALYSIS {
         debug!("Found NATs, but not enough to narrowly analyze just the nats");
-        compute_application_latency(connection, None)
+        compute_application_latency(probe_report_summary, None)
     } else {
-        compute_application_latency(connection, Some(nats))
+        compute_application_latency(probe_report_summary, Some(nats))
     };
 
     // extract the average(typical) and worst cases and releative percents
     let typical = extract_latencies(
-        connection,
+        probe_report_summary,
         application_latency.avg_probe_round,
         application_latency.avg,
     );
     let worst = extract_latencies(
-        connection,
+        probe_report_summary,
         application_latency.max_probe_round,
         application_latency.max,
     );
@@ -262,15 +258,14 @@ fn explain_latency(connection: &Connection, nats: Vec<u32>) -> Vec<AnalysisInsig
  * Go throgh the specied probe report and extract the relevant latencies
  */
 fn extract_latencies(
-    connection: &Connection,
+    probe_report_summary: &ProbeReportSummary,
     probe_round: u32,
     app_rtt: f64,
 ) -> ProbeReportLatencies {
     let mut nat_rtt = None;
     let mut last_hop_rtt = None;
     let mut endhost_rtts = Vec::new();
-    let report = connection
-        .probe_report_summary
+    let report = probe_report_summary
         .raw_reports
         .get(probe_round as usize)
         .unwrap();
@@ -334,7 +329,7 @@ fn extract_latencies(
  * and so it doesn't really "explain what happened", but rather provides a stasticial summary.
  */
 
-fn naive_latency_analysis(connection: &Connection) -> Vec<AnalysisInsights> {
+fn naive_latency_analysis(probe_report_summary: &ProbeReportSummary) -> Vec<AnalysisInsights> {
     let mut latency_insights = Vec::new();
     let mut out_drop_count = 0;
     let mut last_router: Option<ProbeReportSummaryNode> = None;
@@ -342,8 +337,8 @@ fn naive_latency_analysis(connection: &Connection) -> Vec<AnalysisInsights> {
     // TODO: track which ttl the endhost replies first come at
     let mut endhosts = Vec::new();
 
-    for ttl in connection.probe_report_summary.summary.keys().sorted() {
-        let nodes = connection.probe_report_summary.summary.get(ttl).unwrap();
+    for ttl in probe_report_summary.summary.keys().sorted() {
+        let nodes = probe_report_summary.summary.get(ttl).unwrap();
         use ProbeReportEntry::*;
         for node in nodes {
             match node.probe_type {
@@ -396,7 +391,7 @@ fn naive_latency_analysis(connection: &Connection) -> Vec<AnalysisInsights> {
         }
         let endhost_avg = sum / count;
         latency_insights.append(&mut analyze_application_latency(
-            connection,
+            probe_report_summary,
             endhost_avg,
             endhost_max,
         ));
@@ -490,12 +485,12 @@ fn naive_latency_analysis(connection: &Connection) -> Vec<AnalysisInsights> {
 }
 
 fn analyze_application_latency(
-    connection: &Connection,
+    probe_report_summary: &ProbeReportSummary,
     endhost_avg: f64,
     endhost_max: f64,
 ) -> Vec<AnalysisInsights> {
     let mut insights = Vec::new();
-    let application_latency = compute_application_latency(connection, None);
+    let application_latency = compute_application_latency(probe_report_summary, None);
     let application_avg = application_latency.avg;
     let application_max = application_latency.max;
     let delta_avg = application_avg - endhost_avg;
@@ -559,7 +554,7 @@ mod test {
         let test_log = r"tests/logs/annotated_connection1_localhost.log";
         let connection = connection_from_log(test_dir("libconntrack", test_log).as_str()).unwrap();
 
-        let insights = analyze(&connection);
+        let insights = analyze(&connection.probe_report_summary);
         assert!(insights
             .iter()
             .any(|i| matches!(&i, AnalysisInsights::NoRouterReplies { .. })));
@@ -571,7 +566,7 @@ mod test {
         let test_log = r"tests/logs/annotated_rob_linux_wifi_turkey.log";
         let connection = connection_from_log(test_dir("libconntrack", test_log).as_str()).unwrap();
 
-        let insights = analyze(&connection);
+        let insights = analyze(&connection.probe_report_summary);
         let last_hop = insights
             .iter()
             .find(|i| matches!(i, AnalysisInsights::LastHopNatLatencyVariance { .. }));
@@ -594,7 +589,7 @@ mod test {
 
         assert!(user_agent.contains("Mac OS X"));
 
-        let insights = analyze(&connection);
+        let insights = analyze(&connection.probe_report_summary);
         let last_hop = insights
             .iter()
             .find(|i| matches!(i, AnalysisInsights::LastHopNatLatencyVariance { .. }));
@@ -622,7 +617,7 @@ mod test {
         let test_log = r"tests/logs/annotated_macos_gregor.log";
         let connection = connection_from_log(test_dir("libconntrack", test_log).as_str()).unwrap();
 
-        let insights = analyze(&connection);
+        let insights = analyze(&connection.probe_report_summary);
         let spike = insights
             .iter()
             .find(|i| matches!(i, AnalysisInsights::LatencySpikeExplaination { .. }));
