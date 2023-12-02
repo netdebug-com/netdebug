@@ -1,0 +1,87 @@
+name: Build and Test
+run-name: Common-build/action.yml🚀
+# FYI: this file can take INPUTS and provide OUTPUTS
+# Useful for understanding this: https://docs.github.com/en/actions/creating-actions/metadata-syntax-for-github-actions#outputs-for-composite-actions
+inputs:
+  # I give up on trying to figure out an if/then syntax in this mess
+  # caller has to specify both these variables instead of a single 'release'
+  # boolean
+  cargo_build_flags:
+    description: "e.g., '--release' or '' for debug"
+    required: true
+  wasm_pack_build_flags:
+    description: "e.g., '--release' or '--dev' for debug"
+    required: true
+
+runs:
+  # says this is not a javascript or docker action, but a 'composite' action
+  using: "composite"
+  steps:
+    - name: Formatting check (rust)
+      # Check the formatting early; this should be done by vscode and/or githooks, but ... sigh
+      run: cargo fmt --check
+      shell: bash
+    - name: Formatting check (prettier)
+      uses: actionsx/prettier@v3
+      with:
+        # prettier CLI arguments.
+        args: --check .
+    - name: Get wasm-pack
+      uses: jetli/wasm-pack-action@v0.4.0
+      with:
+        # Optional version of wasm-pack to install(eg. 'v0.9.1', 'latest')
+        version: "latest"
+    - name: Install libpcap
+      run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      shell: bash
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+    - name: cargo clippy, fail on warnings
+      run: |
+        cargo clippy --release -- -D warnings
+        # run with '--release' so that we don't rebuild the entire tree :-/
+        # run ahead of 'cargo build' just to get the information sooner
+        #  if we're going to fail out
+        # 'cargo clippy' does most of a full build so this will take a while
+      shell: bash
+    - name: Cargo build
+      run: |
+        cargo build --all-features --verbose  ${{inputs.cargo_build_flags}}
+      shell: bash
+    - name: wasm-pack webserver
+      run: |
+        wasm-pack build webserver/web-client ${{inputs.wasm_pack_build_flags}} --target web
+        # don't forget '--target web' important!
+      shell: bash
+    - name: cargo test
+      run: |
+        cargo test ${{inputs.cargo_build_flags}}
+        # FIXME 'cargo test' without 'cargo build' doesn't work as
+        # it does not correctly depend on the wasm-pack tool
+        # but for now, just manually work around by doing both in same step
+      shell: bash
+    - name: wasm-pack test
+      run: |
+        wasm-pack test --headless --chrome webserver/web-client/
+      # this fails if we run with --dev, so remove the build flags to hack around!?
+      shell: bash
+    - name: Node and npm
+      uses: actions/setup-node@v3
+      with:
+        node-version: 18
+        cache: "npm"
+        cache-dependency-path: electron/package-lock.json
+    - run: cd electron && npm ci
+      shell: bash
+    - run: cd electron && npm run lint
+      shell: bash
+    - run: cd electron && npm run test
+      shell: bash
+    # The `npm run package` step will surface any typescript type errors.
+    # There must be an easier way to do so but I haven't found one yet.
+    # Note, that `run test` will find typescript errors only in files that
+    # are included in tests....
+    - run: cd electron && npm run package
+      shell: bash
+    - run: echo "🍏 This job's status is ${{ job.status }}."
+      shell: bash
