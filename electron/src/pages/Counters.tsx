@@ -1,12 +1,11 @@
 import React, { useState } from "react";
-import Paper from "@mui/material/Paper";
 import {
   DataGrid,
   GridColDef,
   GridToolbar,
   GridValueFormatterParams,
 } from "@mui/x-data-grid";
-import { formatValue, headerStyle, reshapeCounter } from "../utils";
+import { formatValue, dataGridDefaultSxProp, reshapeCounter } from "../utils";
 import { SwitchHelper } from "../components/SwitchHelper";
 import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 import { Box } from "@mui/material";
@@ -20,12 +19,10 @@ const Counters: React.FC = () => {
   };
 
   const defaultGridColDef: {
-    headerClassName: string;
     valueFormatter: GridColDef["valueFormatter"];
     align: GridColDef["align"];
     headerAlign: GridColDef["align"];
   } = {
-    headerClassName: "header-style-class",
     valueFormatter: (params: GridValueFormatterParams<number>) =>
       formatValue(params.value, thousandsSep),
     align: "right",
@@ -37,7 +34,6 @@ const Counters: React.FC = () => {
       hideable: false,
       headerName: "Name",
       flex: 40,
-      headerClassName: "header-style-class",
     },
     {
       field: "t60",
@@ -82,14 +78,14 @@ const Counters: React.FC = () => {
         state={thousandsSep}
         updateFn={setThousandsSep}
       />
-      <Box component={Paper} width="100%">
+      <Box width="100%">
         <DataGrid
           aria-label="Table of Stat Counter entries"
           density="compact"
           sx={{
             width: "100%",
             maxWidth: 1200,
-            "& .header-style-class": headerStyle,
+            ...dataGridDefaultSxProp,
           }}
           rows={reshapeCounter(counters)}
           columns={columns}
@@ -100,6 +96,9 @@ const Counters: React.FC = () => {
           }}
           slots={{
             toolbar: GridToolbar,
+          }}
+          slotProps={{
+            toolbar: { printOptions: { disableToolbarButton: true } },
           }}
         />
       </Box>
