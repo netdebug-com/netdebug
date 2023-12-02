@@ -13,7 +13,8 @@ use common_wasm::{
 
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{
-    traffic_stats::BidirectionalStats, AggregateStatKind, ConnectionKey, IpProtocol,
+    traffic_stats::BidirectionalStats, AggregateStatKind, ConnectionIdString, ConnectionKey,
+    IpProtocol,
 };
 #[cfg(not(test))]
 use log::{debug, warn};
@@ -997,6 +998,7 @@ impl Connection {
             rx_stats: self.traffic_stats.rx_stats_summary(now),
             local_hostname: Some("localhost".to_string()),
             key: self.connection_key.clone(),
+            id: Some(ConnectionIdString::from(&self.connection_key)),
             remote_hostname: self.remote_hostname.clone(),
             probe_report_summary: self.probe_report_summary.clone(),
             user_annotation: self.user_annotation.clone(),

@@ -63,7 +63,7 @@ const Counters: React.FC = () => {
   ];
 
   useWebSocketGuiToServer({
-    autoRefresh: true,
+    autoRefresh: false,
     reqMsgType: { tag: "DumpStatCounters" },
     respMsgType: "DumpStatCountersReply",
     min_time_between_requests_ms: 1000,
