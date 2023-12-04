@@ -1429,4 +1429,39 @@ pub mod test {
         assert_eq!(*test_pid, my_pid);
         assert_eq!(*test_app, Some(my_app));
     }
+
+    /**
+     * Windows localhost traffic isn't ethernet, it's some custom encoding that wireshark
+     * understands where the first 4 bytes are [0x18, 0, 0, 0] and then there's an IP packet.
+     *
+     * Let's make sure this works so we can debug the webserver on windows.
+     *
+     * DISABLE this test for now until we add support for this: track as #344
+     */
+    #[ignore]
+    #[test]
+    fn test_windows_localhost_encoding() {
+        let local_addrs = HashSet::from([IpAddr::from_str("::1").unwrap()]);
+        let storage_service_client = None;
+        let max_connections_per_tracker = 32;
+        let raw_sock = MockRawSocketProber::new();
+        let mut connection_tracker = ConnectionTracker::new(
+            storage_service_client,
+            max_connections_per_tracker,
+            local_addrs,
+            raw_sock.tx.clone(),
+            128,
+            ExportedStatRegistry::new("conn_tracker", Instant::now()),
+        );
+        let mut capture = pcap::Capture::from_file(test_dir(
+            "libconntrack",
+            "tests/windows_localhost_traffic.pcapng",
+        ))
+        .unwrap();
+        while let Ok(pkt) = capture.next_packet() {
+            connection_tracker.add(OwnedParsedPacket::try_from(pkt).unwrap());
+        }
+        assert_eq!(connection_tracker.connections.len(), 1);
+        // assert_eq!(connection_tracker.no_conn_key_packets.get_sum()!?, 0);
+    }
 }
