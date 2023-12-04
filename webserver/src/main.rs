@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         };
         let _pcap_thread = libconntrack::pcap::run_blocking_pcap_loop_in_thread(
             device_name,
-            Some(format!("tcp port {}", tcp_listen_port)),
+            Some(format!("tcp port {} or icmp or icmp6", tcp_listen_port)),
             connection_tx,
             None,
         );
