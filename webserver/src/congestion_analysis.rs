@@ -5,7 +5,7 @@ use libconntrack_wasm::{
     topology_server_messages::{
         CongestedLink, CongestedLinkKey, CongestionLatencyPair, CongestionSummary,
     },
-    ConnectionMeasurements,
+    ConnectionKey, ConnectionMeasurements,
 };
 use log::warn;
 
@@ -45,8 +45,6 @@ pub fn recompute_compute_mean_and_peak(link: &mut CongestedLink) {
     if count > 0 {
         link.mean_latency = Some(Duration::from_micros(sum_micros as u64 / count as u64));
         link.peak_latency = Some(Duration::from_micros(peak_micros as u64));
-        link.peak_to_mean_congestion_heuristic =
-            Some(peak_micros as f64 * count as f64 / sum_micros as f64);
     }
 }
 
@@ -107,7 +105,13 @@ pub fn congestion_summary_from_measurements(
                     if let Some(rtt) = probe.get_rtt_ms() {
                         let current =
                             HopInfo::new(ip, *ttl, Duration::from_micros((rtt * 1000.0) as u64));
-                        update_link_congestion(&mut links, &mut prev_found, &current);
+                        update_link_congestion(
+                            &mut links,
+                            &mut prev_found,
+                            &current,
+                            measurement.key.clone(),
+                            report.probe_round,
+                        );
                         next_found = Some(current);
                     }
                 }
@@ -120,18 +124,11 @@ pub fn congestion_summary_from_measurements(
         }
     }
     // now compute all of the stats
-    for link in links
-        .values_mut()
-        .sorted_by(CongestedLink::cmp_by_heuristic_mut)
-    {
+    for link in links.values_mut() {
         recompute_compute_mean_and_peak(link);
     }
     CongestionSummary {
-        links: links
-            .values()
-            .sorted_by(CongestedLink::cmp_by_heuristic)
-            .cloned()
-            .collect_vec(),
+        links: links.values().cloned().collect_vec(),
     }
 }
 
@@ -139,6 +136,8 @@ fn update_link_congestion(
     links: &mut HashMap<CongestedLinkKey, CongestedLink>,
     prev_found: &mut HopInfo,
     current: &HopInfo,
+    connection_key: ConnectionKey,
+    probe_round: u32,
 ) {
     let key = congested_link_key_from_hop_info(prev_found, current);
     let link = links.entry(key.clone()).or_insert(CongestedLink::new(key));
@@ -146,6 +145,8 @@ fn update_link_congestion(
     link.latencies.push(CongestionLatencyPair {
         src_rtt: prev_found.rtt,
         dst_rtt: current.rtt,
+        connection_key,
+        probe_round,
     });
 }
 
@@ -161,6 +162,7 @@ fn congested_link_key_from_hop_info(prev: &HopInfo, curr: &HopInfo) -> Congested
         prev.ip
     };
     CongestedLinkKey {
+        src_hop_count: prev.ttl,
         src_ip,
         dst_ip: curr.ip,
         src_to_dst_hop_count: curr.ttl - prev.ttl,
@@ -181,15 +183,10 @@ mod test {
         let data = make_simple_test_data();
         let congestion_summary = congestion_summary_from_measurements(data, true);
         assert_eq!(congestion_summary.links.len(), 10);
-        for link in congestion_summary
-            .links
-            .iter()
-            .sorted_by(CongestedLink::cmp_by_heuristic)
-        {
+        for link in congestion_summary.links.iter() {
             assert_eq!(link.key.src_to_dst_hop_count, 1);
             assert_eq!(link.mean_latency.unwrap(), Duration::from_millis(1));
             assert_eq!(link.peak_latency.unwrap(), Duration::from_millis(1));
-            assert_eq!(link.peak_to_mean_congestion_heuristic.unwrap(), 1.0);
         }
     }
 

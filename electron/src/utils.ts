@@ -2,6 +2,7 @@
 
 import { MutableRefObject } from "react";
 import { ConnectionKey } from "./netdebug_types";
+import { SxProps } from "@mui/material";
 
 // depending on our SLAs
 export function periodic_with_sla(
@@ -71,6 +72,21 @@ export function prettyPrintSiUnits(
   return (
     (x / scale).toLocaleString(undefined, opts) + " " + suffix + unitSuffix
   );
+}
+
+// Test the value vs. the yellow/red thresholds and return the matching style
+export function calcStyleByThreshold(
+  value: number,
+  mid: number,
+  high: number,
+): SxProps {
+  if (value >= high) {
+    return { color: "red", backgroundColor: "black" };
+  } else if (value >= mid) {
+    return { color: "orange" };
+  } else {
+    return {};
+  }
 }
 
 // Utility function that takes a Map<string, number> containing stat counter values

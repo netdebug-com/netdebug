@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use typescript_type_def::TypeDef;
 
-use crate::ConnectionMeasurements;
+use crate::{ConnectionKey, ConnectionMeasurements};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DesktopToTopologyServer {
@@ -30,6 +30,8 @@ pub enum TopologyServerToDesktop {
 
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, TypeDef)]
 pub struct CongestedLinkKey {
+    /// The hop-count from the origin to the src_ip
+    pub src_hop_count: u8,
     /// The start of the link
     #[type_def(type_of = "String")]
     pub src_ip: IpAddr,
@@ -71,6 +73,13 @@ pub struct CongestionLatencyPair {
     #[serde_as(as = "serde_with::DurationMicroSeconds<u64>")]
     #[serde(rename = "dst_rtt_us")]
     pub dst_rtt: Duration,
+
+    /// which connection did this come from?  Might want to include a
+    /// 'start_time' here as well to better uniquely identify it but
+    /// hopefully ok for now
+    pub connection_key: ConnectionKey,
+    /// Which probe-round did this come from?
+    pub probe_round: u32,
 }
 
 #[serde_as]
@@ -90,8 +99,6 @@ pub struct CongestedLink {
     #[serde_as(as = "Option<serde_with::DurationMicroSeconds<u64>>")]
     #[serde(rename = "peak_latency_us")]
     pub peak_latency: Option<Duration>,
-    /// Peak-to-mean congestion heuristic - higher number --> more congestion
-    pub peak_to_mean_congestion_heuristic: Option<f64>,
     /* TODO: once we have geolocation data for the IPs, return the latencies relative to speed of light times */
 }
 
@@ -102,62 +109,6 @@ impl CongestedLink {
             latencies: Vec::new(),
             mean_latency: None,
             peak_latency: None,
-            peak_to_mean_congestion_heuristic: None,
-        }
-    }
-    /**
-     * First, links with the congestion heuristic defined
-     * appear before ones that do not.
-     * If both define the congestion heuristic, then order by degree of congestion (high to low)
-     * else, if neither define it, tie break on the key
-     *
-     * For use with Itertools::sorted_by(), e.g.,
-     * let links = vec![...];
-     * let most_congested = links.sorted_by(CongestionLink::cmp_by_heuristic).first();
-     */
-    pub fn cmp_by_heuristic_mut(
-        a: &&mut CongestedLink,
-        b: &&mut CongestedLink,
-    ) -> std::cmp::Ordering {
-        // mut version is the same as the non-mut; but compiler won't easily (?)
-        // let us share the code
-        match (
-            a.peak_to_mean_congestion_heuristic,
-            b.peak_to_mean_congestion_heuristic,
-        ) {
-            (None, None) => a
-                .key
-                .src_to_dst_hop_count
-                .cmp(&b.key.src_to_dst_hop_count)
-                .then(a.key.cmp(&b.key)),
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (Some(a_cong), Some(b_cong)) => {
-                // be careful how we handle cmp() with f64
-                b_cong
-                    .partial_cmp(&a_cong)
-                    .expect("Congestion heuristic should never be NaN/0")
-            }
-        }
-    }
-    pub fn cmp_by_heuristic(a: &&CongestedLink, b: &&CongestedLink) -> std::cmp::Ordering {
-        match (
-            a.peak_to_mean_congestion_heuristic,
-            b.peak_to_mean_congestion_heuristic,
-        ) {
-            (None, None) => a
-                .key
-                .src_to_dst_hop_count
-                .cmp(&b.key.src_to_dst_hop_count)
-                .then(a.key.cmp(&b.key)),
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (Some(a_cong), Some(b_cong)) => {
-                // be careful how we handle cmp() with f64
-                b_cong
-                    .partial_cmp(&a_cong)
-                    .expect("Congestion heuristic should never be NaN/0")
-            }
         }
     }
 }
@@ -168,7 +119,6 @@ impl CongestedLink {
 
 #[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
 pub struct CongestionSummary {
-    // this Vec<> is sorted from most congested link to least congested, per the CongestedLink::cmp_by_heuristic() alg
     pub links: Vec<CongestedLink>,
     // TODO: add an Overall Congestion score based on number of paths that are congested and by how much
 }
