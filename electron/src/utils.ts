@@ -1,7 +1,6 @@
 // check how long it's been since our last message and send now or later
 
 import { MutableRefObject } from "react";
-import { ConnectionKey } from "./netdebug_types";
 import { SxProps } from "@mui/material";
 
 // depending on our SLAs
@@ -119,7 +118,7 @@ export function reshapeCounter(counter_map: Map<string, number>): CounterRow[] {
     }
     rowMap.get(name)[what] = value;
   }
-  return Array.from(rowMap.values());
+  return Array.from(rowMap.values()).sort((a, b) => a.id.localeCompare(b.id));
 }
 
 // Format a numeric value as a string, adding thousand seperators if desired.
@@ -136,13 +135,10 @@ export function formatValue(
   }
 }
 
-// build a unique connection key, using the same fields the
-// rust logic uses.
-export function connKeyToStr(key: ConnectionKey) {
-  return (
-    `${key.ip_proto}-[${key.local_ip}]:${key.local_l4_port}` +
-    `-[${key.remote_ip}]:${key.remote_l4_port}`
-  );
+export function sortCmpWithNull(a: number | null, b: number | null) {
+  a = a || 0;
+  b = b || 0;
+  return a - b;
 }
 
 export const dataGridDefaultSxProp = {
