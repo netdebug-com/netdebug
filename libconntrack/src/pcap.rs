@@ -138,6 +138,18 @@ pub fn blocking_pcap_loop(
         info!("Applying pcap filter '{}'", filter_rule);
         capture.filter(filter_rule.as_str(), true)?;
     }
+
+    // panic if not Ethernet for now (see #344)
+    if capture.get_datalink() != pcap::Linktype::ETHERNET {
+        let datalink = capture.get_datalink();
+        return Err(format!(
+            "Unsupported link capture type - only support ethernet:  {:?} ({:?}) - {:?}",
+            datalink.get_name(),
+            datalink,
+            datalink.get_description()
+        )
+        .into());
+    }
     let mut last_stats: Option<pcap::Stat> = None;
     let mut next_stats_time = 0u64;
     let stats_polling_frequency = match stats_polling_frequency {

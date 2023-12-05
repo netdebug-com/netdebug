@@ -1,4 +1,4 @@
-use std::{collections::HashSet, error::Error, net::IpAddr, sync::Arc};
+use std::{collections::HashSet, error::Error, net::IpAddr, str::FromStr, sync::Arc};
 
 use clap::Parser;
 use common_wasm::timeseries_stats::{ExportedStatRegistry, SuperRegistry};
@@ -50,7 +50,6 @@ impl WebServerContext {
                 } else {
                     // if we're not in production mode, just capture
                     // loopback traffic.
-                    // TODO: 'lo' is linux specific - lookup for non-Linux
                     let loopback_if_name = match std::env::consts::OS {
                         "linux" =>"lo",
                         "windows" => "\\Device\\NPF_Loopback",
@@ -68,7 +67,21 @@ impl WebServerContext {
         for a in &pcap_device.addresses {
             local_ips.insert(a.addr);
         }
-        let local_addrs = local_ips.clone();
+        // windows localhost NPF_Loopback doesn't allocate IPs on the virtual interface!
+        // so manually add them
+        if !args.production && std::env::consts::OS == "windows" && local_ips.is_empty() {
+            local_ips.extend([
+                IpAddr::from_str("127.0.0.1").unwrap(),
+                IpAddr::from_str("::1").unwrap(),
+            ])
+        }
+        if local_ips.is_empty() {
+            return Err(format!(
+                "Didn't find any local IP addresses on interface {}",
+                pcap_device.name
+            )
+            .into());
+        }
 
         let mut counter_registries = SuperRegistry::new(std::time::Instant::now());
         let conn_track_counter = counter_registries.new_registry("conn_track");
@@ -83,7 +96,7 @@ impl WebServerContext {
             wasm_root: args.wasm_root.clone(),
             pcap_device,
             local_tcp_listen_port: args.listen_port,
-            local_ips,
+            local_ips: local_ips.clone(),
             connection_tracker: tx.clone(),
             topology_server: topology_server_tx.clone(),
             max_connections_per_tracker: args.max_connections_per_tracker,
@@ -116,7 +129,7 @@ impl WebServerContext {
                 let mut connection_tracker = ConnectionTracker::new(
                     Some(topology_server_tx),
                     max_connections_per_tracker,
-                    local_addrs,
+                    local_ips,
                     prober_tx,
                     MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
                     conn_track_counter,
