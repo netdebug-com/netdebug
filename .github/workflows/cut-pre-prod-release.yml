@@ -22,7 +22,7 @@ jobs:
           wasm_pack_build_flags: "--release"
       - name: Generate Version
         # looks like "2023-12-01"
-        run: echo OUTFILE=pre-prod-latest-ubuntu-${{github.base_ref}}-`date --iso-8601`.tgz >> $GITHUB_ENV
+        run: echo OUTFILE=pre-prod-latest-ubuntu-${{github.ref_name}}-`date --iso-8601`.tgz >> $GITHUB_ENV
       - name: make tarball
         # TODO: add artifacts from the electron build
         run: |
