@@ -17,4 +17,5 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
+thiserror = "1"
 typescript-type-def = { git = "https://github.com/gregor-netdebug/rust-typescript-type-def", branch = "ipaddr-support" }

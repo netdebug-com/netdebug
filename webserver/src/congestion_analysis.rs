@@ -174,7 +174,9 @@ mod test {
     use super::*;
     use chrono::Utc;
     use common_wasm::{ProbeReportEntry, ProbeReportSummary, ProbeRoundReport};
-    use libconntrack_wasm::{ConnectionKey, ConnectionMeasurements, TrafficStatsSummary};
+    use libconntrack_wasm::{
+        ConnectionIdString, ConnectionKey, ConnectionMeasurements, TrafficStatsSummary,
+    };
 
     #[test]
     fn test_trivial_congestion_summary() {
@@ -205,14 +207,16 @@ mod test {
             probe_round: 1,
             application_rtt: None,
         };
+        let key = ConnectionKey {
+            local_ip: IpAddr::from([1, 1, 1, 1]),
+            remote_ip: IpAddr::from([2, 2, 2, 2]),
+            local_l4_port: 1,
+            remote_l4_port: 2,
+            ip_proto: libconntrack_wasm::IpProtocol::TCP,
+        };
         vec![ConnectionMeasurements {
-            key: ConnectionKey {
-                local_ip: IpAddr::from([1, 1, 1, 1]),
-                remote_ip: IpAddr::from([2, 2, 2, 2]),
-                local_l4_port: 1,
-                remote_l4_port: 2,
-                ip_proto: libconntrack_wasm::IpProtocol::TCP,
-            },
+            id: Some(ConnectionIdString::from(&key)),
+            key,
             local_hostname: None,
             remote_hostname: None,
             probe_report_summary: ProbeReportSummary {

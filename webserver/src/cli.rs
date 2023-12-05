@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("Probe report {} not found", probe_run);
         }
     } else {
-        let insights = analyze::analyze(&connection);
+        let insights = analyze::analyze(&connection.probe_report_summary);
         for insight in insights {
             println!("{}", insight);
         }

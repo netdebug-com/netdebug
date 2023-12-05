@@ -449,7 +449,7 @@ impl<'a> ConnectionTracker<'a> {
         tx: tokio::sync::mpsc::Sender<Vec<AnalysisInsights>>,
     ) {
         if let Some(connection) = self.connections.get_mut(key) {
-            let insights = analyze(connection);
+            let insights = analyze(&connection.probe_report_summary);
             if let Err(e) = tx.send(insights).await {
                 warn!("get_insights: {} :: {}", key, e);
             }

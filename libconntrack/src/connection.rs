@@ -13,7 +13,8 @@ use common_wasm::{
 
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{
-    traffic_stats::BidirectionalStats, AggregateStatKind, ConnectionKey, IpProtocol,
+    traffic_stats::BidirectionalStats, AggregateStatKind, ConnectionIdString, ConnectionKey,
+    IpProtocol,
 };
 #[cfg(not(test))]
 use log::{debug, warn};
@@ -912,9 +913,10 @@ impl Connection {
                 }
             }
             if clear {
-                self.clear_probe_data(true);
+                self.clear_probe_data();
             }
         }
+        self.probe_round = None;
         let probe_report = ProbeRoundReport::new(report, probe_round, application_rtt);
         // one copy for us and one for the caller
         // the one for us will get logged to disk; the caller's will get sent to the remote client
@@ -928,12 +930,10 @@ impl Connection {
      * again".  
      */
 
-    fn clear_probe_data(&mut self, flush_local_data: bool) {
+    fn clear_probe_data(&mut self) {
         // clear any old probe data
         self.probe_round = None;
-        if flush_local_data {
-            self.local_data = None;
-        }
+        self.local_data = None;
     }
 
     fn update_udp(
@@ -997,6 +997,7 @@ impl Connection {
             rx_stats: self.traffic_stats.rx_stats_summary(now),
             local_hostname: Some("localhost".to_string()),
             key: self.connection_key.clone(),
+            id: Some(ConnectionIdString::from(&self.connection_key)),
             remote_hostname: self.remote_hostname.clone(),
             probe_report_summary: self.probe_report_summary.clone(),
             user_annotation: self.user_annotation.clone(),

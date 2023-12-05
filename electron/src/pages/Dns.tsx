@@ -1,6 +1,6 @@
 import React, { useRef, useState } from "react";
 import { DnsTrackerEntry } from "../netdebug_types";
-import { headerStyle } from "../utils";
+import { dataGridDefaultSxProp } from "../utils";
 import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 import { Box } from "@mui/material";
 import {
@@ -144,16 +144,11 @@ const Dns: React.FC = () => {
       field: "hostname",
       headerName: "Hostname",
       flex: 45,
-      headerClassName: "header-style-class",
-      renderCell: (params: GridRenderCellParams<string[]>) => (
-        <div style={{ whiteSpace: "nowrap" }}>{params.value}</div>
-      ),
     },
     {
       field: "ips",
       headerName: "IP(s)",
       flex: 25,
-      headerClassName: "header-style-class",
       sortable: false,
       renderCell: (params: GridRenderCellParams<string[]>) =>
         format_ips(params.value),
@@ -162,7 +157,6 @@ const Dns: React.FC = () => {
       field: "ttl_sec",
       headerName: "TTL (secs)",
       flex: 15,
-      headerClassName: "header-style-class",
       align: "right",
       headerAlign: "right",
       valueFormatter: (params: GridValueFormatterParams<number>) =>
@@ -172,7 +166,6 @@ const Dns: React.FC = () => {
       field: "rtt_usec",
       headerName: "RTT (millis)",
       flex: 15,
-      headerClassName: "header-style-class",
       renderCell: (params: GridRenderCellParams<string[]>) =>
         calcStyleByRtt(params.value),
       align: "right",
@@ -189,7 +182,7 @@ const Dns: React.FC = () => {
           sx={{
             width: "100%",
             maxWidth: 1200,
-            "& .header-style-class": headerStyle,
+            ...dataGridDefaultSxProp,
             // when rows are dynamically sized, density is ignored. This will restore the
             // padding again. see https://mui.com/x/react-data-grid/row-height/#dynamic-row-height
             "&.MuiDataGrid-root--densityCompact .MuiDataGrid-cell": {
