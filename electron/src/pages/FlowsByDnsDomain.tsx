@@ -1,28 +1,85 @@
 import React, { useState } from "react";
-import { AggregateStatEntry } from "../netdebug_types";
+import { AggregateStatEntry, AggregateStatKind } from "../netdebug_types";
 import {
-  headerStyle,
-  headerStyleWithWidth,
+  dataGridDefaultSxProp,
   prettyPrintSiUnits,
+  sortCmpWithNull,
 } from "../utils";
-import TableContainer from "@mui/material/TableContainer";
-import Paper from "@mui/material/Paper";
-import Table from "@mui/material/Table";
-import TableHead from "@mui/material/TableHead";
-import TableRow from "@mui/material/TableRow";
-import TableCell from "@mui/material/TableCell";
 import { SwitchHelper } from "../components/SwitchHelper";
 import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
+import { Box } from "@mui/material";
+import {
+  DataGrid,
+  GridColDef,
+  GridToolbar,
+  GridValueFormatterParams,
+  GridValueGetterParams,
+} from "@mui/x-data-grid";
 
-function statSortFn(a: AggregateStatEntry, b: AggregateStatEntry) {
-  const max_rate_fn = (entry: AggregateStatEntry) => {
-    return Math.max(
-      entry.summary.tx.last_min_byte_rate,
-      entry.summary.rx.last_min_byte_rate,
-    );
+function getDefaultRateGridColDef(unitSuffix: string): {
+  valueFormatter: GridColDef["valueFormatter"];
+  align: GridColDef["align"];
+  flex: number;
+  headerAlign: GridColDef["align"];
+  sortComparator: GridColDef["sortComparator"];
+} {
+  return {
+    valueFormatter: (params: GridValueFormatterParams<number>) =>
+      prettyPrintSiUnits(params.value, unitSuffix),
+    align: "right",
+    flex: 10,
+    headerAlign: "right",
+    sortComparator: sortCmpWithNull,
   };
-  return max_rate_fn(b) - max_rate_fn(a);
 }
+
+function getDnsNameFromAggKind(kind: AggregateStatKind) {
+  return kind.tag === "DnsDstDomain" ? kind.name : "";
+}
+
+const columns: GridColDef[] = [
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "id",
+    headerName: "DNS Destiantion Domain",
+    hideable: false,
+    flex: 60,
+    valueGetter: (params: GridValueGetterParams<AggregateStatEntry>) =>
+      getDnsNameFromAggKind(params.row.kind),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "send_bytes",
+    headerName: "Send Bytes",
+    valueGetter: (params: GridValueGetterParams<AggregateStatEntry>) =>
+      params.row.summary.tx?.bytes,
+    ...getDefaultRateGridColDef("B"),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "recv_bytes",
+    headerName: "Recv Bytes",
+    valueGetter: (params: GridValueGetterParams<AggregateStatEntry>) =>
+      params.row.summary.rx?.bytes,
+    ...getDefaultRateGridColDef("B"),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "send_bw",
+    headerName: "Send B/W",
+    valueGetter: (params: GridValueGetterParams<AggregateStatEntry>) =>
+      params.row.summary.tx?.last_min_byte_rate,
+    ...getDefaultRateGridColDef("B/s"),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "recv_bw",
+    headerName: "Recv B/W",
+    valueGetter: (params: GridValueGetterParams<AggregateStatEntry>) =>
+      params.row.summary.rx?.last_min_byte_rate,
+    ...getDefaultRateGridColDef("B/s"),
+  },
+];
 
 const FlowsByDnsDomain: React.FC = () => {
   const [statEntries, setStatEntries] = useState(
@@ -36,8 +93,18 @@ const FlowsByDnsDomain: React.FC = () => {
     respMsgType: "DumpDnsAggregateCountersReply",
     min_time_between_requests_ms: 1000,
     max_time_between_requests_ms: 2000,
-    responseCb: setStatEntries,
+    responseCb: (entries: AggregateStatEntry[]) => {
+      entries.sort((a, b) =>
+        sortCmpWithNull(
+          b.summary.rx.last_min_byte_rate,
+          a.summary.rx.last_min_byte_rate,
+        ),
+      );
+      setStatEntries(entries);
+    },
   });
+
+  statEntries.forEach((x) => console.log(x.kind));
 
   return (
     <>
@@ -46,65 +113,32 @@ const FlowsByDnsDomain: React.FC = () => {
         state={autoRefresh}
         updateFn={setAutoRefresh}
       />
-      <TableContainer component={Paper}>
-        <Table
-          sx={{ minWidth: 650 }}
-          size="small"
-          aria-label="Table of Connections"
-        >
-          <TableHead>
-            <TableRow style={headerStyle}>
-              <TableCell sx={headerStyleWithWidth(0.6)} align="left">
-                DNS Destination Domain
-              </TableCell>
-              <TableCell sx={headerStyleWithWidth(0.1)} align="right">
-                Send Bytes
-              </TableCell>
-              <TableCell sx={headerStyleWithWidth(0.1)} align="right">
-                Recv Bytes
-              </TableCell>
-              <TableCell sx={headerStyleWithWidth(0.1)} align="right">
-                Send Bandwidth
-              </TableCell>
-              <TableCell sx={headerStyleWithWidth(0.1)} align="right">
-                Recv Bandwidth
-              </TableCell>
-            </TableRow>
-            {statEntries
-              .sort(statSortFn)
-              .filter((entry) => entry.kind.tag === "DnsDstDomain")
-              .map((entry) => {
-                // the tenary operator here is to make typescript happy. Otherwise it'll complain
-                // that name doesn't exist on all enum variants.
-                const key: string =
-                  entry.kind.tag === "DnsDstDomain" ? entry.kind.name : "";
-                return (
-                  <TableRow key={key}>
-                    <TableCell>{key}</TableCell>
-                    <TableCell align="right">
-                      {prettyPrintSiUnits(entry.summary.tx?.bytes, "B")}
-                    </TableCell>
-                    <TableCell align="right">
-                      {prettyPrintSiUnits(entry.summary.rx?.bytes, "B")}
-                    </TableCell>
-                    <TableCell align="right">
-                      {prettyPrintSiUnits(
-                        entry.summary.tx?.last_min_byte_rate,
-                        "Bytes/s",
-                      )}
-                    </TableCell>
-                    <TableCell align="right">
-                      {prettyPrintSiUnits(
-                        entry.summary.rx?.last_min_byte_rate,
-                        "Bytes/s",
-                      )}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-          </TableHead>
-        </Table>
-      </TableContainer>
+      <Box width="100%">
+        <DataGrid
+          aria-label="Table of flows by DNS destination domain"
+          density="compact"
+          columns={columns}
+          rows={statEntries}
+          getRowId={(row: AggregateStatEntry) =>
+            getDnsNameFromAggKind(row.kind)
+          }
+          sx={{
+            width: "100%",
+            ...dataGridDefaultSxProp,
+          }}
+          initialState={{
+            sorting: {
+              sortModel: [{ field: "recv_bw", sort: "desc" }],
+            },
+          }}
+          slots={{
+            toolbar: GridToolbar,
+          }}
+          slotProps={{
+            toolbar: { printOptions: { disableToolbarButton: true } },
+          }}
+        />
+      </Box>
     </>
   );
 };
