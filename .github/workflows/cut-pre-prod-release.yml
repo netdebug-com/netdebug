@@ -29,6 +29,8 @@ jobs:
           tar czf  $OUTFILE \
           ./target/release/desktop \
           ./target/release/webserver \
+          ./target/release/router-graph \
+          ./scripts \
           ./webserver/web-client/pkg/ \
           ./webserver/html
       # IF we get this far, automatically cut a release  with tag 'pre-prod-latest'
