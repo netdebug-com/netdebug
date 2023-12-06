@@ -119,6 +119,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             prober_tx,
             MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
             conn_track_counters,
+            false, // desktop need to rate limit probes
         );
         connection_tracker.set_tx_rx(connection_manager_tx, rx);
         connection_tracker.set_dns_tracker(dns_tx_clone);

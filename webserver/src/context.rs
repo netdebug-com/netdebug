@@ -133,6 +133,8 @@ impl WebServerContext {
                     prober_tx,
                     MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
                     conn_track_counter,
+                    // the webserver doesn't need rate limiting
+                    true,
                 );
                 connection_tracker.set_tx_rx(tx, rx);
                 let _ret: () = connection_tracker.rx_loop().await;
