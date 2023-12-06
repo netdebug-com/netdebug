@@ -414,6 +414,14 @@ impl Connection {
         // did we send some payload?
         if !packet.payload.is_empty() {
             let first_time = self.local_data.is_none();
+            if first_time {
+                debug!(
+                    "Setting first_time local_data for connection {} (closing={}, probing={})",
+                    self.connection_key,
+                    self.close_has_started(),
+                    self.probe_round.is_some(),
+                );
+            }
             self.local_data = Some(packet.clone());
             // this is the first time in the connection lifetime we sent some payload
             // spawn an inband probe
@@ -760,8 +768,13 @@ impl Connection {
         &mut self,
         probe_round: u32,
         application_rtt: Option<f64>,
-        clear: bool,
+        should_probe_again: bool,
     ) -> ProbeRoundReport {
+        debug!(
+            "Generating probe report for {} (pending report = {})",
+            self.connection_key,
+            self.probe_round.is_some()
+        );
         let mut report = HashMap::new();
         if let Some(probe_round) = self.probe_round.as_mut() {
             if probe_round.outgoing_probe_timestamps.len() > PROBE_MAX_TTL as usize {
@@ -912,28 +925,21 @@ impl Connection {
                     }
                 }
             }
-            if clear {
-                self.clear_probe_data();
-            }
         }
+        // whether or not we had valid probe data; reset the probe data if asked
+        // this is important because we could have had a completely failed probe run but
+        // still want to be able to start another.
+        if should_probe_again {
+            self.local_data = None;
+        }
+        // Always clear out the stored state to make sure that multiple calls to this function
+        // don't create fake ProbeReports (or leak mem!)
         self.probe_round = None;
         let probe_report = ProbeRoundReport::new(report, probe_round, application_rtt);
         // one copy for us and one for the caller
         // the one for us will get logged to disk; the caller's will get sent to the remote client
         self.probe_report_summary.update(probe_report.clone());
         probe_report
-    }
-
-    /**
-     * Reset the state around a set of probes.  If we clear the local_data,
-     * then we're saying "when you next get a valid data packet, launch a probe
-     * again".  
-     */
-
-    fn clear_probe_data(&mut self) {
-        // clear any old probe data
-        self.probe_round = None;
-        self.local_data = None;
     }
 
     fn update_udp(
@@ -1222,7 +1228,7 @@ pub mod test {
             let prober_tx = prober_txrx.0.clone();
             Helper {
                 _prober_txrx: prober_txrx,
-                prober_helper: ProberHelper::new(prober_tx),
+                prober_helper: ProberHelper::new(prober_tx, false),
                 pcap_to_wall_delay: registry.add_duration_stat(
                     "pcap_to_wall_delay",
                     Units::Microseconds,

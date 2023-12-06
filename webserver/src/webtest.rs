@@ -224,7 +224,6 @@ async fn run_probe_round(
         connection_key,
         probe_round,
         rtt_estimate,
-        true,
     )
     .await
     {
@@ -251,16 +250,19 @@ async fn get_probe_report(
     connection_key: &Option<ConnectionKey>,
     probe_round: u32,
     application_rtt: f64,
-    clear_state: bool,
 ) -> Option<ProbeRoundReport> {
     if let Some(key) = &connection_key {
         let key = key.clone();
         // create an async channel for the connection tracker to send us back the report on
         let (report_tx, mut report_rx) = tokio::sync::mpsc::channel(1);
+        debug!(
+            "Generating the probe report and clearing state for {:?}",
+            connection_key
+        );
         if let Err(e) =
             connection_tracker.try_send(PerfMsgCheck::new(ConnectionTrackerMsg::ProbeReport {
                 key,
-                clear_state,
+                should_probe_again: true,
                 tx: report_tx,
                 probe_round,
                 application_rtt: Some(application_rtt),
@@ -273,6 +275,7 @@ async fn get_probe_report(
             report_rx.recv().await
         }
     } else {
+        warn!("get_probe_report: ConnectionKey is None!?");
         None // keylookup failed, just return None
              // TODO: this may need to be a panic!() - think about it
     }

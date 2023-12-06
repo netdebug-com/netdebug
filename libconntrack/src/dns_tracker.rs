@@ -710,16 +710,12 @@ pub fn make_dns_ptr_lookup_request(
 #[cfg(test)]
 mod test {
     use common::test_utils::test_dir;
-    use common_wasm::timeseries_stats::ExportedStatRegistry;
     use dns_parser::QueryType;
     use etherparse::TransportHeader;
     use libconntrack_wasm::IpProtocol;
     use tokio::sync::mpsc::channel;
 
-    use crate::{
-        connection_tracker::ConnectionTracker, owned_packet::OwnedParsedPacket,
-        pcap::MockRawSocketProber,
-    };
+    use crate::owned_packet::OwnedParsedPacket;
 
     use super::*;
     use chrono::TimeZone;
@@ -881,17 +877,8 @@ mod test {
         let (dns_tx, _) = DnsTracker::spawn(100).await;
         let local_addrs =
             HashSet::from([IpAddr::from_str("2600:1700:5b20:4e10:adc4:bd8f:d640:2d48").unwrap()]);
-        let storage_service_client = None;
-        let max_connections_per_tracker = 32;
-        let mock_prober = MockRawSocketProber::new();
-        let mut connection_tracker = ConnectionTracker::new(
-            storage_service_client,
-            max_connections_per_tracker,
-            local_addrs,
-            mock_prober.tx.clone(),
-            128,
-            ExportedStatRegistry::new("conn_tracker", std::time::Instant::now()),
-        );
+        let mut connection_tracker =
+            crate::connection_tracker::test::mk_mock_connection_tracker(local_addrs);
         connection_tracker.set_dns_tracker(dns_tx.clone());
         dns_tx
             .send(DnsTrackerMessage::CacheForever {
