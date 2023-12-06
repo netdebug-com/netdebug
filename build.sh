@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #
 #Grr! would love for build.rs to make this work... but it doesn't...
 
