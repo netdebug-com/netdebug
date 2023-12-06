@@ -40,7 +40,7 @@ pub struct Args {
     pub max_connections_per_tracker: usize,
 
     /// The URL of the Topology Server. E.g., ws://localhost:3030
-    #[arg(long, default_value = "ws://localhost:3030/desktop")]
+    #[arg(long, default_value = "wss://topology.netdebug.com:443/desktop")]
     pub topology_server_url: String,
 }
 
