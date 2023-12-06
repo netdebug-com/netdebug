@@ -150,8 +150,27 @@ impl WebServerContext {
 #[command(author, version, about, long_about = None)]
 pub struct Args {
     /// Used to enable production flags vs. (default) dev mode
+    /// production implies https unless '--force-unencrypted-http' is set
     #[arg(long)]
     pub production: bool,
+
+    /// DANGER: override default and allow --production with unencrypted http
+    #[arg(long, default_value_t = false)]
+    pub force_unencrypted: bool,
+
+    /// Fully qualified path to TLS Certificate (use Certbot!)
+    #[arg(
+        long,
+        default_value = "/etc/letsencrypt/live/topology.netdebug.com/cert.pem"
+    )]
+    pub tls_cert: String,
+
+    /// Fully qualified path to TLS private key (use Certbot!)
+    #[arg(
+        long,
+        default_value = "/etc/letsencrypt/live/topology.netdebug.com/privkey.pem"
+    )]
+    pub tls_key: String,
 
     /// the base of the HTML directory, e.g., where index.html lives
     #[arg(long, default_value = "webserver/html")]

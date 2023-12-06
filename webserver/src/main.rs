@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use libwebserver::http_routes::make_webserver_http_routes;
-use log::info;
+use log::{info, warn};
 use tokio::sync::RwLock;
 
 #[tokio::main]
@@ -49,8 +49,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .parse()?;
     let listen_addr = std::net::SocketAddr::new(ip, args.listen_port);
 
-    warp::serve(make_webserver_http_routes(context).await)
-        .run(listen_addr)
-        .await;
+    let server = warp::serve(make_webserver_http_routes(context).await);
+    let run_encrypted = if args.production {
+        if !args.force_unencrypted {
+            info!("Running with TLS/Encypted mode");
+            true
+        } else {
+            warn!("--force-unencrypted set, running unencrypted in prod!?");
+            false
+        }
+    } else {
+        false // dev mode is ok to be unencrypted
+    };
+    if run_encrypted {
+        server
+            .tls()
+            .cert_path(args.tls_cert)
+            .key_path(args.tls_key)
+            .run(listen_addr)
+            .await
+    } else {
+        server.run(listen_addr).await;
+    }
     Ok(())
 }
