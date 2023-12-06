@@ -30,7 +30,7 @@ use crate::{
     owned_packet::OwnedParsedPacket,
     prober_helper::ProberHelper,
     utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timestamp_to_ms, PerfMsgCheck},
-    TcpSeqState,
+    SeqRange, TcpSeqState,
 };
 
 pub const MAX_BURST_RATE_TIME_WINDOW_MILLIS: u64 = 10;
@@ -465,53 +465,31 @@ impl Connection {
             None
         };
         if let Some(cur_pkt_ack) = cur_pkt_ack {
+            // this is an ACK packet
+
             if let Some(old_ack) = self.remote_ack {
                 // Is this ACK a duplicate ACK?
                 if old_ack == cur_pkt_ack && packet.payload.is_empty() && !tcp.syn && !tcp.fin {
-                    // Clippy wants to collapse this `if let` and the `if let TcpOptionElement` into a single `if`
-                    // but I think that would look overly convoluted... So we tell clippy to ignore it
-                    #[allow(clippy::collapsible_match)]
-                    if let Some(Ok(selective_ack)) = tcp.options_iterator().find(|opt| {
-                        matches!(&opt, Ok(TcpOptionElement::SelectiveAcknowledgement(_, _)))
-                    }) {
+                    let sacks = self.extract_sacks(self.local_seq_state.as_ref().unwrap(), tcp);
+                    if !sacks.is_empty() {
+                        // if there are more than 1 SACK block in the packet we assume it's not a probe response
+                        let sack = sacks.first().unwrap();
                         // CRAZY: an out-of-sequence dupACK SHOULD contain a SACK option ala RFC2018, S4/page 5
                         // check whether the ACK sequence is ahead of the SACK range - that tells us it's a probe!
-                        if let TcpOptionElement::SelectiveAcknowledgement((left, right), acks) =
-                            selective_ack
-                        {
-                            let right64 = self.local_seq_state.as_ref().unwrap().seq64(right);
-                            if acks[0].is_some()
-                                || right64.is_none()
-                                || right64.unwrap() > cur_pkt_ack
-                            {
-                                // this is not a dupACK/probe reply but a legit indication of a lost packet
-                                // TODO: use selective ack params to estimate packets lost
-                            } else {
-                                // this is a dupACK/probe reply! the right - left indicates the probe id
-                                let probe_id = if right >= left {
-                                    // PAWS check
-                                    right - left // NOTE: hand verified that this doesn't have off-by-one issues
+                        if sacks.len() == 1 && sack.right() <= cur_pkt_ack {
+                            // this is a dupACK/probe reply! the right - left indicates the probe id
+                            let probe_id = sack.bytes();
+                            if let Some(active_probe_round) = self.probe_round.as_mut() {
+                                if probe_id <= PROBE_MAX_TTL as u64 {
+                                    // record the reply
+                                    let probe_id = probe_id as u8; // safe because we just checked
+                                    active_probe_round
+                                        .incoming_reply_timestamps
+                                        .entry(probe_id)
+                                        .or_default()
+                                        .insert(packet.clone());
                                 } else {
-                                    // SEQ wrapped!  (or maybe a malicious receiver?)
-                                    (u32::MAX - left) + right
-                                };
-                                if let Some(active_probe_round) = self.probe_round.as_mut() {
-                                    if probe_id <= PROBE_MAX_TTL as u32 {
-                                        // record the reply
-                                        let probe_id = probe_id as u8; // safe because we just checked
-                                        if let Some(replies) = active_probe_round
-                                            .incoming_reply_timestamps
-                                            .get_mut(&probe_id)
-                                        {
-                                            replies.insert(packet.clone());
-                                        } else {
-                                            active_probe_round
-                                                .incoming_reply_timestamps
-                                                .insert(probe_id, HashSet::from([packet.clone()]));
-                                        }
-                                    } else {
-                                        debug!("Looks like we got a dupACK but the probe_id is too big {} :: {:?}", probe_id, packet);
-                                    }
+                                    debug!("Looks like we got a dupACK but the probe_id is too big {} :: {:?}", probe_id, packet);
                                 }
                             }
                         }
@@ -549,10 +527,12 @@ impl Connection {
                     }
                 }
             }
-            // what ever the case, update the ack for next time
-            // NOTE: this could be a NOOP in the dup ack case
-
-            self.remote_ack = Some(cur_pkt_ack);
+            // Update the higest ACK seen from the remote side. Be careful
+            // not to go backwards
+            self.remote_ack = match self.remote_ack {
+                Some(old_ack) => Some(old_ack.max(cur_pkt_ack)),
+                None => Some(cur_pkt_ack),
+            };
         }
         if tcp.fin {
             // FIN's "use" a sequence number as if they sent a byte of data
@@ -989,6 +969,49 @@ impl Connection {
             four_way_close_done: self.is_four_way_close_done_or_rst(),
         }
     }
+
+    /// Helper, convert a raw sack block (tuple of u32 -- as we'd get it from a packet header) into
+    /// 64bit seq numbers and if the SACK is valid (in the window and left < right), push it into the
+    /// vector.
+    fn push_raw_sack_as_range(
+        &self,
+        sacks: &mut Vec<SeqRange>,
+        seq_state: &TcpSeqState,
+        raw_sack: (u32, u32),
+    ) {
+        if let Some(seq_range) = SeqRange::try_from_seq(seq_state, raw_sack) {
+            sacks.push(seq_range);
+        } else {
+            warn!(
+                "Invalid SACK: seq state: {:?}, sack block: {:?}",
+                seq_state, raw_sack
+            );
+        }
+    }
+
+    /// Take a TCP header and current TcpSeqState and extract any SACK blocks from the
+    /// header. Invalid SACK blocks (out of window, right >= left) are discarded. The
+    /// returned SACK blocks are in 64bit seq space but are neither sorted nor merged.
+    fn extract_sacks(&self, seq_state: &TcpSeqState, tcph: &TcpHeader) -> Vec<SeqRange> {
+        assert!(tcph.ack);
+        assert!(!tcph.fin);
+        assert!(!tcph.syn);
+        assert!(!tcph.rst);
+        let sacks_opt: Option<Vec<SeqRange>> = tcph.options_iterator().find_map(|opt| {
+            if let Ok(TcpOptionElement::SelectiveAcknowledgement(first_sack, other_sacks)) = opt {
+                let mut ret = Vec::new();
+                self.push_raw_sack_as_range(&mut ret, seq_state, first_sack);
+                other_sacks
+                    .into_iter()
+                    .flatten()
+                    .for_each(|s| self.push_raw_sack_as_range(&mut ret, seq_state, s));
+                Some(ret)
+            } else {
+                None
+            }
+        });
+        sacks_opt.unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -1300,5 +1323,118 @@ pub mod test {
         // One 242 byte packet per 0.5ms ==> 484KB/s
         assert_eq!(conn_meas.rx_stats.burst_byte_rate.unwrap(), 484e3);
         assert_eq!(conn_meas.rx_stats.burst_pkt_rate.unwrap(), 2000.);
+    }
+
+    fn mk_mock_connection() -> Connection {
+        Connection::new(
+            ConnectionKey {
+                local_ip: IpAddr::from_str("1.2.3.4").unwrap(),
+                remote_ip: IpAddr::from_str("5.6.7.8").unwrap(),
+                local_l4_port: 42,
+                remote_l4_port: 80,
+                ip_proto: IpProtocol::TCP,
+            },
+            Utc::now(),
+        )
+    }
+
+    #[test]
+    fn test_push_raw_sacks_as_range() {
+        let c = mk_mock_connection();
+        let center = 0x8000_0000u32;
+        let center64 = center as u64;
+        let tss = TcpSeqState::new(center);
+        let mut sacks = Vec::new();
+
+        // outside the window ==> don't push
+        c.push_raw_sack_as_range(&mut sacks, &tss, (0, 1));
+        assert_eq!(sacks, &[]);
+
+        // left  > right ==> don't push
+        c.push_raw_sack_as_range(&mut sacks, &tss, (center + 10, center));
+        assert_eq!(sacks, &[]);
+
+        c.push_raw_sack_as_range(&mut sacks, &tss, (center, center + 10));
+        assert_eq!(
+            sacks,
+            &[SeqRange::try_from_seq64((center64, center64 + 10)).unwrap()]
+        );
+        c.push_raw_sack_as_range(&mut sacks, &tss, (center + 20, center + 30));
+        assert_eq!(
+            sacks,
+            &[
+                SeqRange::try_from_seq64((center64, center64 + 10)).unwrap(),
+                SeqRange::try_from_seq64((center64 + 20, center64 + 30)).unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_extract_sacks() {
+        let c = mk_mock_connection();
+        fn mkrange(left: u64, right: u64) -> SeqRange {
+            SeqRange::try_from_seq64((left, right)).unwrap()
+        }
+        let initial_ack = 2_000_000_000;
+        let initial_ack64 = initial_ack as u64;
+        let mut tcph = TcpHeader::new(34333, 80, 123, 65535);
+        tcph.ack = true;
+        tcph.acknowledgment_number = initial_ack;
+        let tss = TcpSeqState::new(initial_ack);
+        assert_eq!(c.extract_sacks(&tss, &tcph), Vec::new());
+
+        // single sack block
+        tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
+            (initial_ack + 10, initial_ack + 20),
+            [None, None, None],
+        )])
+        .unwrap();
+        assert_eq!(
+            c.extract_sacks(&tss, &tcph),
+            vec![mkrange(initial_ack64 + 10, initial_ack64 + 20)]
+        );
+
+        // multiple sack blocks
+        tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
+            (initial_ack + 10, initial_ack + 20),
+            [Some((initial_ack + 30, initial_ack + 40)), None, None],
+        )])
+        .unwrap();
+        assert_eq!(
+            c.extract_sacks(&tss, &tcph),
+            vec![
+                mkrange(initial_ack64 + 10, initial_ack64 + 20),
+                mkrange(initial_ack64 + 30, initial_ack64 + 40)
+            ]
+        );
+
+        // multiple sack blocks, first sack block has invalid range
+        tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
+            (initial_ack + 20, initial_ack + 10),
+            [Some((initial_ack + 30, initial_ack + 40)), None, None],
+        )])
+        .unwrap();
+        assert_eq!(
+            c.extract_sacks(&tss, &tcph),
+            vec![mkrange(initial_ack64 + 30, initial_ack64 + 40)]
+        );
+
+        // multiple sack blocks, second block with invalid range
+        tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
+            (initial_ack + 10, initial_ack + 20),
+            [
+                Some((initial_ack + 40, initial_ack + 30)),
+                Some((initial_ack + 50, initial_ack + 60)),
+                None,
+            ],
+        )])
+        .unwrap();
+        assert_eq!(
+            c.extract_sacks(&tss, &tcph),
+            vec![
+                mkrange(initial_ack64 + 10, initial_ack64 + 20),
+                mkrange(initial_ack64 + 50, initial_ack64 + 60)
+            ]
+        );
     }
 }
