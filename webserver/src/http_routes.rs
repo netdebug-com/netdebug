@@ -7,6 +7,8 @@ use crate::{desktop_websocket, webtest};
 use common_wasm::timeseries_stats::{
     CounterProvider, CounterProviderWithTimeUpdate, ExportedStatRegistry,
 };
+use log::debug;
+use warp::filters::log::{custom as warp_log, Info};
 use warp::http::StatusCode;
 use warp::{cookie::cookie, Filter, Reply};
 
@@ -23,22 +25,27 @@ pub async fn make_webserver_http_routes(
     let html_root = context.read().await.html_root.clone();
     let counter_registries = context.read().await.counter_registries.clone();
 
-    let login = make_login_route(&context).with(warp::log("login"));
-    let webtest = make_webtest_route(&context).with(warp::log("webtest"));
-    let webclient = make_webclient_route(&wasm_root).with(warp::log("webclient"));
-    let webclient_ws = make_webclient_ws_route(&context).with(warp::log("websocket"));
-    let desktop_ws = make_desktop_ws_route(&context).with(warp::log("desktop_ws"));
+    let login = make_login_route(&context).with(warp_log(|i| custom_logger1("login", i)));
+    let webtest = make_webtest_route(&context).with(warp_log(|i| custom_logger1("webtest", i)));
+    let webclient =
+        make_webclient_route(&wasm_root).with(warp_log(|i| custom_logger1("webclient", i)));
+    let webclient_ws =
+        make_webclient_ws_route(&context).with(warp_log(|i| custom_logger1("websocket", i)));
+    let desktop_ws =
+        make_desktop_ws_route(&context).with(warp_log(|i| custom_logger1("desktop_ws", i)));
     let static_path = warp::path("static")
         .and(warp::fs::dir(format!("{}/static", html_root)))
-        .with(warp::log("static"));
+        .with(warp_log(|i| custom_logger1("static", i)));
 
     // can only access if there's an auth cookie
-    let root = make_root_route(&context).with(warp::log("root"));
+    let root = make_root_route(&context).with(warp_log(|i| custom_logger1("root", i)));
 
     // default where we direct people with no auth cookie to get one
-    let login_form = make_login_form_route(&context, &html_root).with(warp::log("login"));
+    let login_form =
+        make_login_form_route(&context, &html_root).with(warp_log(|i| custom_logger1("login", i)));
 
-    let counters = make_counter_routes(counter_registries).with(warp::log("counters"));
+    let counters =
+        make_counter_routes(counter_registries).with(warp_log(|i| custom_logger1("counters", i)));
 
     // this is the order that the filters try to match; it's important that
     // it's in this order to make sure the cookie auth works right
@@ -52,6 +59,52 @@ pub async fn make_webserver_http_routes(
         .or(root)
         .or(login)
         .or(login_form)
+}
+
+/**
+ * warp tells us all of the routes that DON'T match which creates a lot of noise.
+ * Show anything that didn't match as debug!() and anything else as info!()
+ *
+ * DOESN'T COMPLILE - so frustrating!!
+ */
+/*
+fn custom_logger<F>(module: &str) -> warp::filters::log::Log<F>
+where
+    F: Fn(warp::filters::log::Info<'_>),
+{
+    warp::log::custom(|info: warp::filters::log::Info<'_>| {
+        {
+            if info.status() == warp::http::StatusCode::NOT_FOUND {
+                debug!("{} :: {:?}", module, format_log_info(&info));
+            } else {
+                log::info!("{} :: {:?}", module, format_log_info(&info));
+            }
+        }
+        .into()
+    })
+}
+*/
+
+fn custom_logger1(module: &str, info: Info<'_>) {
+    if info.status() == warp::http::StatusCode::NOT_FOUND {
+        debug!("{} :: {:?}", module, format_log_info(&info));
+    } else {
+        log::info!("{} :: {:?}", module, format_log_info(&info));
+    }
+}
+
+// why doesn't just just implement Debug like a sane struct?
+fn format_log_info(info: &warp::filters::log::Info<'_>) -> String {
+    format!(
+        "{:?} {:?} {:?} refer={:?} status={} user-agent=\"{:?}\"",
+        info.remote_addr(),
+        info.method(),
+        info.path(),
+        info.referer(),
+        info.status(),
+        info.user_agent(),
+        // don't log the request headers as they might have a password, but might be useful too
+    )
 }
 
 pub fn make_counter_routes(

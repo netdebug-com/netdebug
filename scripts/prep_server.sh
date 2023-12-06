@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Use this script to install anything we need on a server; 
+# TODO: proper chef/puppet automation
 set -x
 
 sudo apt update
@@ -16,4 +18,7 @@ curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo 
 && sudo apt install gh -y
 
 ## install a user 'deploy' for us to install into
-sudo adduser --system deploy
+sudo adduser deploy
+sudo addgroup deploy sudo
+
+# TODO: make sure the root user is sane - currently on Equinix metal you can log in as root by default
