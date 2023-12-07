@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { ConnectionMeasurements } from "../netdebug_types";
 import {
   dataGridDefaultSxProp,
+  getConnKeyForDisplay,
   prettyPrintSiUnits,
   sortCmpWithNull,
 } from "../utils";
@@ -15,20 +16,6 @@ import {
   GridValueFormatterParams,
   GridValueGetterParams,
 } from "@mui/x-data-grid";
-
-// build a connection key for displaying in the table
-// This key might not be unique. E.g., two different local IPs could
-// have the same local port and remote pair.
-// And/or a remote hostname might have to IPs.
-// While this is very unlikely, react gets very angry of `key` attributes
-// aren't unique.
-function getConnKeyForDisplay(conn: ConnectionMeasurements) {
-  const remote =
-    conn.remote_hostname !== null
-      ? conn.remote_hostname
-      : `[${conn.key.remote_ip}]`;
-  return `${conn.key.ip_proto} ${conn.key.local_l4_port} --> ${remote}:${conn.key.remote_l4_port}`;
-}
 
 function formatAssociatedApps(
   params: GridValueFormatterParams<ConnectionMeasurements["associated_apps"]>,
