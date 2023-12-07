@@ -7,5 +7,7 @@ pub mod owned_packet;
 pub mod pcap;
 pub mod prober_helper;
 pub mod process_tracker;
+pub mod tcp_sequence;
+pub use tcp_sequence::*;
 pub mod topology_client;
 pub mod utils;
