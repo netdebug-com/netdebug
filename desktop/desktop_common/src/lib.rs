@@ -30,6 +30,7 @@ pub enum DesktopToGuiMessages {
     },
     CongestedLinksReply {
         congestion_summary: CongestionSummary,
+        connection_measurements: Vec<ConnectionMeasurements>,
     },
 }
 

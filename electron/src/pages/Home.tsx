@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import useWebSocket from "react-use-websocket";
 import { WS_URL } from "../App";
-import { CongestedLink } from "../netdebug_types";
+import { CongestedLink, ConnectionMeasurements } from "../netdebug_types";
 import TableContainer from "@mui/material/TableContainer";
 import Paper from "@mui/material/Paper";
 import Table from "@mui/material/Table";
@@ -15,10 +15,15 @@ import {
   prettyPrintSiUnits,
 } from "../utils";
 
+interface CongestionInfo {
+  congestionSummary: Array<CongestedLink>;
+  connectionMeasurements: Array<ConnectionMeasurements>;
+}
+
 const Home: React.FC = () => {
   const [myIp, setMyIp] = useState("Loading...");
-  const [congestedLinks, setCongestedLinks] = useState(
-    new Array<CongestedLink>(),
+  const [congestionInfo, setCongestionInfo] = useState<CongestionInfo | null>(
+    null,
   );
   const last_send = useRef(null);
   useEffect(() => {
@@ -34,7 +39,11 @@ const Home: React.FC = () => {
       if (parsed.tag == "WhatsMyIpReply") {
         setMyIp(parsed.data.ip);
       } else if (parsed.tag == "CongestedLinksReply") {
-        setCongestedLinks(parsed.data.congestion_summary.links);
+        const congestionInfo: CongestionInfo = {
+          congestionSummary: parsed.data.congestion_summary.links,
+          connectionMeasurements: parsed.data.connection_measurements,
+        };
+        setCongestionInfo(congestionInfo);
       }
     },
     onClose: () => {
@@ -68,7 +77,7 @@ const Home: React.FC = () => {
     );
   }
 
-  function linkSortFn(a: CongestedLink, b: CongestedLink) {
+  function linkSortFnByCongestion(a: CongestedLink, b: CongestedLink) {
     // TODO: make this variable in how we can sort it
     const a_delta = a.peak_latency_us - a.mean_latency_us;
     const b_delta = b.peak_latency_us - b.mean_latency_us;
@@ -106,31 +115,44 @@ const Home: React.FC = () => {
                 Max Congestion
               </TableCell>
             </TableRow>
-            {congestedLinks.sort(linkSortFn).map((link) => {
-              const linkKey = make_link_key(link);
-              const peak_mean_delta =
-                link.peak_latency_us - link.mean_latency_us;
-              return (
-                <TableRow key={linkKey}>
-                  <TableCell>{link.key.src_hop_count}</TableCell>
-                  <TableCell>{linkKey}</TableCell>
-                  <TableCell align="right">
-                    {prettyPrintSiUnits(link.mean_latency_us * 1e-6, "s", 2)}
-                  </TableCell>
-                  <TableCell align="right">
-                    {prettyPrintSiUnits(link.peak_latency_us * 1e-6, "s", 2)}
-                  </TableCell>
-                  <TableCell align="right">{link.latencies.length}</TableCell>
-                  <TableCell
-                    align="right"
-                    // 10ms is yellow, 50ms is red
-                    sx={calcStyleByThreshold(peak_mean_delta, 10000, 50000)}
-                  >
-                    +{prettyPrintSiUnits(peak_mean_delta * 1e-6, "s", 2)}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
+            {congestionInfo &&
+              congestionInfo.congestionSummary
+                .sort(linkSortFnByCongestion)
+                .map((link) => {
+                  const linkKey = make_link_key(link);
+                  const peak_mean_delta =
+                    link.peak_latency_us - link.mean_latency_us;
+                  return (
+                    <TableRow key={linkKey}>
+                      <TableCell>{link.key.src_hop_count}</TableCell>
+                      <TableCell>{linkKey}</TableCell>
+                      <TableCell align="right">
+                        {prettyPrintSiUnits(
+                          link.mean_latency_us * 1e-6,
+                          "s",
+                          2,
+                        )}
+                      </TableCell>
+                      <TableCell align="right">
+                        {prettyPrintSiUnits(
+                          link.peak_latency_us * 1e-6,
+                          "s",
+                          2,
+                        )}
+                      </TableCell>
+                      <TableCell align="right">
+                        {link.latencies.length}
+                      </TableCell>
+                      <TableCell
+                        align="right"
+                        // 10ms is yellow, 50ms is red
+                        sx={calcStyleByThreshold(peak_mean_delta, 10000, 50000)}
+                      >
+                        +{prettyPrintSiUnits(peak_mean_delta * 1e-6, "s", 2)}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
           </TableHead>
         </Table>
       </TableContainer>
