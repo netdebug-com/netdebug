@@ -1,7 +1,12 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { ReactNode, useEffect, useRef, useState } from "react";
 import useWebSocket from "react-use-websocket";
 import { WS_URL } from "../App";
-import { CongestedLink, ConnectionMeasurements } from "../netdebug_types";
+import {
+  CongestedLink,
+  CongestionLatencyPair,
+  ConnectionKey,
+  ConnectionMeasurements,
+} from "../netdebug_types";
 import TableContainer from "@mui/material/TableContainer";
 import Paper from "@mui/material/Paper";
 import Table from "@mui/material/Table";
@@ -14,10 +19,51 @@ import {
   headerStyleWithWidth,
   prettyPrintSiUnits,
 } from "../utils";
+import { FlowSummary } from "../components/FlowSummary";
+
+function toFlowKey(key: ConnectionKey): string {
+  return (
+    key.local_ip +
+    "_" +
+    key.local_l4_port +
+    "_::_" +
+    key.remote_ip +
+    "_" +
+    key.remote_l4_port +
+    "_::" +
+    key.ip_proto
+  );
+}
+
+function make_link_key(link: CongestedLink): string {
+  return (
+    link.key.src_ip +
+    "..." +
+    link.key.src_to_dst_hop_count +
+    "..." +
+    link.key.dst_ip
+  );
+}
+
+function linkSortFnByCongestion(a: CongestedLink, b: CongestedLink) {
+  // TODO: make this variable in how we can sort it
+  const a_delta = a.peak_latency_us - a.mean_latency_us;
+  const b_delta = b.peak_latency_us - b.mean_latency_us;
+  return b_delta - a_delta;
+}
+
+function flowSortFnByCongestion(
+  a: CongestionLatencyPair,
+  b: CongestionLatencyPair,
+) {
+  const a_delta = a.dst_rtt_us - a.src_rtt_us;
+  const b_delta = b.dst_rtt_us - b.src_rtt_us;
+  return b_delta - a_delta;
+}
 
 interface CongestionInfo {
   congestionSummary: Array<CongestedLink>;
-  connectionMeasurements: Array<ConnectionMeasurements>;
+  connectionMeasurements: Map<string, ConnectionMeasurements>;
 }
 
 const Home: React.FC = () => {
@@ -41,7 +87,11 @@ const Home: React.FC = () => {
       } else if (parsed.tag == "CongestedLinksReply") {
         const congestionInfo: CongestionInfo = {
           congestionSummary: parsed.data.congestion_summary.links,
-          connectionMeasurements: parsed.data.connection_measurements,
+          connectionMeasurements: new Map(
+            parsed.data.connection_measurements.map(
+              (m: ConnectionMeasurements) => [toFlowKey(m.key), m],
+            ),
+          ),
         };
         setCongestionInfo(congestionInfo);
       }
@@ -67,22 +117,56 @@ const Home: React.FC = () => {
     last_send.current = window.performance.now();
   };
 
-  function make_link_key(link: CongestedLink): string {
+  /**
+   *
+   * @param link The congested link
+   * @returns A collapsible summary of the flows that are in this link
+   */
+  const render_affected_flows = (
+    link: CongestedLink,
+    key2Measurements: Map<string, ConnectionMeasurements>,
+  ): ReactNode => {
     return (
-      link.key.src_ip +
-      "..." +
-      link.key.src_to_dst_hop_count +
-      "..." +
-      link.key.dst_ip
+      <details>
+        <summary>{link.latencies.length}</summary>
+        <TableContainer component={Paper}>
+          <Table
+            sx={{ minWidth: "500px" }}
+            size="small"
+            aria-label="Table of Congested Flows"
+          >
+            <TableHead>
+              <TableRow style={headerStyle}>
+                <TableCell sx={headerStyleWithWidth(0.1)} align="left">
+                  Congestion
+                </TableCell>
+                <TableCell sx={headerStyleWithWidth(0.9)} align="right">
+                  Flow
+                </TableCell>
+              </TableRow>
+              {link.latencies.sort(flowSortFnByCongestion).map((lat) => {
+                const flowKey = toFlowKey(lat.connection_key);
+                return (
+                  <TableRow key={flowKey}>
+                    <TableCell>
+                      {prettyPrintSiUnits(
+                        (lat.dst_rtt_us - lat.src_rtt_us) * 1e-6,
+                        "s",
+                        2,
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <FlowSummary flow={key2Measurements.get(flowKey)} />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableHead>
+          </Table>
+        </TableContainer>
+      </details>
     );
-  }
-
-  function linkSortFnByCongestion(a: CongestedLink, b: CongestedLink) {
-    // TODO: make this variable in how we can sort it
-    const a_delta = a.peak_latency_us - a.mean_latency_us;
-    const b_delta = b.peak_latency_us - b.mean_latency_us;
-    return b_delta - a_delta;
-  }
+  };
 
   return (
     <div>
@@ -109,7 +193,7 @@ const Home: React.FC = () => {
                 Peak Latency
               </TableCell>
               <TableCell sx={headerStyleWithWidth(0.1)} align="right">
-                # of Samples
+                Affected Flows
               </TableCell>
               <TableCell sx={headerStyleWithWidth(0.1)} align="right">
                 Max Congestion
@@ -141,7 +225,10 @@ const Home: React.FC = () => {
                         )}
                       </TableCell>
                       <TableCell align="right">
-                        {link.latencies.length}
+                        {render_affected_flows(
+                          link,
+                          congestionInfo.connectionMeasurements,
+                        )}
                       </TableCell>
                       <TableCell
                         align="right"
