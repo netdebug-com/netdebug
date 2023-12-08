@@ -986,8 +986,8 @@ impl Connection {
             sacks.push(seq_range);
         } else {
             warn!(
-                "Invalid SACK: seq state: {:?}, sack block: {:?}",
-                tcp_window, raw_sack
+                "Invalid SACK {}: seq state: {:?}, sack block: {:?}",
+                self.connection_key, tcp_window, raw_sack
             );
         }
     }
