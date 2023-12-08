@@ -155,6 +155,7 @@ async fn handle_congested_links_request(
             // UI is stateful; send them back an empty message just so they don't wait indefinitely...
             if let Err(e) = tx.send(DesktopToGuiMessages::CongestedLinksReply {
                 congestion_summary: CongestionSummary { links: Vec::new() },
+                connection_measurements: Vec::new(),
             }) {
                 warn!("Writing to GUI failed: {}", e);
             }
@@ -167,7 +168,7 @@ async fn handle_congested_links_request(
         topology_client,
         "handle_congestion_links_request() topology",
         TopologyServerMessage::InferCongestion {
-            connection_measurements,
+            connection_measurements: connection_measurements.clone(),
             reply_tx
         }
     )
@@ -181,7 +182,10 @@ async fn handle_congested_links_request(
         }
     };
     // 3. send the congestion summary back to the GUI
-    if let Err(e) = tx.send(DesktopToGuiMessages::CongestedLinksReply { congestion_summary }) {
+    if let Err(e) = tx.send(DesktopToGuiMessages::CongestedLinksReply {
+        congestion_summary,
+        connection_measurements,
+    }) {
         warn!("Failed to send CongestedLinksReply back to GUI: {}", e);
     }
 }

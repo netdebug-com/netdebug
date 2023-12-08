@@ -346,6 +346,7 @@ export type DesktopToGuiMessages = ({
     "tag": "CongestedLinksReply";
     "data": {
         "congestion_summary": CongestionSummary;
+        "connection_measurements": (ConnectionMeasurements)[];
     };
 });
 export type GuiToDesktopMessages = ({

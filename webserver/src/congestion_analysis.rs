@@ -84,13 +84,13 @@ pub fn congestion_summary_from_measurements(
     let mut links: HashMap<CongestedLinkKey, CongestedLink> = HashMap::new();
 
     // A ConnectionMeasurements struct is all info for a single, one-way five-tuple
-    for measurement in measurements {
+    for measurement in &measurements {
         // Reset the sender with each measurement
         let mut prev_found = HopInfo::new_origin_v4();
         let mut next_found = None;
         // for trace/report in that ConnectionMeasurement
         // FYI: can't use ReportSummary b/c it doesn't match up the rtts precisely
-        for report in measurement.probe_report_summary.raw_reports {
+        for report in &measurement.probe_report_summary.raw_reports {
             for ttl in report.probes.keys().sorted() {
                 let probe = report.probes.get(ttl).unwrap();
                 /*
