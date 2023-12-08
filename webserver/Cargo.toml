@@ -23,10 +23,6 @@ path = "src/webserver_passwd_cli.rs"
 required-features = ["cli"]
 
 [[bin]]
-name = "extract-ips"
-path = "src/extract-ips.rs"
-
-[[bin]]
 name = "router-graph"
 path = "src/router-graph.rs"
 

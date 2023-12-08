@@ -31,6 +31,7 @@ enum CliCommands {
     List(ListCmd),
     Stats(StatsCmd),
     Dot(DotCmd),
+    ExtractRouterIps(IpCmd),
 }
 #[derive(Debug, Parser)]
 struct ListCmd {
@@ -50,6 +51,13 @@ struct StatsCmd {
 
 #[derive(Debug, Parser)]
 struct DotCmd {
+    /// DB File
+    #[arg()]
+    pub sqlite_filenames: Vec<String>,
+}
+
+#[derive(Debug, Parser)]
+struct IpCmd {
     /// DB File
     #[arg()]
     pub sqlite_filenames: Vec<String>,
@@ -479,25 +487,53 @@ impl TheGraph {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    use CliCommands::*;
     match args.command {
-        CliCommands::List(sub_args) => {
+        List(sub_args) => {
             list_db_contents(&sub_args.sqlite_filenames);
             ExitCode::SUCCESS
         }
-        CliCommands::Stats(sub_args) => {
+        Stats(sub_args) => {
             compute_stats(&sub_args.sqlite_filenames, sub_args.verbose);
             ExitCode::SUCCESS
         }
-        CliCommands::Dot(sub_args) => {
-            match run_dot(&sub_args.sqlite_filenames, false, true, true) {
-                Ok(_graph) => ExitCode::SUCCESS,
-                Err(e) => {
-                    error!("{:?}", e);
-                    ExitCode::FAILURE
+        Dot(sub_args) => match run_dot(&sub_args.sqlite_filenames, false, true, true) {
+            Ok(_graph) => ExitCode::SUCCESS,
+            Err(e) => {
+                error!("{:?}", e);
+                ExitCode::FAILURE
+            }
+        },
+        ExtractRouterIps(sub_args) => match extract_ips(&sub_args.sqlite_filenames) {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(e) => {
+                warn!("Error: {}", e);
+                ExitCode::FAILURE
+            }
+        },
+    }
+}
+
+fn extract_ips(db_files: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut router_ips = HashSet::new();
+    let mut remote_ips = HashSet::new();
+    visit_all_connections(db_files, |_ts, entry| {
+        remote_ips.insert(entry.key.remote_ip);
+        for probe_round in &entry.probe_report_summary.raw_reports {
+            for probe in probe_round.probes.values() {
+                if let Some(sender_ip) = probe.get_ip() {
+                    router_ips.insert(sender_ip);
                 }
             }
         }
+    })?;
+    for ip in &router_ips {
+        println!("router {}", ip);
     }
+    for ip in &remote_ips {
+        println!("remote {}", ip);
+    }
+    Ok(())
 }
 
 fn compute_stats(db_files: &Vec<String>, verbose: bool) {
