@@ -229,6 +229,30 @@ pub fn get_holes_from_sack(ack_no: TcpSeq64, sacks: Vec<SeqRange>) -> Vec<SeqRan
     holes
 }
 
+/// Given an ACK no and a Vec of holes, that is *sorted and non-overlapping*, remove/close any holes
+/// that the ACK has acknoledged. Returns the number of bytes in closed holes.
+pub fn remove_filled_holes(ack_no: TcpSeq64, holes: &mut Vec<SeqRange>) -> u64 {
+    let mut lost_bytes = 0;
+    // TODO: maybe echeck that holes are sorted and non-overlapping... (which is a pre-condition for
+    // calling this function)
+    while let Some(hole) = holes.first_mut() {
+        if hole.right() <= ack_no {
+            // Hole completely filled
+            lost_bytes += hole.bytes();
+            holes.remove(0);
+        } else if hole.left() < ack_no {
+            // hole is partially filled
+            lost_bytes += ack_no - hole.left();
+            hole.left = ack_no;
+            break;
+        } else {
+            // Remaining holes are not yet ACKed
+            break;
+        }
+    }
+    lost_bytes
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -485,6 +509,56 @@ mod test {
         assert_eq!(
             get_holes_from_sack(109, vec![mkrange(110, 115)]),
             &[mkrange(109, 110)]
+        );
+    }
+
+    #[test]
+    fn test_remove_filled_holes() {
+        assert_eq!(remove_filled_holes(100, &mut Vec::new()), 0);
+
+        // single hole completely filled
+        let mut holes = vec![mkrange(1, 5)];
+        assert_eq!(remove_filled_holes(100, &mut holes), 4);
+        assert!(holes.is_empty());
+
+        // single hole not filled
+        let mut holes = vec![mkrange(101, 105)];
+        assert_eq!(remove_filled_holes(100, &mut holes), 0);
+        assert_eq!(holes, vec![mkrange(101, 105)]);
+
+        // multiple holes completely filled
+        let mut holes = vec![mkrange(1, 5), mkrange(10, 20), mkrange(30, 40)];
+        assert_eq!(remove_filled_holes(100, &mut holes), 24);
+        assert!(holes.is_empty());
+
+        // some holes filled some not
+        let mut holes = vec![
+            mkrange(1, 5),
+            mkrange(10, 20),
+            mkrange(30, 40),
+            mkrange(110, 120),
+            mkrange(130, 140),
+        ];
+        assert_eq!(remove_filled_holes(100, &mut holes), 24);
+        assert_eq!(holes, vec![mkrange(110, 120), mkrange(130, 140)]);
+
+        // single hole partially filled
+        let mut holes = vec![mkrange(90, 110)];
+        assert_eq!(remove_filled_holes(100, &mut holes), 10);
+        assert_eq!(holes, vec![mkrange(100, 110)]);
+
+        // some holes filled some not, some partially
+        let mut holes = vec![
+            mkrange(1, 5),
+            mkrange(10, 20),
+            mkrange(90, 105),
+            mkrange(110, 120),
+            mkrange(130, 140),
+        ];
+        assert_eq!(remove_filled_holes(100, &mut holes), 24);
+        assert_eq!(
+            holes,
+            vec![mkrange(100, 105), mkrange(110, 120), mkrange(130, 140)]
         );
     }
 }

@@ -678,8 +678,20 @@ pub mod test {
         assert_eq!(connection_tracker.connections.len(), 1);
         let connection = connection_tracker.connections.values().next().unwrap();
         // TODO; verify more about these pkts
-        let _local_syn = connection.local_syn.as_ref().unwrap();
-        let _remote_syn = connection.remote_syn.as_ref().unwrap();
+        let _local_syn = connection
+            .local_tcp_state()
+            .as_ref()
+            .unwrap()
+            .syn_pkt()
+            .as_ref()
+            .unwrap();
+        let _remote_syn = connection
+            .remote_tcp_state()
+            .as_ref()
+            .unwrap()
+            .syn_pkt()
+            .as_ref()
+            .unwrap();
 
         // verify we captured each of the outgoing probes
         let probe_round = connection.probe_round.as_ref().unwrap();
@@ -744,8 +756,20 @@ pub mod test {
             .cloned()
             .unwrap();
         // TODO; verify more about these pkts
-        let _local_syn = connection.local_syn.as_ref().unwrap();
-        let _remote_syn = connection.remote_syn.as_ref().unwrap();
+        let _local_syn = connection
+            .local_tcp_state()
+            .as_ref()
+            .unwrap()
+            .syn_pkt()
+            .as_ref()
+            .unwrap();
+        let _remote_syn = connection
+            .remote_tcp_state()
+            .as_ref()
+            .unwrap()
+            .syn_pkt()
+            .as_ref()
+            .unwrap();
 
         // verify we captured each of the outgoing probes
         let probe_round = connection.probe_round.as_ref().unwrap();
@@ -1113,7 +1137,11 @@ pub mod test {
         assert_eq!(connection_tracker.connections.len(), 1);
         let conn = connection_tracker.connections.values().next().unwrap();
         assert_eq!(
-            conn.local_seq.unwrap(),
+            conn.local_tcp_state()
+                .as_ref()
+                .unwrap()
+                .sent_seq_no()
+                .unwrap(),
             (1 << 32) + payload.len() as u64 - 1
         );
     }
