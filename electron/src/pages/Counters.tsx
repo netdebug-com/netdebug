@@ -1,10 +1,5 @@
 import React, { useState } from "react";
-import {
-  DataGrid,
-  GridColDef,
-  GridToolbar,
-  GridValueFormatterParams,
-} from "@mui/x-data-grid";
+import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
 import { formatValue, dataGridDefaultSxProp, reshapeCounter } from "../utils";
 import { SwitchHelper } from "../components/SwitchHelper";
 import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
@@ -23,8 +18,7 @@ const Counters: React.FC = () => {
     align: GridColDef["align"];
     headerAlign: GridColDef["align"];
   } = {
-    valueFormatter: (params: GridValueFormatterParams<number>) =>
-      formatValue(params.value, thousandsSep),
+    valueFormatter: (params) => formatValue(params.value, thousandsSep),
     align: "right",
     headerAlign: "right",
   };

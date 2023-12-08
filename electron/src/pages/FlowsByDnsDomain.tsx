@@ -8,13 +8,7 @@ import {
 import { SwitchHelper } from "../components/SwitchHelper";
 import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 import { Box } from "@mui/material";
-import {
-  DataGrid,
-  GridColDef,
-  GridToolbar,
-  GridValueFormatterParams,
-  GridValueGetterParams,
-} from "@mui/x-data-grid";
+import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
 
 function getDefaultRateGridColDef(unitSuffix: string): {
   valueFormatter: GridColDef["valueFormatter"];
@@ -24,8 +18,7 @@ function getDefaultRateGridColDef(unitSuffix: string): {
   sortComparator: GridColDef["sortComparator"];
 } {
   return {
-    valueFormatter: (params: GridValueFormatterParams<number>) =>
-      prettyPrintSiUnits(params.value, unitSuffix),
+    valueFormatter: (params) => prettyPrintSiUnits(params.value, unitSuffix),
     align: "right",
     flex: 10,
     headerAlign: "right",
@@ -44,39 +37,34 @@ const columns: GridColDef[] = [
     headerName: "DNS Destiantion Domain",
     hideable: false,
     flex: 60,
-    valueGetter: (params: GridValueGetterParams<AggregateStatEntry>) =>
-      getDnsNameFromAggKind(params.row.kind),
+    valueGetter: (params) => getDnsNameFromAggKind(params.row.kind),
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
     field: "send_bytes",
     headerName: "Send Bytes",
-    valueGetter: (params: GridValueGetterParams<AggregateStatEntry>) =>
-      params.row.summary.tx?.bytes,
+    valueGetter: (params) => params.row.summary.tx?.bytes,
     ...getDefaultRateGridColDef("B"),
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
     field: "recv_bytes",
     headerName: "Recv Bytes",
-    valueGetter: (params: GridValueGetterParams<AggregateStatEntry>) =>
-      params.row.summary.rx?.bytes,
+    valueGetter: (params) => params.row.summary.rx?.bytes,
     ...getDefaultRateGridColDef("B"),
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
     field: "send_bw",
     headerName: "Send B/W",
-    valueGetter: (params: GridValueGetterParams<AggregateStatEntry>) =>
-      params.row.summary.tx?.last_min_byte_rate,
+    valueGetter: (params) => params.row.summary.tx?.last_min_byte_rate,
     ...getDefaultRateGridColDef("B/s"),
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
     field: "recv_bw",
     headerName: "Recv B/W",
-    valueGetter: (params: GridValueGetterParams<AggregateStatEntry>) =>
-      params.row.summary.rx?.last_min_byte_rate,
+    valueGetter: (params) => params.row.summary.rx?.last_min_byte_rate,
     ...getDefaultRateGridColDef("B/s"),
   },
 ];

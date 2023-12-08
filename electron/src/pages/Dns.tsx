@@ -3,13 +3,7 @@ import { DnsTrackerEntry } from "../netdebug_types";
 import { dataGridDefaultSxProp } from "../utils";
 import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 import { Box } from "@mui/material";
-import {
-  DataGrid,
-  GridColDef,
-  GridRenderCellParams,
-  GridToolbar,
-  GridValueFormatterParams,
-} from "@mui/x-data-grid";
+import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
 
 function format_ips(ips: string[]) {
   if (ips.length <= 1) {
@@ -150,8 +144,7 @@ const Dns: React.FC = () => {
       headerName: "IP(s)",
       flex: 25,
       sortable: false,
-      renderCell: (params: GridRenderCellParams<string[]>) =>
-        format_ips(params.value),
+      renderCell: (params) => format_ips(params.value),
     },
     {
       field: "ttl_sec",
@@ -159,15 +152,14 @@ const Dns: React.FC = () => {
       flex: 15,
       align: "right",
       headerAlign: "right",
-      valueFormatter: (params: GridValueFormatterParams<number>) =>
+      valueFormatter: (params) =>
         params.value === null ? "" : params.value.toLocaleString(undefined),
     },
     {
       field: "rtt_usec",
       headerName: "RTT (millis)",
       flex: 15,
-      renderCell: (params: GridRenderCellParams<string[]>) =>
-        calcStyleByRtt(params.value),
+      renderCell: (params) => calcStyleByRtt(params.value),
       align: "right",
       headerAlign: "right",
     },
