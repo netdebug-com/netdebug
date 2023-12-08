@@ -472,7 +472,12 @@ impl Connection {
 
             if let Some(old_ack) = self.remote_ack {
                 // Is this ACK a duplicate ACK?
-                if old_ack == cur_pkt_ack && packet.payload.is_empty() && !tcp.syn && !tcp.fin {
+                if old_ack == cur_pkt_ack
+                    && packet.payload.is_empty()
+                    && !tcp.syn
+                    && !tcp.fin
+                    && !tcp.rst
+                {
                     let sacks = self.extract_sacks(self.local_tcp_window.as_ref().unwrap(), tcp);
                     if !sacks.is_empty() {
                         // if there are more than 1 SACK block in the packet we assume it's not a probe response
