@@ -30,7 +30,7 @@ use crate::{
     owned_packet::OwnedParsedPacket,
     prober_helper::ProberHelper,
     utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timestamp_to_ms, PerfMsgCheck},
-    SeqRange, TcpSeqState,
+    SeqRange, TcpSeq64, TcpWindow,
 };
 
 pub const MAX_BURST_RATE_TIME_WINDOW_MILLIS: u64 = 10;
@@ -142,15 +142,15 @@ pub struct Connection {
     pub last_packet_instant: tokio::time::Instant,
     pub local_syn: Option<OwnedParsedPacket>,
     pub remote_syn: Option<OwnedParsedPacket>,
-    pub local_seq_state: Option<TcpSeqState>,
-    pub local_seq: Option<u64>, // the most recent seq seen from local INCLUDING the TCP payload
-    pub local_ack: Option<u64>,
-    pub remote_seq_state: Option<TcpSeqState>,
-    pub remote_ack: Option<u64>,
+    pub local_tcp_window: Option<TcpWindow>,
+    pub local_seq: Option<TcpSeq64>, // the most recent seq seen from local INCLUDING the TCP payload
+    pub local_ack: Option<TcpSeq64>,
+    pub remote_tcp_window: Option<TcpWindow>,
+    pub remote_ack: Option<TcpSeq64>,
     pub local_data: Option<OwnedParsedPacket>, // data sent for retransmits
     pub probe_round: Option<ProbeRound>,
-    pub local_fin_seq: Option<u64>, // used for tracking connection close
-    pub remote_fin_seq: Option<u64>,
+    pub local_fin_seq: Option<TcpSeq64>, // used for tracking connection close
+    pub remote_fin_seq: Option<TcpSeq64>,
     pub remote_rst: bool,
     pub local_rst: bool,
     pub probe_report_summary: ProbeReportSummary,
@@ -169,10 +169,10 @@ impl Connection {
             connection_key: key.clone(),
             local_syn: None,
             remote_syn: None,
-            local_seq_state: None,
+            local_tcp_window: None,
             local_seq: None,
             local_ack: None,
-            remote_seq_state: None,
+            remote_tcp_window: None,
             remote_ack: None,
             local_data: None,
             probe_round: None,
@@ -253,18 +253,21 @@ impl Connection {
         }
     }
 
-    fn local_seq64_and_update(&mut self, seq: u32) -> Option<u64> {
-        if self.local_seq_state.is_none() {
-            self.local_seq_state = Some(TcpSeqState::new(seq));
+    fn local_seq64_and_update(&mut self, seq: u32) -> Option<TcpSeq64> {
+        if self.local_tcp_window.is_none() {
+            self.local_tcp_window = Some(TcpWindow::new(seq));
         }
-        self.local_seq_state.as_mut().unwrap().seq64_and_update(seq)
+        self.local_tcp_window
+            .as_mut()
+            .unwrap()
+            .seq64_and_update(seq)
     }
 
-    fn remote_seq64_and_update(&mut self, seq: u32) -> Option<u64> {
-        if self.remote_seq_state.is_none() {
-            self.remote_seq_state = Some(TcpSeqState::new(seq));
+    fn remote_seq64_and_update(&mut self, seq: u32) -> Option<TcpSeq64> {
+        if self.remote_tcp_window.is_none() {
+            self.remote_tcp_window = Some(TcpWindow::new(seq));
         }
-        self.remote_seq_state
+        self.remote_tcp_window
             .as_mut()
             .unwrap()
             .seq64_and_update(seq)
@@ -459,7 +462,7 @@ impl Connection {
         // record how far the remote side has acknowledged; check for old acks for outstanding probes
         // TODO: also make sure neither SYN or FIN flags are set as these can look like dupACKs if we're not careful
         let cur_pkt_ack = if tcp.ack {
-            // Yes, we need the local_seq_state here!
+            // Yes, we need the local_tcp_window here!
             self.local_seq64_and_update(tcp.acknowledgment_number)
         } else {
             None
@@ -470,7 +473,7 @@ impl Connection {
             if let Some(old_ack) = self.remote_ack {
                 // Is this ACK a duplicate ACK?
                 if old_ack == cur_pkt_ack && packet.payload.is_empty() && !tcp.syn && !tcp.fin {
-                    let sacks = self.extract_sacks(self.local_seq_state.as_ref().unwrap(), tcp);
+                    let sacks = self.extract_sacks(self.local_tcp_window.as_ref().unwrap(), tcp);
                     if !sacks.is_empty() {
                         // if there are more than 1 SACK block in the packet we assume it's not a probe response
                         let sack = sacks.first().unwrap();
@@ -976,15 +979,15 @@ impl Connection {
     fn push_raw_sack_as_range(
         &self,
         sacks: &mut Vec<SeqRange>,
-        seq_state: &TcpSeqState,
+        tcp_window: &TcpWindow,
         raw_sack: (u32, u32),
     ) {
-        if let Some(seq_range) = SeqRange::try_from_seq(seq_state, raw_sack) {
+        if let Some(seq_range) = SeqRange::try_from_seq(tcp_window, raw_sack) {
             sacks.push(seq_range);
         } else {
             warn!(
                 "Invalid SACK: seq state: {:?}, sack block: {:?}",
-                seq_state, raw_sack
+                tcp_window, raw_sack
             );
         }
     }
@@ -992,7 +995,7 @@ impl Connection {
     /// Take a TCP header and current TcpSeqState and extract any SACK blocks from the
     /// header. Invalid SACK blocks (out of window, right >= left) are discarded. The
     /// returned SACK blocks are in 64bit seq space but are neither sorted nor merged.
-    fn extract_sacks(&self, seq_state: &TcpSeqState, tcph: &TcpHeader) -> Vec<SeqRange> {
+    fn extract_sacks(&self, tcp_window: &TcpWindow, tcph: &TcpHeader) -> Vec<SeqRange> {
         assert!(tcph.ack);
         assert!(!tcph.fin);
         assert!(!tcph.syn);
@@ -1000,11 +1003,11 @@ impl Connection {
         let sacks_opt: Option<Vec<SeqRange>> = tcph.options_iterator().find_map(|opt| {
             if let Ok(TcpOptionElement::SelectiveAcknowledgement(first_sack, other_sacks)) = opt {
                 let mut ret = Vec::new();
-                self.push_raw_sack_as_range(&mut ret, seq_state, first_sack);
+                self.push_raw_sack_as_range(&mut ret, tcp_window, first_sack);
                 other_sacks
                     .into_iter()
                     .flatten()
-                    .for_each(|s| self.push_raw_sack_as_range(&mut ret, seq_state, s));
+                    .for_each(|s| self.push_raw_sack_as_range(&mut ret, tcp_window, s));
                 Some(ret)
             } else {
                 None
@@ -1342,8 +1345,8 @@ pub mod test {
     fn test_push_raw_sacks_as_range() {
         let c = mk_mock_connection();
         let center = 0x8000_0000u32;
-        let center64 = center as u64;
-        let tss = TcpSeqState::new(center);
+        let center64 = center as TcpSeq64;
+        let tss = TcpWindow::new(center);
         let mut sacks = Vec::new();
 
         // outside the window ==> don't push
@@ -1372,15 +1375,15 @@ pub mod test {
     #[test]
     fn test_extract_sacks() {
         let c = mk_mock_connection();
-        fn mkrange(left: u64, right: u64) -> SeqRange {
+        fn mkrange(left: TcpSeq64, right: TcpSeq64) -> SeqRange {
             SeqRange::try_from_seq64((left, right)).unwrap()
         }
         let initial_ack = 2_000_000_000;
-        let initial_ack64 = initial_ack as u64;
+        let initial_ack64 = initial_ack as TcpSeq64;
         let mut tcph = TcpHeader::new(34333, 80, 123, 65535);
         tcph.ack = true;
         tcph.acknowledgment_number = initial_ack;
-        let tss = TcpSeqState::new(initial_ack);
+        let tss = TcpWindow::new(initial_ack);
         assert_eq!(c.extract_sacks(&tss, &tcph), Vec::new());
 
         // single sack block
