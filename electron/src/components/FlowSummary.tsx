@@ -36,10 +36,18 @@ export const FlowSummary: React.FC<FlowSummaryProps> = (props) => {
 
   const open = Boolean(anchorEl);
   const id = open ? "simple-popover" : undefined;
+  const flow_closed = props.flow.close_has_started;
   return (
     <div>
       <Button aria-describedby={id} onClick={handleClick}>
-        {getConnKeyForDisplay(props.flow)}
+        {
+          // if a flow is closed, render it with strikethrough
+          flow_closed ? (
+            <s>{getConnKeyForDisplay(props.flow)}</s>
+          ) : (
+            getConnKeyForDisplay(props.flow)
+          )
+        }
       </Button>
       <Popover
         id={id}
