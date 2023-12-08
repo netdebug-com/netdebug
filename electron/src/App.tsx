@@ -16,6 +16,7 @@ import FlowsByDnsDomain from "./pages/FlowsByDnsDomain";
 // layouts
 import RootLayout from "./layouts/RootLayout";
 import FlowsLayout from "./layouts/FlowsLayout";
+import RouterDelays from "./pages/RouteDelays";
 
 const WS_URL = "ws://localhost:33434/ws";
 
@@ -30,6 +31,7 @@ const router = createHashRouter(
         <Route path="by_app" element={<h1>By App</h1>} />
       </Route>
       <Route path="dns" element={<Dns />} />
+      <Route path="router_delays" element={<RouterDelays />} />
       <Route path="counters" element={<Counters />} />
     </Route>,
   ),
