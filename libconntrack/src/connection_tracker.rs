@@ -635,7 +635,6 @@ pub mod test {
 
     use super::*;
 
-    use crate::connection::TcpSeq;
     use crate::dns_tracker::DnsTracker;
     use crate::owned_packet::OwnedParsedPacket;
     use crate::pcap::MockRawSocketProber;
@@ -1113,7 +1112,10 @@ pub mod test {
         connection_tracker.add(wrapping_pkt);
         assert_eq!(connection_tracker.connections.len(), 1);
         let conn = connection_tracker.connections.values().next().unwrap();
-        assert_eq!(conn.local_seq.unwrap(), TcpSeq(payload.len() as u32 - 1));
+        assert_eq!(
+            conn.local_seq.unwrap(),
+            (1 << 32) + payload.len() as u64 - 1
+        );
     }
 
     #[tokio::test]

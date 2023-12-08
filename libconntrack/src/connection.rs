@@ -1,8 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    fmt::Display,
     net::SocketAddr,
-    ops::{Add, Sub},
 };
 
 use chrono::{DateTime, Duration, Utc};
@@ -32,71 +30,10 @@ use crate::{
     owned_packet::OwnedParsedPacket,
     prober_helper::ProberHelper,
     utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timestamp_to_ms, PerfMsgCheck},
+    TcpSeqState,
 };
 
 pub const MAX_BURST_RATE_TIME_WINDOW_MILLIS: u64 = 10;
-
-/// A helper struct for working with Tcp Sequence (and ack) numbers.
-/// In particular this struct does wrapping add/sub (like `TcpSeq`).
-/// Why not use Wrapping? This struct implements comparision operators
-/// based on seq number wrapping. In paritcular for two sequence numbers
-/// `a` and `b`:  `a < b  if (b.wrapping_sub(a)) < 2**31` (see
-/// RFC7323 Sec 5.2 (PAWS)
-///
-/// <div class="warning">Note: this struct implements `Ord`, however,
-/// the order is *NOT* transitive</div>
-#[derive(Clone, Debug, Copy, Eq, PartialEq, Hash)]
-pub struct TcpSeq(pub u32);
-
-impl TcpSeq {
-    const TCP_IN_WINDOW: u32 = 2_147_483_648; // 2**31
-}
-
-impl PartialOrd for TcpSeq {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// <div class="warning">Note: this struct implements `Ord`, however,
-/// the order is *NOT* transitive</div>
-impl Ord for TcpSeq {
-    fn cmp(&self, rhs: &Self) -> std::cmp::Ordering {
-        use std::cmp::Ordering;
-        if self.0 == rhs.0 {
-            Ordering::Equal
-        } else if (*rhs - *self).0 < Self::TCP_IN_WINDOW {
-            Ordering::Less
-        } else {
-            Ordering::Greater
-        }
-    }
-}
-
-impl Add for TcpSeq {
-    type Output = Self;
-
-    #[inline(always)]
-    fn add(self, rhs: Self) -> Self::Output {
-        TcpSeq(self.0.wrapping_add(rhs.0))
-    }
-}
-
-impl Sub for TcpSeq {
-    type Output = Self;
-
-    #[inline(always)]
-    fn sub(self, rhs: Self) -> Self::Output {
-        TcpSeq(self.0.wrapping_sub(rhs.0))
-    }
-}
-
-impl Display for TcpSeq {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0.to_string())?;
-        Ok(())
-    }
-}
 
 /**
  * Create a ConnectionKey from a remote socket addr and the global context
@@ -205,13 +142,15 @@ pub struct Connection {
     pub last_packet_instant: tokio::time::Instant,
     pub local_syn: Option<OwnedParsedPacket>,
     pub remote_syn: Option<OwnedParsedPacket>,
-    pub local_seq: Option<TcpSeq>, // the most recent seq seen from local INCLUDING the TCP payload
-    pub local_ack: Option<TcpSeq>,
-    pub remote_ack: Option<TcpSeq>,
+    pub local_seq_state: Option<TcpSeqState>,
+    pub local_seq: Option<u64>, // the most recent seq seen from local INCLUDING the TCP payload
+    pub local_ack: Option<u64>,
+    pub remote_seq_state: Option<TcpSeqState>,
+    pub remote_ack: Option<u64>,
     pub local_data: Option<OwnedParsedPacket>, // data sent for retransmits
     pub probe_round: Option<ProbeRound>,
-    pub local_fin_seq: Option<TcpSeq>, // used for tracking connection close
-    pub remote_fin_seq: Option<TcpSeq>,
+    pub local_fin_seq: Option<u64>, // used for tracking connection close
+    pub remote_fin_seq: Option<u64>,
     pub remote_rst: bool,
     pub local_rst: bool,
     pub probe_report_summary: ProbeReportSummary,
@@ -230,8 +169,10 @@ impl Connection {
             connection_key: key.clone(),
             local_syn: None,
             remote_syn: None,
+            local_seq_state: None,
             local_seq: None,
             local_ack: None,
+            remote_seq_state: None,
             remote_ack: None,
             local_data: None,
             probe_round: None,
@@ -310,6 +251,23 @@ impl Connection {
                 );
             }
         }
+    }
+
+    fn local_seq64_and_update(&mut self, seq: u32) -> Option<u64> {
+        if self.local_seq_state.is_none() {
+            self.local_seq_state = Some(TcpSeqState::new(seq));
+        }
+        self.local_seq_state.as_mut().unwrap().seq64_and_update(seq)
+    }
+
+    fn remote_seq64_and_update(&mut self, seq: u32) -> Option<u64> {
+        if self.remote_seq_state.is_none() {
+            self.remote_seq_state = Some(TcpSeqState::new(seq));
+        }
+        self.remote_seq_state
+            .as_mut()
+            .unwrap()
+            .seq64_and_update(seq)
     }
 
     /**
@@ -393,12 +351,17 @@ impl Connection {
                 }
             }
         };
-        // every packet has a SEQ so just record the most recently one
-        // we might thrash a bit if there's packet re-ordering but maybe that's OK?
-        // currently this is only used for the self.is_idle_check()
-        self.local_seq = Some(TcpSeq(tcp.sequence_number) + TcpSeq(payload_len as u32));
+        let cur_pkt_seq = match self.local_seq64_and_update(tcp.sequence_number) {
+            Some(seq) => seq,
+            None => {
+                warn!("Local seq number is out-of-window -- not processing packet further");
+                return;
+            }
+        };
+        self.local_seq = Some(cur_pkt_seq + payload_len as u64);
         // record the SYN to see which TCP options are negotiated
         if tcp.syn {
+            // TODO: what if we already have a syn
             self.local_syn = Some(packet.clone()); // memcpy() but doesn't happen that much or with much data
         }
 
@@ -408,7 +371,7 @@ impl Connection {
 
         // record how far the local side has acknowledged
         if tcp.ack {
-            self.local_ack = Some(TcpSeq(tcp.acknowledgment_number));
+            self.local_ack = self.remote_seq64_and_update(tcp.acknowledgment_number);
         }
 
         // did we send some payload?
@@ -463,7 +426,7 @@ impl Connection {
         if tcp.fin {
             // FIN's "use" a sequence number as if they sent a byte of data
             if let Some(fin_seq) = self.local_fin_seq {
-                if fin_seq != TcpSeq(tcp.sequence_number) {
+                if fin_seq != cur_pkt_seq {
                     warn!(
                         "Weird: got multiple local FIN seqnos: {} != {}",
                         fin_seq, tcp.sequence_number
@@ -471,12 +434,19 @@ impl Connection {
                 }
                 // else it's just a duplicate packet
             }
-            self.local_fin_seq = Some(TcpSeq(tcp.sequence_number));
+            self.local_fin_seq = Some(cur_pkt_seq);
         }
         // TODO: look for outgoing selective acks (indicates packet loss)
     }
 
     fn update_tcp_remote(&mut self, packet: &OwnedParsedPacket, tcp: &TcpHeader) {
+        let cur_pkt_seq = match self.remote_seq64_and_update(tcp.sequence_number) {
+            Some(seq) => seq,
+            None => {
+                warn!("Remote seq number is out-of-window -- not processing packet further");
+                return;
+            }
+        };
         if tcp.syn {
             if self.remote_syn.is_some() {
                 warn!(
@@ -487,18 +457,17 @@ impl Connection {
             self.remote_syn = Some(packet.clone()); // memcpy() but doesn't happen that much or with much data
         }
         // record how far the remote side has acknowledged; check for old acks for outstanding probes
-        if tcp.ack {
-            // TODO: figure out if we need to implement Protection Against Wrapped Segments (PAWS) here
-            // e.g., check to make sure that sequence space wraps are correctly handled
-            // for now, wrapped segements show up as lost packets, so it's not the end of the world - I think
-            // also make sure neither SYN or FIN are set as these can look like dupACKs if we're not careful
+        // TODO: also make sure neither SYN or FIN flags are set as these can look like dupACKs if we're not careful
+        let cur_pkt_ack = if tcp.ack {
+            // Yes, we need the local_seq_state here!
+            self.local_seq64_and_update(tcp.acknowledgment_number)
+        } else {
+            None
+        };
+        if let Some(cur_pkt_ack) = cur_pkt_ack {
             if let Some(old_ack) = self.remote_ack {
                 // Is this ACK a duplicate ACK?
-                if old_ack == TcpSeq(tcp.acknowledgment_number)
-                    && packet.payload.is_empty()
-                    && !tcp.syn
-                    && !tcp.fin
-                {
+                if old_ack == cur_pkt_ack && packet.payload.is_empty() && !tcp.syn && !tcp.fin {
                     // Clippy wants to collapse this `if let` and the `if let TcpOptionElement` into a single `if`
                     // but I think that would look overly convoluted... So we tell clippy to ignore it
                     #[allow(clippy::collapsible_match)]
@@ -510,7 +479,11 @@ impl Connection {
                         if let TcpOptionElement::SelectiveAcknowledgement((left, right), acks) =
                             selective_ack
                         {
-                            if acks[0].is_some() || right > tcp.acknowledgment_number {
+                            let right64 = self.local_seq_state.as_ref().unwrap().seq64(right);
+                            if acks[0].is_some()
+                                || right64.is_none()
+                                || right64.unwrap() > cur_pkt_ack
+                            {
                                 // this is not a dupACK/probe reply but a legit indication of a lost packet
                                 // TODO: use selective ack params to estimate packets lost
                             } else {
@@ -578,20 +551,21 @@ impl Connection {
             }
             // what ever the case, update the ack for next time
             // NOTE: this could be a NOOP in the dup ack case
-            self.remote_ack = Some(TcpSeq(tcp.acknowledgment_number));
+
+            self.remote_ack = Some(cur_pkt_ack);
         }
         if tcp.fin {
             // FIN's "use" a sequence number as if they sent a byte of data
             if let Some(fin_seq) = self.remote_fin_seq {
-                if fin_seq != TcpSeq(tcp.sequence_number) {
+                if fin_seq != cur_pkt_seq {
                     warn!(
                         "Weird: got multiple remote FIN seqnos: {} != {}",
-                        fin_seq, tcp.sequence_number
+                        fin_seq, cur_pkt_seq
                     );
                 }
                 // else it's just a duplicate packet
             }
-            self.remote_fin_seq = Some(TcpSeq(tcp.sequence_number));
+            self.remote_fin_seq = Some(cur_pkt_seq);
         }
         if tcp.rst {
             self.remote_rst = true;
@@ -1326,36 +1300,5 @@ pub mod test {
         // One 242 byte packet per 0.5ms ==> 484KB/s
         assert_eq!(conn_meas.rx_stats.burst_byte_rate.unwrap(), 484e3);
         assert_eq!(conn_meas.rx_stats.burst_pkt_rate.unwrap(), 2000.);
-    }
-
-    #[test]
-    fn test_tcp_seq() {
-        assert_eq!(TcpSeq::TCP_IN_WINDOW, 1u32 << 31);
-        let a = TcpSeq(12345);
-        assert_eq!((a + TcpSeq(u32::MAX)).0, a.0 - 1);
-        assert_eq!((a - TcpSeq(u32::MAX)).0, a.0 + 1);
-
-        assert_eq!((a + a).0, 24690);
-        assert_eq!((a + TcpSeq(4)).0, 12349);
-        assert_eq!((a - TcpSeq(4)).0, 12341);
-
-        let b = TcpSeq(1 << 31);
-        assert_eq!((b + b).0, 0);
-        assert_eq!((b - b).0, 0);
-
-        assert_eq!(TcpSeq(4242).to_string(), "4242");
-
-        assert!(TcpSeq(1) > TcpSeq(0));
-        assert!(TcpSeq(1) > TcpSeq(u32::MAX));
-        assert!(TcpSeq(1) > TcpSeq(u32::MAX - 1));
-
-        assert!(TcpSeq(1) < TcpSeq(u32::MAX - (1 << 31)));
-        assert!(TcpSeq(1) < TcpSeq(u32::MAX - ((1 << 31) - 1)));
-        assert!(TcpSeq(1) > TcpSeq(u32::MAX - ((1 << 31) - 2)));
-
-        assert_eq!(TcpSeq(1), TcpSeq(1));
-        assert_eq!(TcpSeq(2), TcpSeq(2));
-        assert_eq!(TcpSeq(1 << 31), TcpSeq(1 << 31));
-        assert_eq!(TcpSeq(u32::MAX), TcpSeq(u32::MAX));
     }
 }
