@@ -2,7 +2,6 @@ import React, { useState } from "react";
 import { ConnectionMeasurements } from "../netdebug_types";
 import {
   dataGridDefaultSxProp,
-  getConnKeyForDisplay,
   prettyPrintSiUnits,
   sortCmpWithNull,
 } from "../utils";
@@ -16,6 +15,7 @@ import {
   GridValueFormatterParams,
   GridValueGetterParams,
 } from "@mui/x-data-grid";
+import { FlowSummary } from "../components/FlowSummary";
 
 function formatAssociatedApps(
   params: GridValueFormatterParams<ConnectionMeasurements["associated_apps"]>,
@@ -55,8 +55,9 @@ const columns: GridColDef[] = [
     field: "Flow Key",
     hideable: false,
     flex: 50,
-    valueGetter: (params: GridValueGetterParams<ConnectionMeasurements>) =>
-      getConnKeyForDisplay(params.row),
+    renderCell: (params: GridValueGetterParams<ConnectionMeasurements>) => (
+      <FlowSummary flow={params.row} />
+    ),
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
