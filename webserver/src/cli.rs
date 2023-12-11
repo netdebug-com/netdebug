@@ -26,10 +26,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let connection = connection_from_log(&args.analyze_log)?;
 
     if args.print_probe_summary {
-        println!("Probe Report Summary:\n{}", connection.probe_report_summary);
+        println!(
+            "Probe Report Summary:\n{}",
+            connection.probe_report_summary()
+        );
     } else if let Some(probe_run) = args.print_probe_report {
         if let Some(probe_report) = connection
-            .probe_report_summary
+            .probe_report_summary()
             .raw_reports
             .get(probe_run as usize)
         {
@@ -38,7 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("Probe report {} not found", probe_run);
         }
     } else {
-        let insights = analyze::analyze(&connection.probe_report_summary);
+        let insights = analyze::analyze(connection.probe_report_summary());
         for insight in insights {
             println!("{}", insight);
         }

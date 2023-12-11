@@ -111,7 +111,7 @@ fn send_connection_storage_msg(topology_client: &Option<TopologyServerSender>, c
             // only send the connection info if we have at least one successful probe round
             debug!(
                 "Sending connection measurements to topology server for {}",
-                c.connection_key
+                c.connection_key()
             );
             send_or_log_sync!(
                 tx,
@@ -124,7 +124,7 @@ fn send_connection_storage_msg(topology_client: &Option<TopologyServerSender>, c
             debug!(
                 "Not sending connection measurement to storage server: {} measurements {}",
                 measurement.probe_report_summary.raw_reports.len(),
-                c.connection_key
+                c.connection_key()
             );
         }
     }
@@ -320,7 +320,7 @@ impl<'a> ConnectionTracker<'a> {
                         self.connections.get_mut(&key).unwrap()
                     }
                 };
-                for group in &connection.aggregate_groups {
+                for group in connection.aggregate_groups() {
                     if let Some(traffic_stats) = self.aggregate_traffic_stats.get_mut(group) {
                         traffic_stats.add_packet_with_time(
                             src_is_local,
@@ -330,7 +330,7 @@ impl<'a> ConnectionTracker<'a> {
                     } else {
                         warn!(
                             "Group counters out of sync between connection {} and tracker: missing {:?}", 
-                            connection.connection_key,
+                            connection.connection_key(),
                             group
                         );
                     }
@@ -384,7 +384,7 @@ impl<'a> ConnectionTracker<'a> {
     fn evict_old_connections(&mut self) {
         let mut eviction_cnt = 0;
         while let Some((_key, conn)) = self.connections.front() {
-            let elapsed_ms = conn.last_packet_instant.elapsed().as_millis();
+            let elapsed_ms = conn.last_packet_instant().elapsed().as_millis();
             if eviction_cnt < MAX_ENTRIES_TO_EVICT && elapsed_ms > TIME_WAIT_MS as u128 {
                 let (key, mut conn) = self.connections.pop_front().unwrap();
                 debug!("Evicting connection {} from connection_tracker", key);
@@ -459,7 +459,7 @@ impl<'a> ConnectionTracker<'a> {
         tx: tokio::sync::mpsc::Sender<Vec<AnalysisInsights>>,
     ) {
         if let Some(connection) = self.connections.get_mut(key) {
-            let insights = analyze(&connection.probe_report_summary);
+            let insights = analyze(connection.probe_report_summary());
             if let Err(e) = tx.send(insights).await {
                 warn!("get_insights: {} :: {}", key, e);
             }
@@ -694,7 +694,7 @@ pub mod test {
             .unwrap();
 
         // verify we captured each of the outgoing probes
-        let probe_round = connection.probe_round.as_ref().unwrap();
+        let probe_round = connection.probe_round().as_ref().unwrap();
         assert_eq!(
             probe_round.outgoing_probe_timestamps.len(),
             16 // NOTE: this should be the constant not PROBE_MAX_TTL because
@@ -772,7 +772,7 @@ pub mod test {
             .unwrap();
 
         // verify we captured each of the outgoing probes
-        let probe_round = connection.probe_round.as_ref().unwrap();
+        let probe_round = connection.probe_round().as_ref().unwrap();
         assert_eq!(
             probe_round.outgoing_probe_timestamps.len(),
             16 // this is hard coded by the pcap
@@ -806,7 +806,7 @@ pub mod test {
 
         assert_eq!(connection_tracker.connections.len(), 1);
         let connection = connection_tracker.connections.values().next().unwrap();
-        let probe_round = connection.probe_round.as_ref().unwrap();
+        let probe_round = connection.probe_round().as_ref().unwrap();
         assert_eq!(probe_round.outgoing_probe_timestamps.len(), 1);
         assert_eq!(probe_round.incoming_reply_timestamps.len(), 1);
         let probe_id = probe_round.outgoing_probe_timestamps.keys().next().unwrap();
