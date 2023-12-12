@@ -107,6 +107,7 @@ pub fn connection_key_from_protocol_socket_info(proto_info: &ProtocolSocketInfo)
 pub struct ProbeRound {
     pub round_number: usize,
     pub start_time: DateTime<Utc>,
+    /// The 64bit sequqnce number of the probe packets.
     pub probe_pkt_seq_no: TcpSeq64,
     pub next_end_host_reply: ProbeId, // used for idle probes
     // current probes: outgoing probes and incoming replies
@@ -245,6 +246,7 @@ impl Connection {
      * inclusive side and just say "any packet with a small payload" is a probe.
      *
      * Use the payload length to encode the probe ID/ttl
+     *
      */
 
     pub(crate) fn is_probe_heuristic(
@@ -434,17 +436,24 @@ impl Connection {
             }
         }
         if let Some(active_probe_round) = self.probe_round.as_mut() {
-            if let Some(ttl) = Connection::is_probe_heuristic(true, packet) {
-                // there's some super clean rust-ish way to compress this; don't care for now
-                if let Some(probes) = active_probe_round.outgoing_probe_timestamps.get_mut(&ttl) {
-                    probes.insert(packet.clone());
-                } else {
-                    let mut probes = HashSet::new();
-                    probes.insert(packet.clone());
-                    active_probe_round
-                        .outgoing_probe_timestamps
-                        .insert(ttl, probes);
+            if active_probe_round.probe_pkt_seq_no == pkt_seq_no {
+                if let Some(ttl) = Connection::is_probe_heuristic(true, packet) {
+                    // there's some super clean rust-ish way to compress this; don't care for now
+                    if let Some(probes) = active_probe_round.outgoing_probe_timestamps.get_mut(&ttl)
+                    {
+                        probes.insert(packet.clone());
+                    } else {
+                        let mut probes = HashSet::new();
+                        probes.insert(packet.clone());
+                        active_probe_round
+                            .outgoing_probe_timestamps
+                            .insert(ttl, probes);
+                    }
                 }
+            } else {
+                // warn! should be fine here. I think of a good reason why we should ever this case.
+                warn!("Outgoing packet with low TTL. Looks like a probe but seq no mismatch: {} vs {}", 
+                    active_probe_round.probe_pkt_seq_no, pkt_seq_no );
             }
         }
     }
