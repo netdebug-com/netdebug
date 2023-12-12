@@ -75,7 +75,25 @@ async fn handle_desktop_message(
         InferCongestion {
             connection_measurements,
         } => handle_infer_congestion(ws_tx, connection_measurements, topology_server).await,
+        PushCounters {
+            timestamp,
+            counters,
+        } => handle_push_counters(ws_tx, timestamp, counters, addr).await,
     }
+}
+
+async fn handle_push_counters(
+    _ws_tx: &Sender<TopologyServerToDesktop>,
+    timestamp: chrono::prelude::DateTime<chrono::prelude::Utc>,
+    counters: indexmap::IndexMap<String, u64>,
+    addr: &SocketAddr,
+) {
+    info!(
+        "Got {} counters from {}  at {} - TODO - store them!",
+        counters.len(),
+        addr,
+        timestamp
+    );
 }
 
 async fn handle_infer_congestion(

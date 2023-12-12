@@ -1,7 +1,7 @@
 use std::{collections::HashSet, error::Error, net::IpAddr, str::FromStr, sync::Arc};
 
 use clap::Parser;
-use common_wasm::timeseries_stats::{ExportedStatRegistry, SuperRegistry};
+use common_wasm::timeseries_stats::{SharedExportedStatRegistries, SuperRegistry};
 use log::info;
 use pwhash::{sha512_crypt, HashSetup};
 use rand::{distributions::Alphanumeric, Rng};
@@ -34,7 +34,7 @@ pub struct WebServerContext {
     // TODO: make a pool for multi-threading
     pub connection_tracker: ConnectionTrackerSender,
     pub topology_server: TopologyServerSender,
-    pub counter_registries: Arc<Vec<ExportedStatRegistry>>,
+    pub counter_registries: SharedExportedStatRegistries,
 }
 
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
@@ -100,7 +100,7 @@ impl WebServerContext {
             connection_tracker: tx.clone(),
             topology_server: topology_server_tx.clone(),
             max_connections_per_tracker: args.max_connections_per_tracker,
-            counter_registries: Arc::new(counter_registries.registries()),
+            counter_registries: counter_registries.registries(),
         };
 
         // TODO Spawn lots for multi-processing
@@ -274,7 +274,7 @@ pub mod test {
     use super::*;
 
     use crate::context::{UserDb, WebServerContext};
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Instant};
     use tokio::sync::RwLock;
 
     pub const TEST_PASSWD: &str = "test";
@@ -284,6 +284,7 @@ pub mod test {
         // create a connection tracker to nothing for the test context
         let (tx, _rx) = tokio::sync::mpsc::channel(128);
         let (topology_server_tx, _rx) = tokio::sync::mpsc::channel(128);
+        let counter_registries = SuperRegistry::new(Instant::now()).registries();
         Arc::new(RwLock::new(WebServerContext {
             user_db: UserDb::testing_demo(test_hash),
             html_root: "html".to_string(),
@@ -294,7 +295,7 @@ pub mod test {
             connection_tracker: tx,
             topology_server: topology_server_tx,
             max_connections_per_tracker: 4096,
-            counter_registries: Arc::new(Vec::new()),
+            counter_registries,
         }))
     }
 }

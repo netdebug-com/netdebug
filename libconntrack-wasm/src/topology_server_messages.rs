@@ -1,5 +1,7 @@
 use std::{net::IpAddr, time::Duration};
 
+use chrono::{DateTime, Utc};
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use typescript_type_def::TypeDef;
@@ -14,6 +16,10 @@ pub enum DesktopToTopologyServer {
     },
     InferCongestion {
         connection_measurements: Vec<ConnectionMeasurements>,
+    },
+    PushCounters {
+        timestamp: DateTime<Utc>,
+        counters: IndexMap<String, u64>,
     },
 }
 

@@ -3,7 +3,11 @@ use std::time::Duration;
 
 use crate::send_or_log_async;
 use crate::utils::PerfMsgCheck;
-use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units};
+use chrono::Utc;
+use common_wasm::timeseries_stats::{
+    CounterProvider, CounterProviderWithTimeUpdate, ExportedStatRegistry,
+    SharedExportedStatRegistries, StatHandle, StatType, Units,
+};
 use futures::sink::SinkExt;
 use futures_util::stream::SplitSink;
 use futures_util::StreamExt;
@@ -20,6 +24,7 @@ use tokio_tungstenite::tungstenite::http::Request;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
+const COUNTER_REMOTE_SYNC_INTERVAL_MS: u64 = 60_000;
 #[allow(dead_code)] // will fix in next PR
 #[derive(Clone, Debug)]
 pub enum TopologyServerMessage {
@@ -61,6 +66,8 @@ pub struct TopologyServerConnection {
     desktop2server_msgs_stat: StatHandle,
     desktop2server_store_msgs_stat: StatHandle,
     server2desktop_msgs_stat: StatHandle,
+    /// Maintain a pointer to the whole counters registry for remote export
+    super_counters_registries: SharedExportedStatRegistries,
 }
 
 impl TopologyServerConnection {
@@ -70,7 +77,8 @@ impl TopologyServerConnection {
         rx: Receiver<PerfMsgCheck<TopologyServerMessage>>,
         buffer_size: usize,
         max_retry_time: Duration,
-        mut stats_registry: ExportedStatRegistry,
+        super_counters_registry: SharedExportedStatRegistries,
+        stats_registry: ExportedStatRegistry,
     ) -> TopologyServerConnection {
         TopologyServerConnection {
             url,
@@ -102,6 +110,7 @@ impl TopologyServerConnection {
                 Units::None,
                 vec![StatType::SUM, StatType::COUNT, StatType::RATE],
             ),
+            super_counters_registries: super_counters_registry,
         }
     }
 
@@ -109,6 +118,7 @@ impl TopologyServerConnection {
         url: String,
         buffer_size: usize,
         max_retry_time: Duration,
+        super_counters_registry: SharedExportedStatRegistries,
         stats_registry: ExportedStatRegistry,
     ) -> Sender<PerfMsgCheck<TopologyServerMessage>> {
         let (tx, rx) = channel(buffer_size);
@@ -120,6 +130,7 @@ impl TopologyServerConnection {
                 rx,
                 buffer_size,
                 max_retry_time,
+                super_counters_registry,
                 stats_registry,
             );
             topology_server.rx_loop().await;
@@ -170,6 +181,12 @@ impl TopologyServerConnection {
                 }
             };
             let ws_tx = self.spawn_ws_writer(ws_write).await;
+            // respawn this with each new topology server connection
+            self.spawn_periodic_write_counters_to_remote(
+                ws_tx.clone(),
+                tokio::time::Duration::from_millis(COUNTER_REMOTE_SYNC_INTERVAL_MS),
+            )
+            .await;
             // send an initial hello to start the connection
             if let Err(e) = ws_tx
                 .send(PerfMsgCheck::new(DesktopToTopologyServer::Hello))
@@ -365,10 +382,47 @@ impl TopologyServerConnection {
             self.waiting_for_congestion_summary.clear();
         }
     }
+
+    async fn spawn_periodic_write_counters_to_remote(
+        &self,
+        ws_tx: Sender<PerfMsgCheck<DesktopToTopologyServer>>,
+        interval: tokio::time::Duration,
+    ) {
+        let super_counter_registery = self.super_counters_registries.clone();
+        tokio::spawn(async move {
+            loop {
+                // use 'tokio::time::sleep' instead of 'tokio::time::interval'
+                // because we don't want multiple to run in parallel if this backsup
+                tokio::time::sleep(interval).await;
+                let mut counters = indexmap::IndexMap::<String, u64>::new();
+                {
+                    let lock = super_counter_registery.lock().unwrap();
+                    lock.update_time();
+                    lock.append_counters(&mut counters);
+                }
+                // don't use send_or_log!() macro here b/c we want to break on error
+                if let Err(e) = ws_tx
+                    .send(PerfMsgCheck::new(DesktopToTopologyServer::PushCounters {
+                        timestamp: Utc::now(),
+                        counters,
+                    }))
+                    .await
+                {
+                    warn!(
+                        "Error in sending periodic counters to topology server: exiting task {}",
+                        e
+                    );
+                    break;
+                }
+            }
+        });
+    }
 }
 
 #[cfg(test)]
 mod test {
+    use common_wasm::timeseries_stats::SuperRegistry;
+
     use super::*;
     use std::{str::FromStr, time::Instant};
 
@@ -382,12 +436,14 @@ mod test {
         let (tx, rx) = channel(10);
         let test_ip = IpAddr::from_str("1.2.3.4").unwrap();
         let test_user_agent = "JoMama".to_string();
+        let super_counters_registry = SuperRegistry::new(Instant::now()).registries(); // for testing
         let mut topology = TopologyServerConnection::new(
             "fake URL".to_string(),
             tx.clone(),
             rx,
             10,
             Duration::from_secs(10),
+            super_counters_registry,
             ExportedStatRegistry::new("topo_server_conn", Instant::now()),
         );
         let (ws_tx, _ws_rx) = channel(10);

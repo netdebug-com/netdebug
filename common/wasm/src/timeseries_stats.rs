@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 use typescript_type_def::TypeDef;
+pub type SharedExportedStatRegistries = Arc<Mutex<Vec<ExportedStatRegistry>>>;
 
 /// Helper trait for TimeSources (e.g., `Instant` or `DataTime`) that can be used as
 /// the internal clock for BucketedTimeSeries.
@@ -809,7 +810,7 @@ impl ExportedStatRegistry {
     /// `StatHandle`. The `StateHandle` can be used to add data points to the
     /// ExportedStat
     pub fn add_stat<I: IntoIterator<Item = StatType>>(
-        &mut self,
+        &self,
         name: &str,
         unit: Units,
         stat_types: I,
@@ -840,7 +841,7 @@ impl ExportedStatRegistry {
     /// `StatHandle`. The `StateHandle` can be used to add data points to the
     /// ExportedStat
     pub fn add_duration_stat<I: IntoIterator<Item = StatType>>(
-        &mut self,
+        &self,
         name: &str,
         unit: Units,
         stat_types: I,
@@ -954,25 +955,25 @@ impl StatHandleDuration {
 #[derive(Clone)]
 pub struct SuperRegistry {
     system_epoch: Instant,
-    registries: Vec<ExportedStatRegistry>,
+    registries: SharedExportedStatRegistries,
 }
 
 impl SuperRegistry {
     pub fn new(system_epoch: Instant) -> Self {
         Self {
             system_epoch,
-            registries: Vec::new(),
+            registries: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     pub fn new_registry(&mut self, prefix: &str) -> ExportedStatRegistry {
         let registry = ExportedStatRegistry::new(prefix, self.system_epoch);
-        self.registries.push(registry.clone());
+        self.registries.lock().unwrap().push(registry.clone());
         registry
     }
 
-    pub fn registries(self) -> Vec<ExportedStatRegistry> {
-        self.registries
+    pub fn registries(&self) -> SharedExportedStatRegistries {
+        self.registries.clone()
     }
 }
 

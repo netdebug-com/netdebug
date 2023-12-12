@@ -256,8 +256,8 @@ mod test {
     }
 
     fn mk_stat_handles() -> ConnectionStatHandles {
-        let mut registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
-        ConnectionStatHandles::new(&mut registry)
+        let registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
+        ConnectionStatHandles::new(&registry)
     }
 
     #[test]
