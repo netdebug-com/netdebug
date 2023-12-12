@@ -454,8 +454,8 @@ impl Connection {
             }
         }
         if let Some(active_probe_round) = self.probe_round.as_mut() {
-            if active_probe_round.probe_pkt_seq_no == pkt_seq_no {
-                if let Some(ttl) = Connection::is_probe_heuristic(true, packet) {
+            if let Some(ttl) = Connection::is_probe_heuristic(true, packet) {
+                if active_probe_round.probe_pkt_seq_no == pkt_seq_no {
                     // there's some super clean rust-ish way to compress this; don't care for now
                     if let Some(probes) = active_probe_round.outgoing_probe_timestamps.get_mut(&ttl)
                     {
@@ -467,12 +467,12 @@ impl Connection {
                             .outgoing_probe_timestamps
                             .insert(ttl, probes);
                     }
-                }
-            } else {
-                self.stat_handles.outgoing_low_ttl_not_a_probe.bump();
-                // warn! should be fine here. I think of a good reason why we should ever this case.
-                warn!("Outgoing packet with low TTL. Looks like a probe but seq no mismatch: {} vs {}", 
+                } else {
+                    self.stat_handles.outgoing_low_ttl_not_a_probe.bump();
+                    // warn! should be fine here. I think of a good reason why we should ever this case.
+                    warn!("Outgoing packet with low TTL. Looks like a probe but seq no mismatch: {} vs {}", 
                     active_probe_round.probe_pkt_seq_no, pkt_seq_no );
+                }
             }
         }
     }
