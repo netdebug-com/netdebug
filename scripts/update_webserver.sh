@@ -17,7 +17,7 @@ which curl || die "curl not found"
 
 ACCESS_FILE=$HOME/.github_access_token
 
-if [! -f $ACCESS_FILE ]; then
+if [ ! -f $ACCESS_FILE ]; then
   die "Can't find $ACCESS_FILE"
 fi
 
@@ -28,7 +28,7 @@ fi
 repo=netdebug
 org=netdebug-com
 
-gh auth login --with-token <<<$ACCESS_TOKEN
+gh auth login --with-token <<< $ACCESS_TOKEN
 asset=$(gh api repos/${org}/${repo}/releases --jq '.[0].assets.[0].url')
 curl -L -o pre-prod-release.tgz "$asset" \
    -H "Accept: application/octet-stream" \

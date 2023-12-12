@@ -1,0 +1,17 @@
+[Unit]
+Description=Netdebug Webserver
+After=network.target
+StartLimitIntervalSec=0
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=root
+WorkingDirectory=/home/deploy
+ExecStart=/home/deploy/target/release/webserver --production --listen-port 443
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=netdebug-webserver
+
+[Install]
+WantedBy=multi-user.target
