@@ -101,7 +101,7 @@ impl ProcessTracker {
     pub async fn do_async_loop(&mut self, update_frequency: Duration) {
         // setup a background task to periodically send a UpdateCache message
         let tx = self.tx.clone();
-        let mut stat = self.msgs_tx_errors.clone();
+        let stat = self.msgs_tx_errors.clone();
         tokio::spawn(async move {
             loop {
                 // TODO: break on too many errors? Then do what?
@@ -110,7 +110,7 @@ impl ProcessTracker {
                     &tx,
                     "process_tracker",
                     ProcessTrackerMessage::UpdateCache,
-                    &mut stat
+                    &stat
                 )
                 .await;
             }
@@ -189,7 +189,7 @@ impl ProcessTracker {
                     key,
                     application: reply,
                 },
-                &mut self.msgs_tx_errors
+                &self.msgs_tx_errors
             );
         } else {
             // try again on next refresh to avoid a race condition
@@ -279,7 +279,7 @@ impl ProcessTracker {
                 tx,
                 "ConnectionTracker",
                 ConnectionTrackerMsg::SetConnectionApplication { key, application },
-                &mut self.msgs_tx_errors
+                &self.msgs_tx_errors
             );
         }
     }
