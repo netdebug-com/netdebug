@@ -554,7 +554,7 @@ mod test {
         let test_log = r"tests/logs/annotated_connection1_localhost.log";
         let connection = connection_from_log(test_dir("libconntrack", test_log).as_str()).unwrap();
 
-        let insights = analyze(&connection.probe_report_summary);
+        let insights = analyze(connection.probe_report_summary());
         assert!(insights
             .iter()
             .any(|i| matches!(&i, AnalysisInsights::NoRouterReplies { .. })));
@@ -566,7 +566,7 @@ mod test {
         let test_log = r"tests/logs/annotated_rob_linux_wifi_turkey.log";
         let connection = connection_from_log(test_dir("libconntrack", test_log).as_str()).unwrap();
 
-        let insights = analyze(&connection.probe_report_summary);
+        let insights = analyze(connection.probe_report_summary());
         let last_hop = insights
             .iter()
             .find(|i| matches!(i, AnalysisInsights::LastHopNatLatencyVariance { .. }));
@@ -589,7 +589,7 @@ mod test {
 
         assert!(user_agent.contains("Mac OS X"));
 
-        let insights = analyze(&connection.probe_report_summary);
+        let insights = analyze(connection.probe_report_summary());
         let last_hop = insights
             .iter()
             .find(|i| matches!(i, AnalysisInsights::LastHopNatLatencyVariance { .. }));
@@ -617,7 +617,7 @@ mod test {
         let test_log = r"tests/logs/annotated_macos_gregor.log";
         let connection = connection_from_log(test_dir("libconntrack", test_log).as_str()).unwrap();
 
-        let insights = analyze(&connection.probe_report_summary);
+        let insights = analyze(connection.probe_report_summary());
         let spike = insights
             .iter()
             .find(|i| matches!(i, AnalysisInsights::LatencySpikeExplaination { .. }));

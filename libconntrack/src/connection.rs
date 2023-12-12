@@ -272,25 +272,25 @@ impl UnidirectionalTcpState {
  */
 #[derive(Clone, Debug, Getters)]
 pub struct Connection {
-    pub connection_key: ConnectionKey,
+    connection_key: ConnectionKey,
     /// System clock
-    pub start_tracking_time: DateTime<Utc>,
+    start_tracking_time: DateTime<Utc>,
     /// monotonic clock, also respects tokio::sleep::pause() for testing
-    pub start_tracking_time_instant: Instant,
+    start_tracking_time_instant: Instant,
     // Human readable time of the last packet for logging
-    pub last_packet_time: DateTime<Utc>,
+    last_packet_time: DateTime<Utc>,
     // The time of the last packet used for evictions and statekeeping
-    pub last_packet_instant: tokio::time::Instant,
-    pub local_data: Option<OwnedParsedPacket>, // data sent for retransmits
-    pub probe_round: Option<ProbeRound>,
-    pub probe_report_summary: ProbeReportSummary,
-    pub user_annotation: Option<String>, // an human supplied comment on this connection
-    pub user_agent: Option<String>, // when created via a web request, store the user-agent header
-    pub associated_apps: Option<HashMap<u32, Option<String>>>, // PID --> ProcessName, if we know it
-    pub remote_hostname: Option<String>, // the FQDN of the remote host, if we know it
-    pub traffic_stats: BidirectionalStats,
+    last_packet_instant: tokio::time::Instant,
+    local_data: Option<OwnedParsedPacket>, // data sent for retransmits
+    probe_round: Option<ProbeRound>,
+    probe_report_summary: ProbeReportSummary,
+    pub(crate) user_annotation: Option<String>, // an human supplied comment on this connection
+    pub(crate) user_agent: Option<String>, // when created via a web request, store the user-agent header
+    pub(crate) associated_apps: Option<HashMap<u32, Option<String>>>, // PID --> ProcessName, if we know it
+    pub(crate) remote_hostname: Option<String>, // the FQDN of the remote host, if we know it
+    traffic_stats: BidirectionalStats,
     // which counter groups does this flow belong to, e.g., "google.com" and "chrome"
-    pub aggregate_groups: HashSet<AggregateStatKind>,
+    pub(crate) aggregate_groups: HashSet<AggregateStatKind>,
     local_tcp_state: Option<UnidirectionalTcpState>,
     remote_tcp_state: Option<UnidirectionalTcpState>,
 }
