@@ -174,9 +174,7 @@ mod test {
     use super::*;
     use chrono::Utc;
     use common_wasm::{ProbeReportEntry, ProbeReportSummary, ProbeRoundReport};
-    use libconntrack_wasm::{
-        ConnectionIdString, ConnectionKey, ConnectionMeasurements, TrafficStatsSummary,
-    };
+    use libconntrack_wasm::{ConnectionKey, ConnectionMeasurements, TrafficStatsSummary};
 
     #[test]
     fn test_trivial_congestion_summary() {
@@ -215,7 +213,6 @@ mod test {
             ip_proto: libconntrack_wasm::IpProtocol::TCP,
         };
         vec![ConnectionMeasurements {
-            id: Some(ConnectionIdString::from(&key)),
             key,
             local_hostname: None,
             remote_hostname: None,

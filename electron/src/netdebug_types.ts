@@ -122,12 +122,6 @@ export type TrafficStatsSummary = {
 };
 export type ConnectionMeasurements = {
     "key": ConnectionKey;
-
-    /**
-     * This is an opaque string representation of the ConnectionKey. It can be used
-     * to uniquely identify a connection.
-     */
-    "id": (string | null);
     "local_hostname": (string | null);
     "remote_hostname": (string | null);
     "probe_report_summary": ProbeReportSummary;

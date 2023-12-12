@@ -1,4 +1,9 @@
-import { formatValue, prettyPrintSiUnits, reshapeCounter } from "../utils";
+import {
+  connIdString,
+  formatValue,
+  prettyPrintSiUnits,
+  reshapeCounter,
+} from "../utils";
 
 test("prettyPrintSiUnits", () => {
   expect(prettyPrintSiUnits(null, "foo/s")).toBe("None");
@@ -75,4 +80,56 @@ test("formatValue", () => {
   expect(formatValue(123456789, true)).toMatch(/123[./,]456[/.,]789/);
   expect(formatValue(undefined, true)).toBe("");
   expect(formatValue(undefined, false)).toBe("");
+});
+
+test("connIdString", () => {
+  expect(
+    connIdString({
+      ip_proto: "TCP",
+      local_ip: "127.0.0.1",
+      local_l4_port: 23,
+      remote_ip: "1.2.3.4",
+      remote_l4_port: 4242,
+    }),
+  ).toBe("6#127.0.0.1#23#1.2.3.4#4242");
+
+  expect(
+    connIdString({
+      ip_proto: "UDP",
+      local_ip: "127.0.0.1",
+      local_l4_port: 23,
+      remote_ip: "1.2.3.4",
+      remote_l4_port: 4242,
+    }),
+  ).toBe("17#127.0.0.1#23#1.2.3.4#4242");
+
+  expect(
+    connIdString({
+      ip_proto: "ICMP",
+      local_ip: "127.0.0.1",
+      local_l4_port: 0,
+      remote_ip: "1.2.3.4",
+      remote_l4_port: 0,
+    }),
+  ).toBe("1#127.0.0.1#0#1.2.3.4#0");
+
+  expect(
+    connIdString({
+      ip_proto: "ICMP6",
+      local_ip: "::1",
+      local_l4_port: 0,
+      remote_ip: "2001:db8::1",
+      remote_l4_port: 0,
+    }),
+  ).toBe("58#::1#0#2001:db8::1#0");
+
+  expect(
+    connIdString({
+      ip_proto: { Other: 123 },
+      local_ip: "127.0.0.1",
+      local_l4_port: 23,
+      remote_ip: "1.2.3.4",
+      remote_l4_port: 4242,
+    }),
+  ).toBe("123#127.0.0.1#23#1.2.3.4#4242");
 });
