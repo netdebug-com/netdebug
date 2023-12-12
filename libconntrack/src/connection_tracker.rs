@@ -1094,7 +1094,10 @@ pub mod test {
 
     #[tokio::test]
     async fn test_dns_tracker_new_connection_lookup() {
-        let mut dns_tracker = DnsTracker::new(20);
+        let mut dns_tracker = DnsTracker::new(
+            20,
+            ExportedStatRegistry::new("testing_dns", std::time::Instant::now()),
+        );
         let local_syn = OwnedParsedPacket::try_from_fake_time(TEST_1_LOCAL_SYN.to_vec()).unwrap();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.37").unwrap()]);
         let mut connection_tracker = mk_mock_connection_tracker(local_addrs);
