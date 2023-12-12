@@ -130,6 +130,40 @@ fn send_connection_storage_msg(topology_client: &Option<TopologyServerSender>, c
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct ConnectionStatHandles {
+    pub probe_rounds_sent: StatHandle,
+    pub seq_out_of_window: StatHandle,
+    pub ack_out_of_window: StatHandle,
+    pub multiple_syns: StatHandle,
+    pub multiple_fins: StatHandle,
+    pub invalid_sack: StatHandle,
+    pub sack_not_a_probe: StatHandle,
+    pub outgoing_low_ttl_not_a_probe: StatHandle,
+    pub probe_rounds_dst_ratelimit: StatHandle,
+    pub weird_probes_found: StatHandle,
+    pub weird_replies_found: StatHandle,
+}
+
+impl ConnectionStatHandles {
+    pub fn new(registry: &mut ExportedStatRegistry) -> Self {
+        let mut add_stat = |name: &str| registry.add_stat(name, Units::None, [StatType::COUNT]);
+        ConnectionStatHandles {
+            probe_rounds_sent: add_stat("probe_rounds_sent"),
+            seq_out_of_window: add_stat("seq_out_of_window"),
+            ack_out_of_window: add_stat("ack_out_of_window"),
+            multiple_syns: add_stat("multiple_syns"),
+            multiple_fins: add_stat("multiple_fins"),
+            invalid_sack: add_stat("invalid_sack"),
+            sack_not_a_probe: add_stat("sack_not_a_probe"),
+            outgoing_low_ttl_not_a_probe: add_stat("outgoing_low_ttl_not_a_probe"),
+            probe_rounds_dst_ratelimit: add_stat("probe_round_dst_ratelimit"),
+            weird_probes_found: add_stat("weird_probes_found"),
+            weird_replies_found: add_stat("weird_replies_found"),
+        }
+    }
+}
+
 /***
  * Maintain the state for a bunch of connections.   Also, cache some information
  * that doesn't change often, e.g. ,the local IP addresses and listen port of
@@ -149,6 +183,8 @@ pub struct ConnectionTracker<'a> {
     rx: ConnectionTrackerReceiver, // to read messages sent to us
     // used to track traffic grouped by, e.g., DNS destination
     aggregate_traffic_stats: HashMap<AggregateStatKind, BidirectionalStats>,
+    stat_handles: ConnectionStatHandles,
+    // TODO: merge the following StatHandles into the `stat_handle` field.
     /// Trackes number of successfully parsed packets. I.e., packets from
     /// which we could extract a ConnectionKey
     sucessfully_parsed_packets: StatHandle,
@@ -204,6 +240,7 @@ impl<'a> ConnectionTracker<'a> {
                     MAX_BURST_RATE_TIME_WINDOW_MILLIS,
                 )),
             )]),
+            stat_handles: ConnectionStatHandles::new(&mut stats),
             sucessfully_parsed_packets: stats.add_stat(
                 "succesfully_parsed",
                 Units::Packets,
@@ -400,7 +437,7 @@ impl<'a> ConnectionTracker<'a> {
         let now = Utc::now();
 
         debug!("Tracking new connection: {}", &key);
-        let connection = Connection::new(key.clone(), now);
+        let connection = Connection::new(key.clone(), now, self.stat_handles.clone());
 
         self.connections.insert(key, connection);
     }

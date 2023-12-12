@@ -916,16 +916,16 @@ pub struct StatHandle {
 
 impl StatHandle {
     /// see ExportedStat::add_value_with_time()
-    pub fn add_value_with_time(&mut self, value: u64, now: Instant) {
+    pub fn add_value_with_time(&self, value: u64, now: Instant) {
         self.registry.stats.lock().unwrap()[self.idx].add_value_with_time(value, now);
     }
 
     /// see ExportedStat::add_value()
-    pub fn add_value(&mut self, value: u64) {
+    pub fn add_value(&self, value: u64) {
         self.add_value_with_time(value, Instant::now());
     }
 
-    pub fn bump(&mut self) {
+    pub fn bump(&self) {
         self.add_value_with_time(1, Instant::now());
     }
 }

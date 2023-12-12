@@ -6,8 +6,9 @@ use libconntrack_wasm::ConnectionKey;
 use log::warn;
 
 use crate::{
-    get_holes_from_sack, owned_packet::OwnedParsedPacket, remove_filled_holes,
-    sort_and_merge_ranges, SeqRange, TcpSeq64, TcpWindow,
+    connection_tracker::ConnectionStatHandles, get_holes_from_sack,
+    owned_packet::OwnedParsedPacket, remove_filled_holes, sort_and_merge_ranges, SeqRange,
+    TcpSeq64, TcpWindow,
 };
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -26,9 +27,11 @@ impl Display for ConnectionSide {
 /// window of allowed sequence numbers. Using `TcpWindow` we translate regular 32bit
 /// sequence numbers and ack numbers into a 64bit space that won't wrap. So normaler operators
 /// (+, -, <, ...) can be used on them w/o concern for wrapping
-#[derive(Debug, Clone, Eq, PartialEq, Getters)]
+#[derive(Debug, Clone, Getters)]
 pub struct UnidirectionalTcpState {
     connection_key: ConnectionKey,
+    #[getter(skip)]
+    stat_handles: ConnectionStatHandles,
     /// The SYN (if any) sent by this side
     syn_pkt: Option<OwnedParsedPacket>,
     tcp_window: TcpWindow,
@@ -51,9 +54,15 @@ pub struct UnidirectionalTcpState {
 }
 
 impl UnidirectionalTcpState {
-    pub fn new(raw_seq_or_ack: u32, side: ConnectionSide, connection_key: ConnectionKey) -> Self {
+    pub fn new(
+        raw_seq_or_ack: u32,
+        side: ConnectionSide,
+        connection_key: ConnectionKey,
+        stat_handles: ConnectionStatHandles,
+    ) -> Self {
         Self {
             connection_key,
+            stat_handles,
             syn_pkt: None,
             tcp_window: TcpWindow::new(raw_seq_or_ack),
             sent_seq_no: None,
@@ -77,6 +86,7 @@ impl UnidirectionalTcpState {
         let cur_pkt_seq = match self.tcp_window.seq64_and_update(tcp.sequence_number) {
             Some(seq) => seq,
             None => {
+                self.stat_handles.seq_out_of_window.bump();
                 warn!(
                     "{}:{} seq number is out-of-window -- not processing packet further",
                     self.connection_key, self.side
@@ -90,6 +100,7 @@ impl UnidirectionalTcpState {
             .max(Some(cur_pkt_seq + tcp_payload_len(packet, tcp) as u64));
         if tcp.syn {
             if self.syn_pkt.is_some() {
+                self.stat_handles.multiple_syns.bump();
                 warn!(
                     "{}: {}: Weird - multiple SYNs on the same connection",
                     self.connection_key, self.side,
@@ -101,6 +112,7 @@ impl UnidirectionalTcpState {
             // FIN's "use" a sequence number as if they sent a byte of data
             if let Some(fin_seq) = self.fin_seq {
                 if fin_seq != cur_pkt_seq {
+                    self.stat_handles.multiple_fins.bump();
                     warn!(
                         "{}: {}: Weird: got multiple FIN seqnos: {} != {}",
                         self.connection_key, self.side, fin_seq, cur_pkt_seq
@@ -120,6 +132,7 @@ impl UnidirectionalTcpState {
         let cur_pkt_ack = match self.tcp_window.seq64_and_update(tcp.acknowledgment_number) {
             Some(ack) => ack,
             None => {
+                self.stat_handles.ack_out_of_window.bump();
                 warn!(
                     "{}:{} ack number is out-of-window -- not processing packet further",
                     self.connection_key, self.side
@@ -153,6 +166,7 @@ impl UnidirectionalTcpState {
         if let Some(seq_range) = SeqRange::try_from_seq(&self.tcp_window, raw_sack) {
             sacks.push(seq_range);
         } else {
+            self.stat_handles.invalid_sack.bump();
             warn!(
                 "Invalid SACK {}: seq state: {:?}, sack block: {:?}",
                 self.connection_key, self.tcp_window, raw_sack
@@ -226,6 +240,7 @@ pub fn tcp_payload_len(packet: &OwnedParsedPacket, tcp: &TcpHeader) -> u16 {
 mod test {
     use std::{net::IpAddr, str::FromStr};
 
+    use common_wasm::timeseries_stats::ExportedStatRegistry;
     use libconntrack_wasm::IpProtocol;
 
     use super::*;
@@ -240,12 +255,21 @@ mod test {
         }
     }
 
+    fn mk_stat_handles() -> ConnectionStatHandles {
+        let mut registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
+        ConnectionStatHandles::new(&mut registry)
+    }
+
     #[test]
     fn test_push_raw_sacks_as_range() {
         let center = 0x8000_0000u32;
         let center64 = center as TcpSeq64;
-        let state =
-            UnidirectionalTcpState::new(center, ConnectionSide::Local, mk_mock_connection_key());
+        let state = UnidirectionalTcpState::new(
+            center,
+            ConnectionSide::Local,
+            mk_mock_connection_key(),
+            mk_stat_handles(),
+        );
         let mut sacks = Vec::new();
 
         // outside the window ==> don't push
@@ -282,6 +306,7 @@ mod test {
             initial_ack,
             ConnectionSide::Local,
             mk_mock_connection_key(),
+            mk_stat_handles(),
         );
         let mut tcph = TcpHeader::new(34333, 80, 123, 65535);
         tcph.ack = true;
@@ -355,6 +380,7 @@ mod test {
             initial_ack,
             ConnectionSide::Local,
             mk_mock_connection_key(),
+            mk_stat_handles(),
         );
         let mut tcph = TcpHeader::new(34333, 80, initial_ack - 1, 65535);
         tcph.ack = true;

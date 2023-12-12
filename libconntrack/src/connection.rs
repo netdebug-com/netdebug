@@ -26,6 +26,7 @@ use std::{println as debug, println as warn}; // Workaround to use prinltn! for 
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    connection_tracker::ConnectionStatHandles,
     dns_tracker::{DnsTrackerMessage, UDP_DNS_PORT},
     in_band_probe::ProbeMessage,
     owned_packet::OwnedParsedPacket,
@@ -157,10 +158,16 @@ pub struct Connection {
     pub(crate) aggregate_groups: HashSet<AggregateStatKind>,
     local_tcp_state: Option<UnidirectionalTcpState>,
     remote_tcp_state: Option<UnidirectionalTcpState>,
+    #[getter(skip)]
+    stat_handles: ConnectionStatHandles,
 }
 
 impl Connection {
-    pub(crate) fn new(key: ConnectionKey, ts: DateTime<Utc>) -> Connection {
+    pub(crate) fn new(
+        key: ConnectionKey,
+        ts: DateTime<Utc>,
+        stat_handles: ConnectionStatHandles,
+    ) -> Connection {
         Connection {
             connection_key: key.clone(),
             local_data: None,
@@ -181,6 +188,7 @@ impl Connection {
             aggregate_groups: HashSet::from([AggregateStatKind::ConnectionTracker]),
             local_tcp_state: None,
             remote_tcp_state: None,
+            stat_handles,
         }
     }
 
@@ -289,7 +297,12 @@ impl Connection {
             (&mut self.remote_tcp_state, ConnectionSide::Remote)
         };
         let state = state_opt.get_or_insert_with(|| {
-            UnidirectionalTcpState::new(tcp.sequence_number, side, self.connection_key.clone())
+            UnidirectionalTcpState::new(
+                tcp.sequence_number,
+                side,
+                self.connection_key.clone(),
+                self.stat_handles.clone(),
+            )
         });
         state.process_pkt(packet, tcp);
         let pkt_seq_no = state.tcp_window().seq64(tcp.sequence_number);
@@ -313,6 +326,7 @@ impl Connection {
                     tcp.acknowledgment_number,
                     other_side,
                     self.connection_key.clone(),
+                    self.stat_handles.clone(),
                 )
             });
             // TODO: do we need to use `tcp_paylod_len` instead of `payload.is_empty()`??
@@ -348,6 +362,7 @@ impl Connection {
                                     .or_default()
                                     .insert(packet.clone());
                             } else {
+                                self.stat_handles.sack_not_a_probe.bump();
                                 debug!(
                                 "Looks like we got a dupACK but it's not a probe response possible probe id: {} :: {:?}. Expected probe seq: {}, got SACK.LE: {}",
                                 probe_id, packet, active_probe_round.probe_pkt_seq_no, sack.left()
@@ -415,6 +430,7 @@ impl Connection {
             if first_time && !self.close_has_started() {
                 let dst_ip = packet.get_src_dst_ips().unwrap().1;
                 if prober_helper.check_update_dst_ip(dst_ip) {
+                    self.stat_handles.probe_rounds_sent.bump();
                     // reset the probe state
                     self.probe_round = Some(ProbeRound::new(
                         self.probe_report_summary.raw_reports.len(),
@@ -432,6 +448,8 @@ impl Connection {
                     {
                         warn!("Problem sending to prober queue: {}", e);
                     }
+                } else {
+                    self.stat_handles.probe_rounds_dst_ratelimit.bump();
                 }
             }
         }
@@ -451,6 +469,7 @@ impl Connection {
                     }
                 }
             } else {
+                self.stat_handles.outgoing_low_ttl_not_a_probe.bump();
                 // warn! should be fine here. I think of a good reason why we should ever this case.
                 warn!("Outgoing packet with low TTL. Looks like a probe but seq no mismatch: {} vs {}", 
                     active_probe_round.probe_pkt_seq_no, pkt_seq_no );
@@ -896,6 +915,8 @@ pub mod test {
     use std::net::IpAddr;
     use std::str::FromStr;
 
+    use common_wasm::timeseries_stats::{ExportedStatRegistry, StatType, Units};
+
     use super::*;
 
     use crate::in_band_probe::test::test_tcp_packet_ports;
@@ -1094,9 +1115,6 @@ pub mod test {
 
     impl Helper {
         fn new(local_addrs: HashSet<IpAddr>) -> Helper {
-            use common_wasm::timeseries_stats::ExportedStatRegistry;
-            use common_wasm::timeseries_stats::StatType;
-            use common_wasm::timeseries_stats::Units;
             let mut registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
             let prober_txrx = mpsc::channel(4096);
             let prober_tx = prober_txrx.0.clone();
@@ -1125,6 +1143,11 @@ pub mod test {
         }
     }
 
+    fn mk_stat_handles() -> ConnectionStatHandles {
+        let mut registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
+        ConnectionStatHandles::new(&mut registry)
+    }
+
     #[test]
     pub fn test_rate_calculation() {
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.1").unwrap()]);
@@ -1133,7 +1156,7 @@ pub mod test {
         let start = mk_start_time();
         let pkt = mk_packet(true, start, 100);
         let (key, _) = pkt.to_connection_key(&local_addrs).unwrap();
-        let mut conn = Connection::new(key, start);
+        let mut conn = Connection::new(key, start, mk_stat_handles());
 
         let conn_measurement = conn.to_connection_measurements(start, None);
         assert_eq!(conn_measurement.rx_stats.last_min_byte_rate, None);
