@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     io::Write,
+    net::IpAddr,
     process::ExitCode,
     rc::Rc,
     time::Duration,
@@ -9,7 +10,7 @@ use std::{
 use clap::{Parser, Subcommand};
 use common_wasm::ProbeReportEntry;
 use itertools::Itertools;
-use libconntrack_wasm::ConnectionMeasurements;
+use libconntrack_wasm::{ConnectionKey, ConnectionMeasurements, IpProtocol};
 #[cfg(not(test))]
 use log::{error, warn};
 use rusqlite::{Connection, OpenFlags};
@@ -32,6 +33,8 @@ enum CliCommands {
     Stats(StatsCmd),
     Dot(DotCmd),
     ExtractRouterIps(IpCmd),
+    Endhost(EndhostCmd),
+    Search(SearchCmd),
 }
 #[derive(Debug, Parser)]
 struct ListCmd {
@@ -58,6 +61,56 @@ struct DotCmd {
 
 #[derive(Debug, Parser)]
 struct IpCmd {
+    /// DB File
+    #[arg()]
+    pub sqlite_filenames: Vec<String>,
+}
+
+#[derive(Debug, Parser)]
+struct EndhostCmd {
+    /// Show Intra-probe-round Variance
+    #[arg(long, default_value_t = false)]
+    pub intra: bool,
+
+    /// Show Inter-probe-round Variance
+    #[arg(long, default_value_t = false)]
+    pub inter: bool,
+
+    /// DB File
+    #[arg()]
+    pub sqlite_filenames: Vec<String>,
+}
+
+#[derive(Debug, Parser)]
+struct SearchCmd {
+    /// Dump Json of matched measurements to screen
+    #[arg(long, default_value_t = false)]
+    pub dump_json: bool,
+
+    /// Match on this src_ip
+    #[arg(long, default_value = None)]
+    pub local_ip: Option<IpAddr>,
+
+    /// Match on this dst_ip
+    #[arg(long, default_value = None)]
+    pub remote_ip: Option<IpAddr>,
+
+    /// Match on this src_port (as a string)
+    #[arg(long, default_value = None)]
+    pub local_port: Option<u16>,
+
+    /// Match on this dst_ip (as a string)
+    #[arg(long, default_value = None)]
+    pub remote_port: Option<u16>,
+
+    /// Match on this ip_protocol (as a number, e.g., 6 for TCP)
+    #[arg(long, default_value = None)]
+    pub ip_proto: Option<IpProtocol>,
+
+    /// Show Inter-probe-round Variance
+    #[arg(long, default_value_t = false)]
+    pub inter: bool,
+
     /// DB File
     #[arg()]
     pub sqlite_filenames: Vec<String>,
@@ -128,6 +181,18 @@ fn visit_all_connections<F: FnMut(&String, &ConnectionMeasurements)>(
         }
     }
     Ok(())
+}
+
+fn visit_selected_connections<F: FnMut(&String, &ConnectionMeasurements)>(
+    db_files: &Vec<String>,
+    filter: ConnectionKeySearch,
+    mut visit: F,
+) -> Result<(), Box<dyn std::error::Error>> {
+    visit_all_connections(db_files, |ts, measurements| {
+        if filter.matches(&measurements.key) {
+            visit(ts, measurements)
+        }
+    })
 }
 
 /**
@@ -485,6 +550,32 @@ impl TheGraph {
     }
 }
 
+/// Just like a ConnectionKey, but all of the fields are Optional
+/// so we can use to select on a group of ConnectionKeys.
+/// Any field marked as None will be treated like a wild card
+#[derive(Debug, Clone)]
+struct ConnectionKeySearch {
+    local_ip: Option<IpAddr>,
+    remote_ip: Option<IpAddr>,
+    local_l4_port: Option<u16>,
+    remote_l4_port: Option<u16>,
+    ip_proto: Option<IpProtocol>,
+}
+
+impl ConnectionKeySearch {
+    /**
+     * This the passed key match this search key?
+     *
+     * Any field in the search key that's None is ignored/wildcarded
+     */
+    pub fn matches(&self, key: &ConnectionKey) -> bool {
+        (self.local_ip.is_none() || self.local_ip.unwrap() == key.local_ip)
+            && (self.remote_ip.is_none() || self.remote_ip.unwrap() == key.remote_ip)
+            && (self.local_l4_port.is_none() || self.local_l4_port.unwrap() == key.local_l4_port)
+            && (self.remote_l4_port.is_none() || self.remote_l4_port.unwrap() == key.remote_l4_port)
+            && (self.ip_proto.is_none() || self.ip_proto.unwrap() == key.ip_proto)
+    }
+}
 fn main() -> ExitCode {
     let args = Args::parse();
     use CliCommands::*;
@@ -511,7 +602,156 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Endhost(sub_args) => match analyze_endhost_latencies_from_dbfiles(&sub_args) {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(e) => {
+                warn!("Error: {}", e);
+                ExitCode::FAILURE
+            }
+        },
+        Search(sub_args) => {
+            if sub_args.sqlite_filenames.is_empty() {
+                warn!("No DB files specified!?");
+            }
+            match visit_selected_connections(
+                &sub_args.sqlite_filenames,
+                ConnectionKeySearch {
+                    local_ip: sub_args.local_ip,
+                    remote_ip: sub_args.remote_ip,
+                    local_l4_port: sub_args.local_port,
+                    remote_l4_port: sub_args.remote_port,
+                    ip_proto: sub_args.ip_proto,
+                },
+                |_ts, m| {
+                    if sub_args.dump_json {
+                        println!("{}", serde_json::to_string_pretty(&m).unwrap());
+                    } else {
+                        println!("Key found: {:?}", m.key);
+                    }
+                },
+            ) {
+                Ok(_) => ExitCode::SUCCESS,
+                Err(e) => {
+                    warn!("Search error: {}", e);
+                    ExitCode::FAILURE
+                }
+            }
+        }
     }
+}
+
+// TODO: split each of the cli actions into its own file with libraries; next diff
+#[allow(dead_code)]
+struct EndHostLatencies {
+    pub key: ConnectionKey,
+    pub latencies_ms: Vec<f64>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+struct EndHostLatenciesStats {
+    pub key: ConnectionKey,
+    pub min: f64,
+    pub max: f64,
+    pub mean: f64,
+    pub max_less_mean: f64,
+}
+
+/// Extract the latency info from all of the probes and index by end-host IPs
+/// TODO: assumes IPs are globally unique which is not true wrt Ip Anycast or RFC1918 addrs
+/// TODO: assumes that all source addresses are the same host, which also isn't true..
+/// ... handle them later
+fn analyze_endhost_latencies(
+    all_latencies: &mut HashMap<IpAddr, Vec<EndHostLatencies>>,
+    measurements: &ConnectionMeasurements,
+) {
+    let endhost_ip = measurements.key.remote_ip;
+    // Each new probe_round is from a different point in time, so call that a unique Latency measuremnt
+    for probe_round in &measurements.probe_report_summary.raw_reports {
+        // but each probe within a probe round happened back-to-back, so pull those together
+        let data_entry = all_latencies.entry(endhost_ip).or_default();
+        use ProbeReportEntry::*;
+        let latencies_ms = probe_round
+            .probes
+            .iter()
+            // only look at probes from the EndHost and extract out their RTT's
+            .filter_map(|(_ttl, p)| match p {
+                EndHostReplyFound {
+                    rtt_ms, comment, ..
+                } => {
+                    if comment.is_empty() {
+                        Some(rtt_ms)
+                    } else {
+                        None // skip 'weird' measurements with comments
+                    }
+                }
+                _ => None,
+            })
+            .cloned()
+            .collect::<Vec<f64>>();
+        // only track/count probe_rounds with non-zero endhost probes
+        if !latencies_ms.is_empty() {
+            data_entry.push(EndHostLatencies {
+                key: measurements.key.clone(),
+                latencies_ms,
+            })
+        }
+    }
+}
+
+fn analyze_endhost_intra_variance(endhost_latencies: &EndHostLatencies) -> EndHostLatenciesStats {
+    assert!(!endhost_latencies.latencies_ms.is_empty());
+    let mut min = f64::MAX;
+    let mut max = f64::MIN;
+    let mut sum = 0.0;
+    for lat in &endhost_latencies.latencies_ms {
+        min = lat.min(min);
+        max = lat.max(max);
+        sum += lat;
+    }
+    let mean = sum / endhost_latencies.latencies_ms.len() as f64;
+    let max_less_mean = max - mean;
+    EndHostLatenciesStats {
+        key: endhost_latencies.key.clone(),
+        min,
+        max,
+        mean,
+        max_less_mean,
+    }
+}
+
+fn analyze_endhost_latencies_from_dbfiles(
+    sub_args: &EndhostCmd,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut all_latencies: HashMap<IpAddr, Vec<EndHostLatencies>> = HashMap::new();
+    visit_all_connections(&sub_args.sqlite_filenames, |_ts, measurements| {
+        analyze_endhost_latencies(&mut all_latencies, measurements);
+    })?;
+    println!("Done analysys: {:?}", sub_args);
+    // print the intra-probe_round variance
+    if sub_args.intra {
+        for (ip, data) in all_latencies {
+            print!("{} :: {} rounds :: congestion(ms): ", ip, data.len());
+            let mut intra_variance = data
+                .iter()
+                .map(analyze_endhost_intra_variance)
+                .collect::<Vec<EndHostLatenciesStats>>();
+            // unwrap here is ok b/c we assert that this will never divide by zero/be NaN
+            intra_variance.sort_by(|a, b| b.max_less_mean.partial_cmp(&a.max_less_mean).unwrap());
+            for stat in intra_variance {
+                if stat.max_less_mean > 10.0 {
+                    print!(" {} ({:?})", stat.max_less_mean, stat);
+                } else {
+                    print!(" {}", stat.max_less_mean);
+                }
+            }
+            println!();
+        }
+    }
+    if sub_args.inter {
+        todo!("Not implemented --inter!");
+    }
+    Ok(())
 }
 
 fn extract_ips(db_files: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {

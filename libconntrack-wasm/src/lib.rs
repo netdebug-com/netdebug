@@ -6,7 +6,7 @@ pub use connection_key::*;
 pub use connection_measurements::*;
 pub use traffic_stats::*;
 
-use std::fmt::Display;
+use std::{fmt::Display, num::ParseIntError, str::FromStr};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -140,6 +140,16 @@ impl IpProtocol {
             58 => ICMP6,
             _ => Other(ip_proto),
         }
+    }
+}
+
+impl FromStr for IpProtocol {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let ip_proto = u8::from_str(s)?;
+        // once we get here, we can convert anything
+        Ok(IpProtocol::from_wire(ip_proto))
     }
 }
 
