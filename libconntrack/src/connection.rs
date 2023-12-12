@@ -31,7 +31,7 @@ use crate::{
     owned_packet::OwnedParsedPacket,
     prober_helper::ProberHelper,
     utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timestamp_to_ms, PerfMsgCheck},
-    ConnectionSide, UnidirectionalTcpState,
+    ConnectionSide, TcpSeq64, UnidirectionalTcpState,
 };
 
 pub const MAX_BURST_RATE_TIME_WINDOW_MILLIS: u64 = 10;
@@ -107,15 +107,17 @@ pub fn connection_key_from_protocol_socket_info(proto_info: &ProtocolSocketInfo)
 pub struct ProbeRound {
     pub round_number: usize,
     pub start_time: DateTime<Utc>,
+    pub probe_pkt_seq_no: TcpSeq64,
     pub next_end_host_reply: ProbeId, // used for idle probes
     // current probes: outgoing probes and incoming replies
     pub outgoing_probe_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
     pub incoming_reply_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
 }
 impl ProbeRound {
-    fn new(round_number: usize) -> ProbeRound {
+    fn new(round_number: usize, probe_pkt_seq_no: TcpSeq64) -> ProbeRound {
         ProbeRound {
             round_number,
+            probe_pkt_seq_no,
             start_time: Utc::now(),
             next_end_host_reply: PROBE_MAX_TTL - 1,
             outgoing_probe_timestamps: HashMap::new(),
@@ -137,11 +139,12 @@ pub struct Connection {
     start_tracking_time: DateTime<Utc>,
     /// monotonic clock, also respects tokio::sleep::pause() for testing
     start_tracking_time_instant: Instant,
-    // Human readable time of the last packet for logging
+    /// Human readable time of the last packet for logging
     last_packet_time: DateTime<Utc>,
-    // The time of the last packet used for evictions and statekeeping
+    /// The time of the last packet used for evictions and statekeeping
     last_packet_instant: tokio::time::Instant,
-    local_data: Option<OwnedParsedPacket>, // data sent for retransmits
+    /// data packet sent from the local side, used for probe retransmits
+    local_data: Option<OwnedParsedPacket>,
     probe_round: Option<ProbeRound>,
     probe_report_summary: ProbeReportSummary,
     pub(crate) user_annotation: Option<String>, // an human supplied comment on this connection
@@ -287,10 +290,13 @@ impl Connection {
             UnidirectionalTcpState::new(tcp.sequence_number, side, self.connection_key.clone())
         });
         state.process_pkt(packet, tcp);
+        let pkt_seq_no = state.tcp_window().seq64(tcp.sequence_number);
 
         // Handle outgoind probes, if needed
         if src_is_local {
-            self.tcp_process_local_probe(packet, prober_helper);
+            if let Some(pkt_seq_no) = pkt_seq_no {
+                self.tcp_process_local_probe(packet, pkt_seq_no, prober_helper);
+            }
         }
 
         // A valid ACK packet. Do ACK processing on the state for the other side.
@@ -309,6 +315,8 @@ impl Connection {
             });
             // TODO: do we need to use `tcp_paylod_len` instead of `payload.is_empty()`??
             let is_dup_ack = other_state.process_rx_ack(packet.payload.is_empty(), tcp);
+
+            // Dup-ack handling for possible probe replies
             if is_dup_ack {
                 // The unwrap is safe. If `is_dup_ack` is true, than this segment's
                 // ack_no is in window and it's equal to `other_state.recv_ack_no`
@@ -327,7 +335,9 @@ impl Connection {
                         // this is a dupACK/probe reply! the right - left indicates the probe id
                         let probe_id = sack.bytes();
                         if let Some(active_probe_round) = self.probe_round.as_mut() {
-                            if probe_id <= PROBE_MAX_TTL as u64 {
+                            if (active_probe_round.probe_pkt_seq_no == sack.left())
+                                && (probe_id <= PROBE_MAX_TTL as u64)
+                            {
                                 // record the reply
                                 let probe_id = probe_id as u8; // safe because we just checked
                                 active_probe_round
@@ -337,8 +347,8 @@ impl Connection {
                                     .insert(packet.clone());
                             } else {
                                 debug!(
-                                "Looks like we got a dupACK but the probe_id is too big {} :: {:?}",
-                                probe_id, packet
+                                "Looks like we got a dupACK but it's not a probe response possible probe id: {} :: {:?}. Expected probe seq: {}, got SACK.LE: {}",
+                                probe_id, packet, active_probe_round.probe_pkt_seq_no, sack.left()
                             );
                             }
                         }
@@ -383,6 +393,7 @@ impl Connection {
     fn tcp_process_local_probe(
         &mut self,
         packet: &OwnedParsedPacket,
+        pkt_seq_no: TcpSeq64,
         prober_helper: &mut ProberHelper,
     ) {
         // did we send some payload?
@@ -403,8 +414,10 @@ impl Connection {
                 let dst_ip = packet.get_src_dst_ips().unwrap().1;
                 if prober_helper.check_update_dst_ip(dst_ip) {
                     // reset the probe state
-                    self.probe_round =
-                        Some(ProbeRound::new(self.probe_report_summary.raw_reports.len()));
+                    self.probe_round = Some(ProbeRound::new(
+                        self.probe_report_summary.raw_reports.len(),
+                        pkt_seq_no,
+                    ));
                     // tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock ).unwrap();
                     let min_ttl = prober_helper.get_min_ttl();
                     if let Err(e) =
