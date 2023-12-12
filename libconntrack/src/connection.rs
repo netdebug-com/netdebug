@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    fmt::Display,
     net::SocketAddr,
 };
 
@@ -9,6 +10,7 @@ use common_wasm::{
     ProbeRoundReport, PROBE_MAX_TTL,
 };
 
+use derive_getters::Getters;
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement, TransportHeader, UdpHeader};
 use libconntrack_wasm::{
     traffic_stats::BidirectionalStats, AggregateStatKind, ConnectionIdString, ConnectionKey,
@@ -26,9 +28,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     dns_tracker::{DnsTrackerMessage, UDP_DNS_PORT},
+    get_holes_from_sack,
     in_band_probe::ProbeMessage,
     owned_packet::OwnedParsedPacket,
     prober_helper::ProberHelper,
+    remove_filled_holes, sort_and_merge_ranges,
     utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timestamp_to_ms, PerfMsgCheck},
     SeqRange, TcpSeq64, TcpWindow,
 };
@@ -123,13 +127,150 @@ impl ProbeRound {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum ConnectionSide {
+    Local,
+    Remote,
+}
+
+impl Display for ConnectionSide {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
+/// The state for one side of a TCP connections. We use a `TcpWindow` instance to track the current
+/// window of allowed sequence numbers. Using `TcpWindow` we translate regular 32bit
+/// sequence numbers and ack numbers into a 64bit space that won't wrap. So normaler operators
+/// (+, -, <, ...) can be used on them w/o concern for wrapping
+#[derive(Debug, Clone, Eq, PartialEq, Getters)]
+pub struct UnidirectionalTcpState {
+    connection_key: ConnectionKey,
+    /// The SYN (if any) sent by this side
+    syn_pkt: Option<OwnedParsedPacket>,
+    tcp_window: TcpWindow,
+    /// The highest seq no seen from this INCLUDING the TCP payload
+    sent_seq_no: Option<TcpSeq64>,
+    /// The highest cummulative ACK this side has *received* from the other side.
+    /// So, if `recv_ack_no == sent_seq_no + 1` then there is no unacked data
+    recv_ack_no: Option<TcpSeq64>,
+    /// Have we seen a RST from this side?
+    rst_seen: bool,
+    /// If this side has sent a FIN segment, the seq no of the FIN
+    fin_seq: Option<TcpSeq64>,
+    lost_bytes: u64,
+    /// The list of current holes as compute from received SACKs. I.e., any hole between the highest
+    /// ACK number received and any data indicated by SACK blocks. This Vec is sorted and the ranges
+    /// are overlap free. Furthermore, when we advance `recv_ack_no` we remove any holes that have
+    /// been 'closed' and record the lost bytes in `lost_bytes`.
+    holes: Vec<SeqRange>,
+    side: ConnectionSide,
+}
+
+impl UnidirectionalTcpState {
+    fn new(raw_seq_or_ack: u32, side: ConnectionSide, connection_key: ConnectionKey) -> Self {
+        Self {
+            connection_key,
+            syn_pkt: None,
+            tcp_window: TcpWindow::new(raw_seq_or_ack),
+            sent_seq_no: None,
+            recv_ack_no: None,
+            rst_seen: false,
+            fin_seq: None,
+            lost_bytes: 0,
+            holes: Vec::new(),
+            side,
+        }
+    }
+
+    /// Process a packet sent by this side
+    fn process_pkt(&mut self, packet: &OwnedParsedPacket, tcp: &TcpHeader) {
+        if tcp.rst {
+            self.rst_seen = true;
+            // TODO: I think the right thing is stop processing further. Any seq number in a
+            // RST segment should probably be ignored ....
+            return;
+        }
+        let cur_pkt_seq = match self.tcp_window.seq64_and_update(tcp.sequence_number) {
+            Some(seq) => seq,
+            None => {
+                warn!(
+                    "{}:{} seq number is out-of-window -- not processing packet further",
+                    self.connection_key, self.side
+                );
+                return;
+            }
+        };
+        // None < Some(x) for every x, so this nicely does the right thing :-)
+        self.sent_seq_no = self
+            .sent_seq_no
+            .max(Some(cur_pkt_seq + tcp_payload_len(packet, tcp) as u64));
+        if tcp.syn {
+            if self.syn_pkt.is_some() {
+                warn!(
+                    "{}: {}: Weird - multiple SYNs on the same connection",
+                    self.connection_key, self.side,
+                );
+            }
+            self.syn_pkt = Some(packet.clone()); // memcpy() but doesn't happen that much or with much data
+        }
+        if tcp.fin {
+            // FIN's "use" a sequence number as if they sent a byte of data
+            if let Some(fin_seq) = self.fin_seq {
+                if fin_seq != cur_pkt_seq {
+                    warn!(
+                        "{}: {}: Weird: got multiple FIN seqnos: {} != {}",
+                        self.connection_key, self.side, fin_seq, cur_pkt_seq
+                    );
+                }
+                // else it's just a duplicate packet
+            }
+            self.fin_seq = Some(cur_pkt_seq);
+        }
+    }
+
+    /// Process an ACK segment sent by the other side. I.e., process anything the other
+    /// side has ACK'ed
+    fn process_rx_ack(&mut self, pkt_payload_empty: bool, tcp: &TcpHeader) -> bool {
+        assert!(tcp.ack);
+        assert!(!tcp.rst);
+        let cur_pkt_ack = match self.tcp_window.seq64_and_update(tcp.acknowledgment_number) {
+            Some(ack) => ack,
+            None => {
+                warn!(
+                    "{}:{} ack number is out-of-window -- not processing packet further",
+                    self.connection_key, self.side
+                );
+                return false;
+            }
+        };
+        let is_dup_ack = match self.recv_ack_no {
+            // Is this ACK a duplicate ACK?
+            Some(old_ack) => {
+                old_ack == cur_pkt_ack && pkt_payload_empty && !tcp.syn && !tcp.fin && !tcp.rst
+            }
+            None => false,
+        };
+        // None < Some(x) for every x, so this nicely does the right thing :-)
+        self.recv_ack_no = self.recv_ack_no.max(Some(cur_pkt_ack));
+        // TOOD: should we use the highest ACK number received so far or the ACK number from the current
+        // packet. In theory both should be the same unless there is some weird re-ordering going on. But
+        // I think the highest received ACK number makes the most sense....
+        let holes = get_holes_from_sack(self.recv_ack_no.unwrap(), self.extract_sacks(tcp));
+        self.holes.extend(holes);
+        self.holes = sort_and_merge_ranges(std::mem::take(&mut self.holes));
+        self.lost_bytes += remove_filled_holes(self.recv_ack_no.unwrap(), &mut self.holes);
+        is_dup_ack
+    }
+}
+
 /**
  * Main connection tracking structure - one per connection.
  *
  * NOTE: everything in this struct will get serialized to a logfile on the connection's close
  * for analysis, so be thoughtful what you add here.
  */
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Getters)]
 pub struct Connection {
     pub connection_key: ConnectionKey,
     /// System clock
@@ -140,19 +281,8 @@ pub struct Connection {
     pub last_packet_time: DateTime<Utc>,
     // The time of the last packet used for evictions and statekeeping
     pub last_packet_instant: tokio::time::Instant,
-    pub local_syn: Option<OwnedParsedPacket>,
-    pub remote_syn: Option<OwnedParsedPacket>,
-    pub local_tcp_window: Option<TcpWindow>,
-    pub local_seq: Option<TcpSeq64>, // the most recent seq seen from local INCLUDING the TCP payload
-    pub local_ack: Option<TcpSeq64>,
-    pub remote_tcp_window: Option<TcpWindow>,
-    pub remote_ack: Option<TcpSeq64>,
     pub local_data: Option<OwnedParsedPacket>, // data sent for retransmits
     pub probe_round: Option<ProbeRound>,
-    pub local_fin_seq: Option<TcpSeq64>, // used for tracking connection close
-    pub remote_fin_seq: Option<TcpSeq64>,
-    pub remote_rst: bool,
-    pub local_rst: bool,
     pub probe_report_summary: ProbeReportSummary,
     pub user_annotation: Option<String>, // an human supplied comment on this connection
     pub user_agent: Option<String>, // when created via a web request, store the user-agent header
@@ -161,25 +291,16 @@ pub struct Connection {
     pub traffic_stats: BidirectionalStats,
     // which counter groups does this flow belong to, e.g., "google.com" and "chrome"
     pub aggregate_groups: HashSet<AggregateStatKind>,
+    local_tcp_state: Option<UnidirectionalTcpState>,
+    remote_tcp_state: Option<UnidirectionalTcpState>,
 }
 
 impl Connection {
     pub(crate) fn new(key: ConnectionKey, ts: DateTime<Utc>) -> Connection {
         Connection {
             connection_key: key.clone(),
-            local_syn: None,
-            remote_syn: None,
-            local_tcp_window: None,
-            local_seq: None,
-            local_ack: None,
-            remote_tcp_window: None,
-            remote_ack: None,
             local_data: None,
             probe_round: None,
-            local_fin_seq: None,
-            remote_fin_seq: None,
-            remote_rst: false,
-            local_rst: false,
             probe_report_summary: ProbeReportSummary::new(),
             user_annotation: None,
             user_agent: None,
@@ -194,6 +315,8 @@ impl Connection {
             )),
             // all connections are part of the connection tracker counter group
             aggregate_groups: HashSet::from([AggregateStatKind::ConnectionTracker]),
+            local_tcp_state: None,
+            remote_tcp_state: None,
         }
     }
 
@@ -214,11 +337,7 @@ impl Connection {
             .add_packet_with_time(src_is_local, packet.len as u64, packet.timestamp);
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
-                if src_is_local {
-                    self.update_tcp_local(&packet, tcp, prober_helper);
-                } else {
-                    self.update_tcp_remote(&packet, tcp);
-                }
+                self.update_tcp(src_is_local, &packet, tcp, prober_helper);
             }
             Some(TransportHeader::Icmpv4(icmp4)) => {
                 if src_is_local {
@@ -251,26 +370,6 @@ impl Connection {
                 );
             }
         }
-    }
-
-    fn local_seq64_and_update(&mut self, seq: u32) -> Option<TcpSeq64> {
-        if self.local_tcp_window.is_none() {
-            self.local_tcp_window = Some(TcpWindow::new(seq));
-        }
-        self.local_tcp_window
-            .as_mut()
-            .unwrap()
-            .seq64_and_update(seq)
-    }
-
-    fn remote_seq64_and_update(&mut self, seq: u32) -> Option<TcpSeq64> {
-        if self.remote_tcp_window.is_none() {
-            self.remote_tcp_window = Some(TcpWindow::new(seq));
-        }
-        self.remote_tcp_window
-            .as_mut()
-            .unwrap()
-            .seq64_and_update(seq)
     }
 
     /**
@@ -312,71 +411,119 @@ impl Connection {
         None
     }
 
-    pub(crate) fn update_tcp_local(
+    pub fn update_tcp(
         &mut self,
+        src_is_local: bool,
         packet: &OwnedParsedPacket,
         tcp: &TcpHeader,
         prober_helper: &mut ProberHelper,
     ) {
-        // NOTE: we can't just use packet.payload.len() b/c we might have a partial capture
-        let payload_len = match &packet.ip {
-            None => 0,
-            Some(IpHeader::Version4(ip4, _)) => {
-                match ip4
-                    .total_len()
-                    .checked_sub(ip4.header_len() as u16 + tcp.header_len())
-                {
-                    Some(x) => x,
-                    None => {
-                        warn!(
-                            "Malformed TCP packet with ip4.payload ({}) < ip4.header_len({}) + tcp.header_len ({}) :: {:?}",
-                            ip4.total_len(),
-                            ip4.header_len(),
-                            tcp.header_len(),
-                            &packet
-                    );
-                        0
+        let (state_opt, side) = if src_is_local {
+            (&mut self.local_tcp_state, ConnectionSide::Local)
+        } else {
+            (&mut self.remote_tcp_state, ConnectionSide::Remote)
+        };
+        let state = state_opt.get_or_insert_with(|| {
+            UnidirectionalTcpState::new(tcp.sequence_number, side, self.connection_key.clone())
+        });
+        state.process_pkt(packet, tcp);
+
+        // Handle outgoind probes, if needed
+        if src_is_local {
+            self.tcp_process_local_probe(packet, prober_helper);
+        }
+
+        // A valid ACK packet. Do ACK processing on the state for the other side.
+        if tcp.ack && !tcp.rst {
+            let (other_state, other_side) = if src_is_local {
+                (&mut self.remote_tcp_state, ConnectionSide::Remote)
+            } else {
+                (&mut self.local_tcp_state, ConnectionSide::Local)
+            };
+            let other_state = other_state.get_or_insert_with(|| {
+                UnidirectionalTcpState::new(
+                    tcp.acknowledgment_number,
+                    other_side,
+                    self.connection_key.clone(),
+                )
+            });
+            // TODO: do we need to use `tcp_paylod_len` instead of `payload.is_empty()`??
+            let is_dup_ack = other_state.process_rx_ack(packet.payload.is_empty(), tcp);
+            if is_dup_ack {
+                // The unwrap is safe. If `is_dup_ack` is true, than this segment's
+                // ack_no is in window and it's equal to `other_state.recv_ack_no`
+                let cur_pkt_ack = other_state.recv_ack_no.unwrap();
+
+                // TODO: we are re-extracting the SACK blocks from the packet (`process_rx_ack` already did it). Maybe
+                // consider returning it from process_rx_ack to cut down the double processing.
+                let sacks = other_state.extract_sacks(tcp);
+                if !sacks.is_empty() {
+                    // if there are more than 1 SACK block in the packet we assume it's not a probe response
+                    let sack = sacks.first().unwrap();
+                    // CRAZY: an out-of-sequence dupACK SHOULD contain a SACK option ala RFC2018, S4/page 5
+                    // check whether the ACK sequence is ahead of the SACK range - that tells us it's a probe!
+                    if sacks.len() == 1 && sack.right() <= cur_pkt_ack {
+                        // this is a dupACK/probe reply! the right - left indicates the probe id
+                        let probe_id = sack.bytes();
+                        if let Some(active_probe_round) = self.probe_round.as_mut() {
+                            if probe_id <= PROBE_MAX_TTL as u64 {
+                                // record the reply
+                                let probe_id = probe_id as u8; // safe because we just checked
+                                active_probe_round
+                                    .incoming_reply_timestamps
+                                    .entry(probe_id)
+                                    .or_default()
+                                    .insert(packet.clone());
+                            } else {
+                                debug!(
+                                "Looks like we got a dupACK but the probe_id is too big {} :: {:?}",
+                                probe_id, packet
+                            );
+                            }
+                        }
                     }
+                } else {
+                    // Tested againstt all major stacks - everyone supports SACK so we
+                    // don't need to handle the non-SACK case which can create noise
+                    // the the code in place for now in case it's needed again (?)
+                    //
+                    // no SelectiveAck option, so asume this is a probe reply
+                    // assume that inband ACK replies come from the highest TTL we sent
+                    // and work backwards for each reply we received, e.g.,
+                    // first reply is from TTL=max, second from TTL=max - 1, etc.
+                    // this is a bit of a cheat as we really should try to match the
+                    // reply to the actual outgoing probe that caused it, but there's not
+                    // enough into the in ACK to infer the probe that caused it.  Working
+                    // backwards adds some error to the RTT estimation, but it's on the
+                    // order of the sent_time(probe_k) vs. sent_time(probe_n) which
+                    // is extremely small (e.g., ~10 microseconds) because they are sent
+                    // quickly back-to-back
+                    /* if let Some(probe_id) = self.next_end_host_reply {
+                        if let Some(replies) = self.incoming_reply_timestamps.get_mut(&probe_id)
+                        {
+                            replies.insert(packet.clone());
+                        } else {
+                            self.incoming_reply_timestamps
+                                .insert(probe_id, HashSet::from([packet.clone()]));
+                        }
+                        // make sure the next probe goes in the next nearer TTL's slot
+                        if probe_id > 1 {
+                            self.next_end_host_reply = Some(probe_id - 1);
+                        }
+                    } else {
+                        warn!("Looks like we got a inband ACK reply without next_end_host_reply set!? : {:?}", self);
+                    } */
                 }
             }
-            Some(IpHeader::Version6(ip6, _)) => {
-                match ip6.payload_length.checked_sub(tcp.header_len()) {
-                    Some(x) => x,
-                    None => {
-                        warn!(
-                            "Malformed TCP packet with ip6.payload ({}) < tcp.header_len ({}) :: {:?}",
-                            ip6.payload_length,
-                            tcp.header_len(),
-                            &packet
-                        );
-                        0
-                    }
-                }
-            }
-        };
-        let cur_pkt_seq = match self.local_seq64_and_update(tcp.sequence_number) {
-            Some(seq) => seq,
-            None => {
-                warn!("Local seq number is out-of-window -- not processing packet further");
-                return;
-            }
-        };
-        self.local_seq = Some(cur_pkt_seq + payload_len as u64);
-        // record the SYN to see which TCP options are negotiated
-        if tcp.syn {
-            // TODO: what if we already have a syn
-            self.local_syn = Some(packet.clone()); // memcpy() but doesn't happen that much or with much data
         }
+    }
 
-        if tcp.rst {
-            self.local_rst = true;
-        }
-
-        // record how far the local side has acknowledged
-        if tcp.ack {
-            self.local_ack = self.remote_seq64_and_update(tcp.acknowledgment_number);
-        }
-
+    /// For packets sent by the local side: do any processing for probes
+    fn tcp_process_local_probe(
+        &mut self,
+        packet: &OwnedParsedPacket,
+        prober_helper: &mut ProberHelper,
+    ) {
         // did we send some payload?
         if !packet.payload.is_empty() {
             let first_time = self.local_data.is_none();
@@ -426,148 +573,22 @@ impl Connection {
                 }
             }
         }
-        if tcp.fin {
-            // FIN's "use" a sequence number as if they sent a byte of data
-            if let Some(fin_seq) = self.local_fin_seq {
-                if fin_seq != cur_pkt_seq {
-                    warn!(
-                        "Weird: got multiple local FIN seqnos: {} != {}",
-                        fin_seq, tcp.sequence_number
-                    );
-                }
-                // else it's just a duplicate packet
-            }
-            self.local_fin_seq = Some(cur_pkt_seq);
-        }
-        // TODO: look for outgoing selective acks (indicates packet loss)
-    }
-
-    fn update_tcp_remote(&mut self, packet: &OwnedParsedPacket, tcp: &TcpHeader) {
-        let cur_pkt_seq = match self.remote_seq64_and_update(tcp.sequence_number) {
-            Some(seq) => seq,
-            None => {
-                warn!("Remote seq number is out-of-window -- not processing packet further");
-                return;
-            }
-        };
-        if tcp.syn {
-            if self.remote_syn.is_some() {
-                warn!(
-                    "Weird - multiple SYNs on the same connection: {}",
-                    self.connection_key
-                );
-            }
-            self.remote_syn = Some(packet.clone()); // memcpy() but doesn't happen that much or with much data
-        }
-        // record how far the remote side has acknowledged; check for old acks for outstanding probes
-        // TODO: also make sure neither SYN or FIN flags are set as these can look like dupACKs if we're not careful
-        let cur_pkt_ack = if tcp.ack {
-            // Yes, we need the local_tcp_window here!
-            self.local_seq64_and_update(tcp.acknowledgment_number)
-        } else {
-            None
-        };
-        if let Some(cur_pkt_ack) = cur_pkt_ack {
-            // this is an ACK packet
-
-            if let Some(old_ack) = self.remote_ack {
-                // Is this ACK a duplicate ACK?
-                if old_ack == cur_pkt_ack
-                    && packet.payload.is_empty()
-                    && !tcp.syn
-                    && !tcp.fin
-                    && !tcp.rst
-                {
-                    let sacks = self.extract_sacks(self.local_tcp_window.as_ref().unwrap(), tcp);
-                    if !sacks.is_empty() {
-                        // if there are more than 1 SACK block in the packet we assume it's not a probe response
-                        let sack = sacks.first().unwrap();
-                        // CRAZY: an out-of-sequence dupACK SHOULD contain a SACK option ala RFC2018, S4/page 5
-                        // check whether the ACK sequence is ahead of the SACK range - that tells us it's a probe!
-                        if sacks.len() == 1 && sack.right() <= cur_pkt_ack {
-                            // this is a dupACK/probe reply! the right - left indicates the probe id
-                            let probe_id = sack.bytes();
-                            if let Some(active_probe_round) = self.probe_round.as_mut() {
-                                if probe_id <= PROBE_MAX_TTL as u64 {
-                                    // record the reply
-                                    let probe_id = probe_id as u8; // safe because we just checked
-                                    active_probe_round
-                                        .incoming_reply_timestamps
-                                        .entry(probe_id)
-                                        .or_default()
-                                        .insert(packet.clone());
-                                } else {
-                                    debug!("Looks like we got a dupACK but the probe_id is too big {} :: {:?}", probe_id, packet);
-                                }
-                            }
-                        }
-                    } else {
-                        // Tested againstt all major stacks - everyone supports SACK so we
-                        // don't need to handle the non-SACK case which can create noise
-                        // the the code in place for now in case it's needed again (?)
-                        //
-                        // no SelectiveAck option, so asume this is a probe reply
-                        // assume that inband ACK replies come from the highest TTL we sent
-                        // and work backwards for each reply we received, e.g.,
-                        // first reply is from TTL=max, second from TTL=max - 1, etc.
-                        // this is a bit of a cheat as we really should try to match the
-                        // reply to the actual outgoing probe that caused it, but there's not
-                        // enough into the in ACK to infer the probe that caused it.  Working
-                        // backwards adds some error to the RTT estimation, but it's on the
-                        // order of the sent_time(probe_k) vs. sent_time(probe_n) which
-                        // is extremely small (e.g., ~10 microseconds) because they are sent
-                        // quickly back-to-back
-                        /* if let Some(probe_id) = self.next_end_host_reply {
-                            if let Some(replies) = self.incoming_reply_timestamps.get_mut(&probe_id)
-                            {
-                                replies.insert(packet.clone());
-                            } else {
-                                self.incoming_reply_timestamps
-                                    .insert(probe_id, HashSet::from([packet.clone()]));
-                            }
-                            // make sure the next probe goes in the next nearer TTL's slot
-                            if probe_id > 1 {
-                                self.next_end_host_reply = Some(probe_id - 1);
-                            }
-                        } else {
-                            warn!("Looks like we got a inband ACK reply without next_end_host_reply set!? : {:?}", self);
-                        } */
-                    }
-                }
-            }
-            // Update the higest ACK seen from the remote side. Be careful
-            // not to go backwards
-            self.remote_ack = match self.remote_ack {
-                Some(old_ack) => Some(old_ack.max(cur_pkt_ack)),
-                None => Some(cur_pkt_ack),
-            };
-        }
-        if tcp.fin {
-            // FIN's "use" a sequence number as if they sent a byte of data
-            if let Some(fin_seq) = self.remote_fin_seq {
-                if fin_seq != cur_pkt_seq {
-                    warn!(
-                        "Weird: got multiple remote FIN seqnos: {} != {}",
-                        fin_seq, cur_pkt_seq
-                    );
-                }
-                // else it's just a duplicate packet
-            }
-            self.remote_fin_seq = Some(cur_pkt_seq);
-        }
-        if tcp.rst {
-            self.remote_rst = true;
-        }
-        // TODO: look for incoming selective acks (indicates packet loss)
     }
 
     // Check if the connection has started to be closed. I.e., we've received either a syn or a fin
     // from either side.
     pub(crate) fn close_has_started(&self) -> bool {
-        self.local_rst
-            || self.remote_rst
-            || self.local_fin_seq.is_some()
-            || self.remote_fin_seq.is_some()
+        // without these temporary local vars, the auto fomratter produces some pretty ugly code, so
+        // lets do it this was and keep things readable...
+        let local_close_started = self
+            .local_tcp_state
+            .as_ref()
+            .is_some_and(|s| s.rst_seen || s.fin_seq.is_some());
+        let remote_close_started = self
+            .remote_tcp_state
+            .as_ref()
+            .is_some_and(|s| s.rst_seen || s.fin_seq.is_some());
+        local_close_started || remote_close_started
     }
 
     /// is this the final ACK of the threeway close?
@@ -580,22 +601,30 @@ impl Connection {
     /// but the way None compares to Some(u32) breaks my brain so this is more
     /// typing but IMHO clearer
     pub(crate) fn is_four_way_close_done_or_rst(&self) -> bool {
-        if self.local_rst || self.remote_rst {
-            return true;
-        }
-        // has everyone sent their FIN's? (e.g. are we at least at step 3?)
-        if self.local_fin_seq.is_some()
-            && self.remote_fin_seq.is_some()
-            && self.local_ack.is_some()
-            && self.remote_ack.is_some()
-        {
-            // if we are at step 3, has everyone ACK'd everyone's FIN's?
-            if self.remote_ack > self.local_fin_seq && self.local_ack > self.remote_fin_seq {
-                // mark the connection closed
-                return true;
+        match (
+            self.remote_tcp_state.as_ref(),
+            self.local_tcp_state.as_ref(),
+        ) {
+            (Some(remote_state), Some(local_state)) => {
+                if remote_state.rst_seen || local_state.rst_seen {
+                    return true;
+                }
+                // has everyone sent their FIN's? (e.g. are we at least at step 3?)
+                if local_state.fin_seq.is_some()
+                    && local_state.recv_ack_no.is_some()
+                    && remote_state.fin_seq.is_some()
+                    && remote_state.recv_ack_no.is_some()
+                {
+                    // if we are at step 3, has everyone ACK'd everyone's FIN's?
+                    // if yes, mark as closed
+                    remote_state.recv_ack_no > remote_state.fin_seq
+                        && local_state.recv_ack_no > local_state.fin_seq
+                } else {
+                    false
+                }
             }
+            _ => false,
         }
-        false
     }
 
     fn update_icmp6_remote(
@@ -977,22 +1006,60 @@ impl Connection {
             four_way_close_done: self.is_four_way_close_done_or_rst(),
         }
     }
+}
 
+fn tcp_payload_len(packet: &OwnedParsedPacket, tcp: &TcpHeader) -> u16 {
+    // NOTE: we can't just use packet.payload.len() b/c we might have a partial capture
+    match &packet.ip {
+        None => 0,
+        Some(IpHeader::Version4(ip4, _)) => {
+            match ip4
+                .total_len()
+                .checked_sub(ip4.header_len() as u16 + tcp.header_len())
+            {
+                Some(x) => x,
+                None => {
+                    warn!(
+                                "Malformed TCP packet with ip4.payload ({}) < ip4.header_len({}) + tcp.header_len ({}) :: {:?}",
+                                ip4.total_len(),
+                                ip4.header_len(),
+                                tcp.header_len(),
+                                &packet
+                        );
+                    0
+                }
+            }
+        }
+        Some(IpHeader::Version6(ip6, _)) => {
+            match ip6.payload_length.checked_sub(tcp.header_len()) {
+                Some(x) => x,
+                None => {
+                    warn!(
+                        "Malformed TCP packet with ip6.payload ({}) < tcp.header_len ({}) :: {:?}",
+                        ip6.payload_length,
+                        tcp.header_len(),
+                        &packet
+                    );
+                    0
+                }
+            }
+        }
+    }
+}
+
+// TODO: merge with the other impl of UnidirectionalTcpState. Here for now so that the diff
+// doesn't show all of this removed and then added in a different place in the file...
+impl UnidirectionalTcpState {
     /// Helper, convert a raw sack block (tuple of u32 -- as we'd get it from a packet header) into
     /// 64bit seq numbers and if the SACK is valid (in the window and left < right), push it into the
     /// vector.
-    fn push_raw_sack_as_range(
-        &self,
-        sacks: &mut Vec<SeqRange>,
-        tcp_window: &TcpWindow,
-        raw_sack: (u32, u32),
-    ) {
-        if let Some(seq_range) = SeqRange::try_from_seq(tcp_window, raw_sack) {
+    fn push_raw_sack_as_range(&self, sacks: &mut Vec<SeqRange>, raw_sack: (u32, u32)) {
+        if let Some(seq_range) = SeqRange::try_from_seq(&self.tcp_window, raw_sack) {
             sacks.push(seq_range);
         } else {
             warn!(
                 "Invalid SACK {}: seq state: {:?}, sack block: {:?}",
-                self.connection_key, tcp_window, raw_sack
+                self.connection_key, self.tcp_window, raw_sack
             );
         }
     }
@@ -1000,19 +1067,17 @@ impl Connection {
     /// Take a TCP header and current TcpSeqState and extract any SACK blocks from the
     /// header. Invalid SACK blocks (out of window, right >= left) are discarded. The
     /// returned SACK blocks are in 64bit seq space but are neither sorted nor merged.
-    fn extract_sacks(&self, tcp_window: &TcpWindow, tcph: &TcpHeader) -> Vec<SeqRange> {
+    fn extract_sacks(&self, tcph: &TcpHeader) -> Vec<SeqRange> {
         assert!(tcph.ack);
-        assert!(!tcph.fin);
-        assert!(!tcph.syn);
         assert!(!tcph.rst);
         let sacks_opt: Option<Vec<SeqRange>> = tcph.options_iterator().find_map(|opt| {
             if let Ok(TcpOptionElement::SelectiveAcknowledgement(first_sack, other_sacks)) = opt {
                 let mut ret = Vec::new();
-                self.push_raw_sack_as_range(&mut ret, tcp_window, first_sack);
+                self.push_raw_sack_as_range(&mut ret, first_sack);
                 other_sacks
                     .into_iter()
                     .flatten()
-                    .for_each(|s| self.push_raw_sack_as_range(&mut ret, tcp_window, s));
+                    .for_each(|s| self.push_raw_sack_as_range(&mut ret, s));
                 Some(ret)
             } else {
                 None
@@ -1333,41 +1398,38 @@ pub mod test {
         assert_eq!(conn_meas.rx_stats.burst_pkt_rate.unwrap(), 2000.);
     }
 
-    fn mk_mock_connection() -> Connection {
-        Connection::new(
-            ConnectionKey {
-                local_ip: IpAddr::from_str("1.2.3.4").unwrap(),
-                remote_ip: IpAddr::from_str("5.6.7.8").unwrap(),
-                local_l4_port: 42,
-                remote_l4_port: 80,
-                ip_proto: IpProtocol::TCP,
-            },
-            Utc::now(),
-        )
+    fn mk_mock_connection_key() -> ConnectionKey {
+        ConnectionKey {
+            local_ip: IpAddr::from_str("1.2.3.4").unwrap(),
+            remote_ip: IpAddr::from_str("5.6.7.8").unwrap(),
+            local_l4_port: 42,
+            remote_l4_port: 80,
+            ip_proto: IpProtocol::TCP,
+        }
     }
 
     #[test]
     fn test_push_raw_sacks_as_range() {
-        let c = mk_mock_connection();
         let center = 0x8000_0000u32;
         let center64 = center as TcpSeq64;
-        let tss = TcpWindow::new(center);
+        let state =
+            UnidirectionalTcpState::new(center, ConnectionSide::Local, mk_mock_connection_key());
         let mut sacks = Vec::new();
 
         // outside the window ==> don't push
-        c.push_raw_sack_as_range(&mut sacks, &tss, (0, 1));
+        state.push_raw_sack_as_range(&mut sacks, (0, 1));
         assert_eq!(sacks, &[]);
 
         // left  > right ==> don't push
-        c.push_raw_sack_as_range(&mut sacks, &tss, (center + 10, center));
+        state.push_raw_sack_as_range(&mut sacks, (center + 10, center));
         assert_eq!(sacks, &[]);
 
-        c.push_raw_sack_as_range(&mut sacks, &tss, (center, center + 10));
+        state.push_raw_sack_as_range(&mut sacks, (center, center + 10));
         assert_eq!(
             sacks,
             &[SeqRange::try_from_seq64((center64, center64 + 10)).unwrap()]
         );
-        c.push_raw_sack_as_range(&mut sacks, &tss, (center + 20, center + 30));
+        state.push_raw_sack_as_range(&mut sacks, (center + 20, center + 30));
         assert_eq!(
             sacks,
             &[
@@ -1379,17 +1441,21 @@ pub mod test {
 
     #[test]
     fn test_extract_sacks() {
-        let c = mk_mock_connection();
         fn mkrange(left: TcpSeq64, right: TcpSeq64) -> SeqRange {
             SeqRange::try_from_seq64((left, right)).unwrap()
         }
         let initial_ack = 2_000_000_000;
         let initial_ack64 = initial_ack as TcpSeq64;
+        let state = UnidirectionalTcpState::new(
+            initial_ack,
+            ConnectionSide::Local,
+            mk_mock_connection_key(),
+        );
         let mut tcph = TcpHeader::new(34333, 80, 123, 65535);
         tcph.ack = true;
         tcph.acknowledgment_number = initial_ack;
-        let tss = TcpWindow::new(initial_ack);
-        assert_eq!(c.extract_sacks(&tss, &tcph), Vec::new());
+
+        assert_eq!(state.extract_sacks(&tcph), Vec::new());
 
         // single sack block
         tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
@@ -1398,7 +1464,7 @@ pub mod test {
         )])
         .unwrap();
         assert_eq!(
-            c.extract_sacks(&tss, &tcph),
+            state.extract_sacks(&tcph),
             vec![mkrange(initial_ack64 + 10, initial_ack64 + 20)]
         );
 
@@ -1409,7 +1475,7 @@ pub mod test {
         )])
         .unwrap();
         assert_eq!(
-            c.extract_sacks(&tss, &tcph),
+            state.extract_sacks(&tcph),
             vec![
                 mkrange(initial_ack64 + 10, initial_ack64 + 20),
                 mkrange(initial_ack64 + 30, initial_ack64 + 40)
@@ -1423,7 +1489,7 @@ pub mod test {
         )])
         .unwrap();
         assert_eq!(
-            c.extract_sacks(&tss, &tcph),
+            state.extract_sacks(&tcph),
             vec![mkrange(initial_ack64 + 30, initial_ack64 + 40)]
         );
 
@@ -1438,11 +1504,98 @@ pub mod test {
         )])
         .unwrap();
         assert_eq!(
-            c.extract_sacks(&tss, &tcph),
+            state.extract_sacks(&tcph),
             vec![
                 mkrange(initial_ack64 + 10, initial_ack64 + 20),
                 mkrange(initial_ack64 + 50, initial_ack64 + 60)
             ]
         );
+    }
+
+    #[test]
+    fn test_ack_processing() {
+        fn mkrange(left: TcpSeq64, right: TcpSeq64) -> SeqRange {
+            SeqRange::try_from_seq64((left, right)).unwrap()
+        }
+        let initial_ack = 2_000_000_000;
+        let initial_ack64 = initial_ack as TcpSeq64;
+        let mut state = UnidirectionalTcpState::new(
+            initial_ack,
+            ConnectionSide::Local,
+            mk_mock_connection_key(),
+        );
+        let mut tcph = TcpHeader::new(34333, 80, initial_ack - 1, 65535);
+        tcph.ack = true;
+        tcph.acknowledgment_number = initial_ack;
+
+        // check dup ack logic
+        assert!(!state.process_rx_ack(false, &tcph));
+        assert!(state.process_rx_ack(true, &tcph));
+        assert!(!state.process_rx_ack(false, &tcph));
+        tcph.fin = true;
+        assert!(!state.process_rx_ack(true, &tcph));
+        tcph.fin = false;
+
+        tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
+            (initial_ack + 10, initial_ack + 20),
+            [Some((initial_ack + 30, initial_ack + 40)), None, None],
+        )])
+        .unwrap();
+
+        assert!(state.process_rx_ack(true, &tcph));
+        assert_eq!(
+            state.holes,
+            vec![
+                mkrange(initial_ack64, initial_ack64 + 10),
+                mkrange(initial_ack64 + 20, initial_ack64 + 30)
+            ]
+        );
+        assert_eq!(state.lost_bytes, 0);
+
+        tcph.set_options(&[]).unwrap();
+
+        // ACK more data, partially fill hole
+        tcph.acknowledgment_number = initial_ack + 5;
+        assert!(!state.process_rx_ack(true, &tcph));
+        assert_eq!(
+            state.holes,
+            vec![
+                mkrange(initial_ack64 + 5, initial_ack64 + 10),
+                mkrange(initial_ack64 + 20, initial_ack64 + 30)
+            ]
+        );
+        assert_eq!(state.lost_bytes, 5);
+
+        // Send the SACK again. Nothing should happen
+        tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
+            (initial_ack + 10, initial_ack + 20),
+            [Some((initial_ack + 30, initial_ack + 40)), None, None],
+        )])
+        .unwrap();
+        assert!(state.process_rx_ack(true, &tcph));
+        assert_eq!(
+            state.holes,
+            vec![
+                mkrange(initial_ack64 + 5, initial_ack64 + 10),
+                mkrange(initial_ack64 + 20, initial_ack64 + 30)
+            ]
+        );
+        assert_eq!(state.lost_bytes, 5);
+        tcph.set_options(&[]).unwrap();
+
+        // ACK more data, completely fill first hole
+        tcph.acknowledgment_number = initial_ack + 10;
+        assert!(!state.process_rx_ack(true, &tcph));
+        assert_eq!(
+            state.holes,
+            vec![mkrange(initial_ack64 + 20, initial_ack64 + 30)]
+        );
+        assert_eq!(state.lost_bytes, 10);
+
+        // ACK more data, fill everything
+        tcph.acknowledgment_number = initial_ack + 50;
+        assert!(!state.process_rx_ack(true, &tcph));
+        assert_eq!(state.holes, &[]);
+        assert_eq!(state.lost_bytes, 20);
     }
 }
