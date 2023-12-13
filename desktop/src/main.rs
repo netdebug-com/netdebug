@@ -79,7 +79,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (process_tx, _join) = process_tracker.spawn(Duration::milliseconds(500)).await;
 
     // launch the DNS tracker; cache localhost entries
-    let (dns_tx, _) = DnsTracker::spawn(/* expiring cache capacity */ 4096).await;
+    let (dns_tx, _) = DnsTracker::spawn(
+        /* expiring cache capacity */ 4096,
+        counter_registries.new_registry("dns_tracker"),
+    )
+    .await;
     let dns_tx_clone = dns_tx.clone();
     let process_tx_clone = process_tx.clone();
     for ip in local_addrs.clone() {
