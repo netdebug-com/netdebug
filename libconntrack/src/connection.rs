@@ -915,7 +915,7 @@ pub mod test {
     use std::net::IpAddr;
     use std::str::FromStr;
 
-    use common_wasm::timeseries_stats::{ExportedStatRegistry, StatType, Units};
+    use common_wasm::timeseries_stats::ExportedStatRegistry;
 
     use super::*;
 
@@ -1115,7 +1115,9 @@ pub mod test {
 
     impl Helper {
         fn new(local_addrs: HashSet<IpAddr>) -> Helper {
-            let mut registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
+            use common_wasm::timeseries_stats::StatType;
+            use common_wasm::timeseries_stats::Units;
+            let registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
             let prober_txrx = mpsc::channel(4096);
             let prober_tx = prober_txrx.0.clone();
             Helper {
@@ -1144,8 +1146,8 @@ pub mod test {
     }
 
     fn mk_stat_handles() -> ConnectionStatHandles {
-        let mut registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
-        ConnectionStatHandles::new(&mut registry)
+        let registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
+        ConnectionStatHandles::new(&registry)
     }
 
     #[test]

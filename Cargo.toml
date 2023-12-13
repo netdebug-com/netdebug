@@ -20,3 +20,4 @@ resolver = "2"
 derive-getters = "0.3"
 thiserror = "1"
 typescript-type-def = { git = "https://github.com/gregor-netdebug/rust-typescript-type-def", branch = "ipaddr-support" }
+indexmap = { version="2", features = ["serde"] }

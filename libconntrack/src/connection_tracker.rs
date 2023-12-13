@@ -146,8 +146,8 @@ pub struct ConnectionStatHandles {
 }
 
 impl ConnectionStatHandles {
-    pub fn new(registry: &mut ExportedStatRegistry) -> Self {
-        let mut add_stat = |name: &str| registry.add_stat(name, Units::None, [StatType::COUNT]);
+    pub fn new(registry: &ExportedStatRegistry) -> Self {
+        let add_stat = |name: &str| registry.add_stat(name, Units::None, [StatType::COUNT]);
         ConnectionStatHandles {
             probe_rounds_sent: add_stat("probe_rounds_sent"),
             seq_out_of_window: add_stat("seq_out_of_window"),
@@ -211,7 +211,7 @@ impl<'a> ConnectionTracker<'a> {
         local_addrs: HashSet<IpAddr>,
         prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
         max_queue_size: usize,
-        mut stats: ExportedStatRegistry,
+        stats: ExportedStatRegistry,
         // do we ignore the rate limiter?
         // TODO: refactor this new() as a builder...
         unlimited_probes: bool,
@@ -240,7 +240,7 @@ impl<'a> ConnectionTracker<'a> {
                     MAX_BURST_RATE_TIME_WINDOW_MILLIS,
                 )),
             )]),
-            stat_handles: ConnectionStatHandles::new(&mut stats),
+            stat_handles: ConnectionStatHandles::new(&stats),
             sucessfully_parsed_packets: stats.add_stat(
                 "succesfully_parsed",
                 Units::Packets,

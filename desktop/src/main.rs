@@ -3,7 +3,7 @@ mod websocket;
 use chrono::Duration;
 use clap::Parser;
 use common_wasm::timeseries_stats::{
-    CounterProvider, CounterProviderWithTimeUpdate, ExportedStatRegistry, SuperRegistry,
+    CounterProvider, CounterProviderWithTimeUpdate, SharedExportedStatRegistries, SuperRegistry,
 };
 use libconntrack::topology_client::{self, TopologyServerSender};
 use libconntrack::{
@@ -14,14 +14,12 @@ use libconntrack::{
     utils::PerfMsgCheck,
 };
 use log::info;
-use std::{collections::HashSet, error::Error, net::IpAddr, sync::Arc};
+use std::{collections::HashSet, error::Error, net::IpAddr};
 use tokio::sync::mpsc::UnboundedSender;
 use warp::Filter;
 use websocket::websocket_handler;
 
 use libconntrack::topology_client::TopologyServerConnection;
-
-type SharedExportedStatRegistries = Arc<Vec<ExportedStatRegistry>>;
 
 /// Netdebug desktop
 #[derive(Parser, Debug, Clone)]
@@ -63,6 +61,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         args.topology_server_url.clone(),
         MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
         std::time::Duration::from_secs(30),
+        counter_registries.registries(),
         counter_registries.new_registry("topology_server_connection"),
     );
 
@@ -143,7 +142,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         dns_tx,
         process_tx,
         topology_client,
-        Arc::new(counter_registries.registries()),
+        counter_registries.registries(),
     ))
     .run(listen_addr)
     .await;
@@ -156,8 +155,8 @@ pub fn make_counter_routes(
     warp::path!("counters" / "get_counters").map(move || {
         // IndexMap iterates over entries in insertion order
         let mut map = indexmap::IndexMap::<String, u64>::new();
-        registries.update_time();
-        registries.append_counters(&mut map);
+        registries.lock().unwrap().update_time();
+        registries.lock().unwrap().append_counters(&mut map);
         serde_json::to_string_pretty(&map).unwrap()
     })
 }

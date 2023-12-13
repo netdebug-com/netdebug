@@ -87,7 +87,7 @@ impl<'a> DnsTracker<'a> {
     /// New DnsTracker
     pub fn new(
         expired_entries_capacity: usize,
-        mut stats_registry: ExportedStatRegistry,
+        stats_registry: ExportedStatRegistry,
     ) -> DnsTracker<'a> {
         DnsTracker {
             reverse_map: HashMap::new(),

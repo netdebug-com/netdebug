@@ -19,7 +19,7 @@ desktop_common = { path = "./desktop_common" }
 etherparse = { git = "https://github.com/robs-zeynet/etherparse", branch = "tcp_header" }
 futures = "0.3.28"
 futures-util = "0.3.28"
-indexmap = { version = "2", features = ["serde"] }
+indexmap = { workspace = true, features = ["serde"] }
 libconntrack = { path = "../libconntrack" }
 libconntrack-wasm = { path = "../libconntrack-wasm" }
 log = "0.4.18"

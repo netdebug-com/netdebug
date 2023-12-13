@@ -1,11 +1,10 @@
 use std::fs;
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use crate::context::{Context, LoginInfo, COOKIE_LOGIN_NAME};
 use crate::{desktop_websocket, webtest};
 use common_wasm::timeseries_stats::{
-    CounterProvider, CounterProviderWithTimeUpdate, ExportedStatRegistry,
+    CounterProvider, CounterProviderWithTimeUpdate, SharedExportedStatRegistries,
 };
 use log::debug;
 use warp::filters::log::{custom as warp_log, Info};
@@ -108,14 +107,14 @@ fn format_log_info(info: &warp::filters::log::Info<'_>) -> String {
 }
 
 pub fn make_counter_routes(
-    registries: Arc<Vec<ExportedStatRegistry>>,
+    registries: SharedExportedStatRegistries,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     // FIXME: Should we put this route behind the loging? Probably yes.
     warp::path!("counters" / "get_counters").map(move || {
         // IndexMap iterates over entries in insertion order
         let mut map = indexmap::IndexMap::<String, u64>::new();
-        registries.update_time();
-        registries.append_counters(&mut map);
+        registries.lock().unwrap().update_time();
+        registries.lock().unwrap().append_counters(&mut map);
         serde_json::to_string_pretty(&map).unwrap()
     })
 }

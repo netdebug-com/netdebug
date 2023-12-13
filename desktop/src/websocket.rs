@@ -1,11 +1,10 @@
 use std::{
     collections::HashMap,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
 use common_wasm::timeseries_stats::{
-    CounterProvider, CounterProviderWithTimeUpdate, ExportedStatRegistry,
+    CounterProvider, CounterProviderWithTimeUpdate, SharedExportedStatRegistries,
 };
 use futures_util::{
     stream::{SplitSink, SplitStream},
@@ -70,7 +69,7 @@ async fn handle_websocket_rx_messages(
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     _process_tracker: ProcessTrackerSender,
     topology_client: TopologyServerSender,
-    counter_registries: Arc<Vec<ExportedStatRegistry>>,
+    counter_registries: SharedExportedStatRegistries,
 ) {
     while let Some(msg_result) = ws_rx.next().await {
         match msg_result {
@@ -108,7 +107,7 @@ async fn handle_gui_to_server_msg(
     connection_tracker: &ConnectionTrackerSender,
     dns_tracker: &UnboundedSender<DnsTrackerMessage>,
     topology_client: &TopologyServerSender,
-    counter_registries: &Vec<ExportedStatRegistry>,
+    counter_registries: &SharedExportedStatRegistries,
 ) {
     let start = std::time::Instant::now();
     use GuiToDesktopMessages::*;
@@ -215,10 +214,12 @@ async fn handle_get_my_ip(
 
 async fn handle_dump_stat_counters(
     tx: &UnboundedSender<DesktopToGuiMessages>,
-    counter_registries: &Vec<ExportedStatRegistry>,
+    counter_registries: &SharedExportedStatRegistries,
 ) {
-    counter_registries.update_time();
-    let msg = DesktopToGuiMessages::DumpStatCountersReply(counter_registries.get_counter_map());
+    counter_registries.lock().unwrap().update_time();
+    let msg = DesktopToGuiMessages::DumpStatCountersReply(
+        counter_registries.lock().unwrap().get_counter_map(),
+    );
     if let Err(e) = tx.send(msg) {
         warn!("Failed to send the DNS cache back to the GUI!?: {}", e);
     }
@@ -346,7 +347,7 @@ pub async fn websocket_handler(
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: ProcessTrackerSender,
     topology_client: TopologyServerSender,
-    counter_registries: Arc<Vec<ExportedStatRegistry>>,
+    counter_registries: SharedExportedStatRegistries,
     ws: WebSocket,
 ) {
     info!("Got a websocket connection! ");
