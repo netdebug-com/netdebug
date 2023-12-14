@@ -357,12 +357,23 @@ impl<'a> ConnectionTracker<'a> {
                         self.connections.get_mut(&key).unwrap()
                     }
                 };
+                let pkt_timestamp = packet.timestamp; // copy before we move packet into connection.update()
+                let pkt_len = packet.len as u64; // copy before we move packet into connection.update()
+                let new_lost_bytes = connection.update(
+                    packet,
+                    &mut self.prober_helper,
+                    &key,
+                    src_is_local,
+                    &self.dns_tx,
+                    self.pcap_to_wall_delay.clone(),
+                );
                 for group in connection.aggregate_groups() {
                     if let Some(traffic_stats) = self.aggregate_traffic_stats.get_mut(group) {
-                        traffic_stats.add_packet_with_time(
+                        traffic_stats.add_packet_with_time(src_is_local, pkt_len, pkt_timestamp);
+                        traffic_stats.add_new_lost_bytes(
                             src_is_local,
-                            packet.len as u64,
-                            packet.timestamp,
+                            new_lost_bytes,
+                            pkt_timestamp,
                         );
                     } else {
                         warn!(
@@ -372,14 +383,6 @@ impl<'a> ConnectionTracker<'a> {
                         );
                     }
                 }
-                connection.update(
-                    packet,
-                    &mut self.prober_helper,
-                    &key,
-                    src_is_local,
-                    &self.dns_tx,
-                    self.pcap_to_wall_delay.clone(),
-                );
                 if needs_dns_and_process_lookup {
                     // only new connections that we don't immediately tear down need DNS lookups
                     if let Some(dns_tx) = self.dns_tx.as_mut() {
@@ -625,6 +628,7 @@ impl<'a> ConnectionTracker<'a> {
                     continue;
                 }
                 let m = connection.to_connection_measurements(Utc::now(), None);
+                let (rx_lost_bytes, tx_lost_bytes) = (m.rx_stats.lost_bytes, m.tx_stats.lost_bytes);
                 // if we've already seen this kind before
                 if let Some(entry) = entries.get_mut(&kind) {
                     // just add this connection to the list
@@ -635,7 +639,7 @@ impl<'a> ConnectionTracker<'a> {
                         entries.insert(
                             kind.clone(),
                             AggregateStatEntry {
-                                kind,
+                                kind: kind.clone(),
                                 bandwidth: bidir_bandwidth_to_chartjs(
                                     traffic_stats.as_bidir_bandwidth_history(now),
                                 ),
@@ -644,6 +648,15 @@ impl<'a> ConnectionTracker<'a> {
                             },
                         );
                     }
+                }
+                // Update the lost bytes in the summary stats with the lost bytes from this
+                // connection
+                let entry = entries.get_mut(&kind).unwrap();
+                if let Some(bytes) = rx_lost_bytes {
+                    *entry.summary.rx.lost_bytes.get_or_insert(0) += bytes;
+                }
+                if let Some(bytes) = tx_lost_bytes {
+                    *entry.summary.tx.lost_bytes.get_or_insert(0) += bytes;
                 }
             }
         }

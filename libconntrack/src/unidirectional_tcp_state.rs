@@ -44,13 +44,24 @@ pub struct UnidirectionalTcpState {
     rst_seen: bool,
     /// If this side has sent a FIN segment, the seq no of the FIN
     fin_seq: Option<TcpSeq64>,
+    /// The amount of lost bytes that have subsequently been ACKed. I.e., the other side first send SACKs
+    /// related to these missing bytes, then received a retransmit, and then ACKed them.
     lost_bytes: u64,
-    /// The list of current holes as compute from received SACKs. I.e., any hole between the highest
+    /// The list of current holes as computed from received SACKs. I.e., any hole between the highest
     /// ACK number received and any data indicated by SACK blocks. This Vec is sorted and the ranges
     /// are overlap free. Furthermore, when we advance `recv_ack_no` we remove any holes that have
-    /// been 'closed' and record the lost bytes in `lost_bytes`.
+    /// been 'closed'.
     holes: Vec<SeqRange>,
     side: ConnectionSide,
+}
+
+/// Returned by `UnidrectionalTcpState::process_rx_ack()`. Inidcates if the processed
+/// ACK was a duplicate ACK and if the ACK inidcated that any data was apparently lost
+/// (via SACK blocks)
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ProcessRxAckReturn {
+    pub is_dup_ack: bool,
+    pub new_lost_bytes: u64,
 }
 
 impl UnidirectionalTcpState {
@@ -126,7 +137,11 @@ impl UnidirectionalTcpState {
 
     /// Process an ACK segment sent by the other side. I.e., process anything the other
     /// side has ACK'ed
-    pub fn process_rx_ack(&mut self, pkt_payload_empty: bool, tcp: &TcpHeader) -> bool {
+    pub fn process_rx_ack(
+        &mut self,
+        pkt_payload_empty: bool,
+        tcp: &TcpHeader,
+    ) -> ProcessRxAckReturn {
         assert!(tcp.ack);
         assert!(!tcp.rst);
         let cur_pkt_ack = match self.tcp_window.seq64_and_update(tcp.acknowledgment_number) {
@@ -137,7 +152,10 @@ impl UnidirectionalTcpState {
                     "{}:{} ack number is out-of-window -- not processing packet further",
                     self.connection_key, self.side
                 );
-                return false;
+                return ProcessRxAckReturn {
+                    is_dup_ack: false,
+                    new_lost_bytes: 0,
+                };
             }
         };
         let is_dup_ack = match self.recv_ack_no {
@@ -153,10 +171,34 @@ impl UnidirectionalTcpState {
         // packet. In theory both should be the same unless there is some weird re-ordering going on. But
         // I think the highest received ACK number makes the most sense....
         let holes = get_holes_from_sack(self.recv_ack_no.unwrap(), self.extract_sacks(tcp));
+        // NOTE(1): in theory the following can happen: we get (assume recv_ack_no == 0)
+        //   1st segment: SACK(10, 20), SACK(30,40) --> we have holes 0--10, and 20--30
+        //   2nd segment: SACK(10,20), SACK(50-60), i.e., the SACK(30,40) is not send anymore. in this
+        //                case our update logic would treat this as a hole from 20 -- 50 and consider 30,40
+        //                lost.
+        // NOTE(2) `holes.extend() + sort_and_merge_ranges()` can only *increase* the amount of bytes in holes.
+        // E.g., consider the case that we have SACK(10,20) and SACK(30,40). We have a hole
+        // from (20--30). Next we receive another pkt with SACK(10,20), SACK(22,26), SACK(30,40).
+        // However, `self.holes` will still be `20--30` since that was the size of the largest hole covering
+        // that seq numer space.
+        let prev_bytes_in_holes = self.bytes_in_holes();
         self.holes.extend(holes);
         self.holes = sort_and_merge_ranges(std::mem::take(&mut self.holes));
-        self.lost_bytes += remove_filled_holes(self.recv_ack_no.unwrap(), &mut self.holes);
-        is_dup_ack
+        let new_bytes_in_holes = self.bytes_in_holes();
+        let new_lost_bytes = new_bytes_in_holes - prev_bytes_in_holes;
+        self.lost_bytes += new_lost_bytes;
+        // Note the order of operations. We remove filled holes first and only afterwards
+        // (in teh next call) will we `prev_bytes_in_holes`
+        remove_filled_holes(self.recv_ack_no.unwrap(), &mut self.holes);
+        ProcessRxAckReturn {
+            is_dup_ack,
+            new_lost_bytes,
+        }
+    }
+
+    // Return the number of bytes in holes
+    fn bytes_in_holes(&self) -> u64 {
+        self.holes.iter().fold(0, |acc, h| acc + h.bytes())
     }
 
     /// Helper, convert a raw sack block (tuple of u32 -- as we'd get it from a packet header) into
@@ -370,7 +412,7 @@ mod test {
     }
 
     #[test]
-    fn test_ack_processing() {
+    fn test_ack_processing_1() {
         fn mkrange(left: TcpSeq64, right: TcpSeq64) -> SeqRange {
             SeqRange::try_from_seq64((left, right)).unwrap()
         }
@@ -387,73 +429,249 @@ mod test {
         tcph.acknowledgment_number = initial_ack;
 
         // check dup ack logic
-        assert!(!state.process_rx_ack(false, &tcph));
-        assert!(state.process_rx_ack(true, &tcph));
-        assert!(!state.process_rx_ack(false, &tcph));
+        assert_eq!(
+            state.process_rx_ack(false, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: false,
+                new_lost_bytes: 0
+            }
+        );
+        assert_eq!(
+            state.process_rx_ack(true, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: true,
+                new_lost_bytes: 0
+            }
+        );
+        assert_eq!(
+            state.process_rx_ack(false, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: false,
+                new_lost_bytes: 0
+            }
+        );
         tcph.fin = true;
-        assert!(!state.process_rx_ack(true, &tcph));
+        assert_eq!(
+            state.process_rx_ack(true, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: false,
+                new_lost_bytes: 0
+            }
+        );
         tcph.fin = false;
 
         tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
             (initial_ack + 10, initial_ack + 20),
-            [Some((initial_ack + 30, initial_ack + 40)), None, None],
+            [Some((initial_ack + 40, initial_ack + 50)), None, None],
         )])
         .unwrap();
 
-        assert!(state.process_rx_ack(true, &tcph));
+        assert_eq!(
+            state.process_rx_ack(true, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: true,
+                new_lost_bytes: 30,
+            }
+        );
         assert_eq!(
             state.holes,
             vec![
                 mkrange(initial_ack64, initial_ack64 + 10),
-                mkrange(initial_ack64 + 20, initial_ack64 + 30)
+                mkrange(initial_ack64 + 20, initial_ack64 + 40)
             ]
         );
-        assert_eq!(state.lost_bytes, 0);
+        assert_eq!(state.lost_bytes, 30);
 
         tcph.set_options(&[]).unwrap();
 
         // ACK more data, partially fill hole
         tcph.acknowledgment_number = initial_ack + 5;
-        assert!(!state.process_rx_ack(true, &tcph));
+        assert_eq!(
+            state.process_rx_ack(true, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: false,
+                new_lost_bytes: 0
+            }
+        );
         assert_eq!(
             state.holes,
             vec![
                 mkrange(initial_ack64 + 5, initial_ack64 + 10),
-                mkrange(initial_ack64 + 20, initial_ack64 + 30)
+                mkrange(initial_ack64 + 20, initial_ack64 + 40)
             ]
         );
-        assert_eq!(state.lost_bytes, 5);
+        assert_eq!(state.lost_bytes, 30);
 
         // Send the SACK again. Nothing should happen
         tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
             (initial_ack + 10, initial_ack + 20),
-            [Some((initial_ack + 30, initial_ack + 40)), None, None],
+            [Some((initial_ack + 40, initial_ack + 50)), None, None],
         )])
         .unwrap();
-        assert!(state.process_rx_ack(true, &tcph));
+        assert_eq!(
+            state.process_rx_ack(true, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: true,
+                new_lost_bytes: 0
+            }
+        );
         assert_eq!(
             state.holes,
             vec![
                 mkrange(initial_ack64 + 5, initial_ack64 + 10),
-                mkrange(initial_ack64 + 20, initial_ack64 + 30)
+                mkrange(initial_ack64 + 20, initial_ack64 + 40)
             ]
         );
-        assert_eq!(state.lost_bytes, 5);
+        assert_eq!(state.lost_bytes, 30);
         tcph.set_options(&[]).unwrap();
 
         // ACK more data, completely fill first hole
-        tcph.acknowledgment_number = initial_ack + 10;
-        assert!(!state.process_rx_ack(true, &tcph));
+        tcph.acknowledgment_number = initial_ack + 20;
+        assert_eq!(
+            state.process_rx_ack(true, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: false,
+                new_lost_bytes: 0
+            }
+        );
         assert_eq!(
             state.holes,
-            vec![mkrange(initial_ack64 + 20, initial_ack64 + 30)]
+            vec![mkrange(initial_ack64 + 20, initial_ack64 + 40)]
         );
-        assert_eq!(state.lost_bytes, 10);
+        assert_eq!(state.lost_bytes, 30);
+
+        // extend SACK block
+        tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
+            (initial_ack + 35, initial_ack + 50),
+            [None, None, None],
+        )])
+        .unwrap();
+        assert_eq!(
+            state.process_rx_ack(true, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: true,
+                new_lost_bytes: 0
+            }
+        );
+        assert_eq!(
+            state.holes,
+            // NOTE, the hole is unchanged, since we originally saw a hole that big,
+            // even if it has not been partially filled in!
+            vec![mkrange(initial_ack64 + 20, initial_ack64 + 40),]
+        );
+        assert_eq!(state.lost_bytes, 30);
+        tcph.set_options(&[]).unwrap();
 
         // ACK more data, fill everything
         tcph.acknowledgment_number = initial_ack + 50;
-        assert!(!state.process_rx_ack(true, &tcph));
+        assert_eq!(
+            state.process_rx_ack(true, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: false,
+                new_lost_bytes: 0
+            }
+        );
         assert_eq!(state.holes, &[]);
-        assert_eq!(state.lost_bytes, 20);
+        assert_eq!(state.lost_bytes, 30);
+    }
+
+    #[test]
+    fn test_ack_processing_2() {
+        fn mkrange(left: TcpSeq64, right: TcpSeq64) -> SeqRange {
+            SeqRange::try_from_seq64((left, right)).unwrap()
+        }
+        let initial_ack = 2_000_000_000;
+        let initial_ack64 = initial_ack as TcpSeq64;
+        let mut state = UnidirectionalTcpState::new(
+            initial_ack,
+            ConnectionSide::Local,
+            mk_mock_connection_key(),
+            mk_stat_handles(),
+        );
+        let mut tcph = TcpHeader::new(34333, 80, initial_ack - 1, 65535);
+        tcph.ack = true;
+        tcph.acknowledgment_number = initial_ack;
+
+        assert_eq!(
+            state.process_rx_ack(true, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: false,
+                new_lost_bytes: 0
+            }
+        );
+
+        tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
+            (initial_ack + 10, initial_ack + 20),
+            [Some((initial_ack + 40, initial_ack + 50)), None, None],
+        )])
+        .unwrap();
+
+        assert_eq!(
+            state.process_rx_ack(true, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: true,
+                new_lost_bytes: 30,
+            }
+        );
+        assert_eq!(
+            state.holes,
+            vec![
+                mkrange(initial_ack64, initial_ack64 + 10),
+                mkrange(initial_ack64 + 20, initial_ack64 + 40)
+            ]
+        );
+        assert_eq!(state.lost_bytes, 30);
+
+        // Partiall fill some holes, create a new hole
+        tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
+            (initial_ack + 7, initial_ack + 8),
+            [
+                Some((initial_ack + 10, initial_ack + 20)),
+                Some((initial_ack + 40, initial_ack + 50)),
+                Some((initial_ack + 60, initial_ack + 70)),
+            ],
+        )])
+        .unwrap();
+        tcph.acknowledgment_number = initial_ack + 5;
+        assert_eq!(
+            state.process_rx_ack(true, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: false,
+                // Only the hole 50--60 is newly lost.
+                new_lost_bytes: 10,
+            }
+        );
+        assert_eq!(
+            state.holes,
+            vec![
+                // Even though, we've received a SACK(7,8) we don't change this hole size
+                // since we originally got a hole that big.node
+                mkrange(initial_ack64 + 5, initial_ack64 + 10),
+                mkrange(initial_ack64 + 20, initial_ack64 + 40),
+                mkrange(initial_ack64 + 50, initial_ack64 + 60),
+            ]
+        );
+        assert_eq!(state.lost_bytes, 40);
+        tcph.set_options(&[]).unwrap();
+
+        // ACK more data, fill everything and create a new hole
+        tcph.acknowledgment_number = initial_ack + 60;
+        tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
+            (initial_ack + 75, initial_ack + 85),
+            [None, None, None],
+        )])
+        .unwrap();
+        assert_eq!(
+            state.process_rx_ack(true, &tcph),
+            ProcessRxAckReturn {
+                is_dup_ack: false,
+                new_lost_bytes: 15,
+            }
+        );
+        assert_eq!(
+            state.holes,
+            &[mkrange(initial_ack64 + 60, initial_ack64 + 75)]
+        );
+        assert_eq!(state.lost_bytes, 55);
     }
 }
