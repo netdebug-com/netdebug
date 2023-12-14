@@ -53,6 +53,7 @@ libconntrack = { path = "../libconntrack" }
 libconntrack-wasm = { path = "../libconntrack-wasm" }
 log = "0.4.18"
 indexmap = { workspace = true, features = ["serde"] }
+influxdb = { version = "0.7.1", features = ["derive"] }
 itertools = "0.11.0"
 pcap = "1.1.0"
 pwhash = "1.0.0"
