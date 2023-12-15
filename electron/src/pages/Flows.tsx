@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { ConnectionMeasurements } from "../netdebug_types";
 import {
+  connIdString,
   dataGridDefaultSxProp,
   prettyPrintSiUnits,
   sortCmpWithNull,
@@ -123,6 +124,7 @@ const Flows: React.FC = () => {
           density="compact"
           columns={columns}
           rows={flowEntries}
+          getRowId={(row) => connIdString(row.key)}
           sx={{
             width: "100%",
             ...dataGridDefaultSxProp,

@@ -69,6 +69,9 @@ impl Display for ConnectionIdString {
 impl From<&ConnectionKey> for ConnectionIdString {
     fn from(value: &ConnectionKey) -> Self {
         ConnectionIdString {
+            // WARNING WARNING: This implemenation MUST match the implementation of in the UI
+            // WARNING WARNING: (`connIdString()` in utils.ts
+            // WARNING WARNING: It is used to identify connections between UI and desktop
             id: format!(
                 "{}#{}#{}#{}#{}",
                 value.ip_proto.to_wire(),

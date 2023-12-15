@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use typescript_type_def::TypeDef;
 
 use crate::traffic_stats::TrafficStatsSummary;
-use crate::{ConnectionIdString, ConnectionKey};
+use crate::ConnectionKey;
 
 /***
  * The `struct ConnectionMeasurements` contains only the derived connection state
@@ -19,13 +19,6 @@ use crate::{ConnectionIdString, ConnectionKey};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
 pub struct ConnectionMeasurements {
     pub key: ConnectionKey,
-    /// This is an opaque string representation of the ConnectionKey. It can be used
-    /// to uniquely identify a connection.
-    // the TypeDef documentation says it supports `serde(transparent)` but apparently that's not
-    // true (or at least not true when the type is wrapped in an option). Well, lets just enfore it
-    // with an annotation.
-    #[type_def(type_of = "Option<String>")]
-    pub id: Option<ConnectionIdString>,
     pub local_hostname: Option<String>,
     pub remote_hostname: Option<String>,
     pub probe_report_summary: ProbeReportSummary,

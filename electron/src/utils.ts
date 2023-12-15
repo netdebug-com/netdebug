@@ -2,7 +2,7 @@
 
 import { MutableRefObject } from "react";
 import { SxProps } from "@mui/material";
-import { ConnectionMeasurements } from "./netdebug_types";
+import { ConnectionKey, ConnectionMeasurements } from "./netdebug_types";
 
 // depending on our SLAs
 export function periodic_with_sla(
@@ -195,4 +195,60 @@ export function getConnKeyForDisplay(conn: ConnectionMeasurements) {
       ? conn.remote_hostname
       : `[${conn.key.remote_ip}]`;
   return `${conn.key.ip_proto} ${conn.key.local_l4_port} --> ${remote}:${conn.key.remote_l4_port}`;
+}
+
+// Helper function using TS's never type. If a call to this function is ever reachable,
+// TS will show a type error. Can be used for exhaustive switch statements.
+// https://medium.com/technogise/type-safe-and-exhaustive-switch-statements-aka-pattern-matching-in-typescript-e3febd433a7a
+export function neverReached(x: never) {
+  throw new Error("This will never be reached " + x);
+}
+
+// Convert a ConnectionKey into an opaque string representation.  This
+// allows to use the UI as a unique id (e.g., for react `key` fields) and it allows the UI
+// to send request for a particular connection or set of connections
+export function connIdString(key: ConnectionKey): string {
+  // WARNING WARNING: This implemenation MUST match the implementation of
+  // WARNING WARNING: ConnectionIdString::from<ConnectionKey> in rust (connection_key.rs)
+  // WARNING WARNING: It is used to identify connections between UI and desktop
+
+  // Ok, using TS's never type to make sure we exhaustively cover all cases of IpProtocol.
+  let proto = 0;
+  if (typeof key.ip_proto == "string") {
+    switch (key.ip_proto) {
+      case "ICMP":
+        proto = 1;
+        break;
+      case "TCP":
+        proto = 6;
+        break;
+      case "UDP":
+        proto = 17;
+        break;
+      case "ICMP6":
+        proto = 58;
+        break;
+      default:
+        // If there's a new string variant added, the following line
+        // show a type error
+        neverReached(key.ip_proto);
+    }
+  } else if ("Other" in key.ip_proto) {
+    // Because of crappy why serde encodes rust enums by default, we need to jump
+    // through this hoop with the "in" check. And we can't easily change IpProtocol
+    // to be adjacently tagged since we've already stored a bunch :-(
+    proto = key.ip_proto.Other;
+  } else {
+    // If there's a new non-string variant added, the following line
+    // show a type error
+    neverReached(key.ip_proto);
+  }
+
+  return [
+    proto,
+    key.local_ip,
+    key.local_l4_port,
+    key.remote_ip,
+    key.remote_l4_port,
+  ].join("#");
 }
