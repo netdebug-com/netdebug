@@ -21,7 +21,7 @@
 
 1. Create the 'desktop_counters' table with the schema from `RemoteDBClient::create_table_schema()`, e.g., :
     ```
-    CREATE TABLE desktop_counters ( counter VARCHAR(256), value BIGINT, os VARCHAR(128), version INT, source VARCHAR(256), time TIMESTAMPTZ);
+    CREATE TABLE desktop_counters ( counter TEXT, value BIGINT, os TEXT, version TEXT, source TEXT, time TIMESTAMPTZ);
     ```
 2. Mark it as a 'hypertable' which tells the backend to treat it with timeseries optimizations:
     ```

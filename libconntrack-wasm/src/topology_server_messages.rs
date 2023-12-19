@@ -20,6 +20,8 @@ pub enum DesktopToTopologyServer {
     PushCounters {
         timestamp: DateTime<Utc>,
         counters: IndexMap<String, u64>,
+        os: String,
+        version: String,
     },
 }
 

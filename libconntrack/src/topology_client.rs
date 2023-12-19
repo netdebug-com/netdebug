@@ -4,6 +4,7 @@ use std::time::Duration;
 use crate::send_or_log_async;
 use crate::utils::PerfMsgCheck;
 use chrono::Utc;
+use common_wasm::get_git_hash_version;
 use common_wasm::timeseries_stats::{
     CounterProvider, CounterProviderWithTimeUpdate, ExportedStatRegistry,
     SharedExportedStatRegistries, StatHandle, StatType, Units,
@@ -405,6 +406,8 @@ impl TopologyServerConnection {
                     .send(PerfMsgCheck::new(DesktopToTopologyServer::PushCounters {
                         timestamp: Utc::now(),
                         counters,
+                        os: std::env::consts::OS.to_string(),
+                        version: get_git_hash_version(),
                     }))
                     .await
                 {
