@@ -54,7 +54,9 @@ libconntrack-wasm = { path = "../libconntrack-wasm" }
 log = "0.4.18"
 indexmap = { workspace = true, features = ["serde"] }
 itertools = "0.11.0"
+native-tls = "0.2"
 pcap = "1.1.0"
+postgres-native-tls = "0.5"
 pwhash = "1.0.0"
 rand = "0.8.5"
 rusqlite = { version = "0.29.0", features = ["bundled", "blob"] }

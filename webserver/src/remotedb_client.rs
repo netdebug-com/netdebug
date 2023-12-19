@@ -41,6 +41,8 @@ pub struct RemoteDBClient {
 ///     time DATE);
 const COUNTERS_DB_NAME: &str = "desktop_counters";
 const INITIAL_RETRY_TIME_MS: u64 = 100;
+// Linux root cert db is /etc/ssl/certs/ca-certificates.crt, at least on Ubuntu
+const LINUX_ROOT_CERT_FILE: &str = "/etc/ssl/certs/ca-certificates.crt";
 
 pub type RemoteDBClientSender = tokio::sync::mpsc::Sender<PerfMsgCheck<RemoteDBClientMessages>>;
 pub type RemoteDBClientReceiver = tokio::sync::mpsc::Receiver<PerfMsgCheck<RemoteDBClientMessages>>;
@@ -68,7 +70,7 @@ impl RemoteDBClient {
             error!("Failed to read timescaledb_auth: {}", auth_file.display());
             e
         })?;
-        let url = format!("postgres://tsdbadmin:{}@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require", auth_token);
+        let url = format!("postgres://tsdbadmin:{}@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require", auth_token.trim());
         let url_no_auth = format!("postgres://tsdbadmin:{}@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require", "XXXXXXX");
 
         let remote_db_client = RemoteDBClient {
@@ -86,7 +88,7 @@ impl RemoteDBClient {
             counters_table_name: COUNTERS_DB_NAME.to_string(),
         };
         tokio::spawn(async move {
-            remote_db_client.rx_loop().await;
+            remote_db_client.rx_loop().await.unwrap();
         });
         Ok(tx)
     }
@@ -95,24 +97,33 @@ impl RemoteDBClient {
         self.tx.clone()
     }
 
-    async fn rx_loop(mut self) {
+    async fn rx_loop(mut self) -> Result<(), Box<dyn Error>> {
         loop {
-            // TODO!  Add TLS support in next diff
-            // Linux root cert db is /etc/ssl/certs/ca-certificates.crt
             info!("Trying to connect to database server: {}", self.url_no_auth);
-            let (client, connection) =
-                match tokio_postgres::connect(&self.url, tokio_postgres::NoTls).await {
-                    Ok((client, connection)) => (client, connection),
-                    Err(e) => {
-                        self.retry_time = std::cmp::min(self.retry_time * 2, self.retry_time_max);
-                        warn!(
+            let cert = std::fs::read(LINUX_ROOT_CERT_FILE).map_err(|e| {
+                format!(
+                    "Couldn't find Tls Root Cert file {} :: {}",
+                    LINUX_ROOT_CERT_FILE, e
+                )
+            })?;
+            let cert = native_tls::Certificate::from_pem(&cert)?;
+            let connector = native_tls::TlsConnector::builder()
+                .add_root_certificate(cert)
+                .build()?;
+            let connector = postgres_native_tls::MakeTlsConnector::new(connector);
+
+            let (client, connection) = match tokio_postgres::connect(&self.url, connector).await {
+                Ok((client, connection)) => (client, connection),
+                Err(e) => {
+                    self.retry_time = std::cmp::min(self.retry_time * 2, self.retry_time_max);
+                    warn!(
                         "Failed to connect to postgres server {} - retrying in {:?} -- error {}",
                         self.url_no_auth, self.retry_time, e
                     );
-                        tokio::time::sleep(self.retry_time).await;
-                        continue;
-                    }
-                };
+                    tokio::time::sleep(self.retry_time).await;
+                    continue;
+                }
+            };
             // successful connect, reset retry timer
             self.retry_time = Duration::from_millis(INITIAL_RETRY_TIME_MS);
 

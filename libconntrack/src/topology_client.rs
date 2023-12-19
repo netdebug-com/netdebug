@@ -319,6 +319,7 @@ impl TopologyServerConnection {
                     .await
                 {
                     warn!("Tried to send to the TopologyServer {}, but got {}", url, e);
+                    break;
                 }
             }
             info!("TopologyServer: ws_writer exiting cleanly (!? should never happen?)");
