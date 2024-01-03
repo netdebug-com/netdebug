@@ -228,6 +228,9 @@ impl RemoteDBClient {
                 .query(&statement, &[c, &v_i64, &source, &time, &os, &version])
                 .await?;
         }
+        // NOTE: if we hit an error in the above loop and never get here, that's ok b/c we'll
+        // need to tear down the client connection and restart it which the calling code does
+        // anyway
         client.execute("COMMIT", &[]).await?;
         Ok(())
     }
