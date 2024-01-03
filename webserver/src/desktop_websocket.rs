@@ -9,11 +9,14 @@ use libconntrack::{
 use libconntrack_wasm::topology_server_messages::{
     DesktopToTopologyServer, TopologyServerToDesktop,
 };
-use log::{info, warn};
+use log::{debug, info, warn};
 use tokio::sync::mpsc::{channel, Sender};
 use warp::filters::ws::{self, Message, WebSocket};
 
-use crate::context::Context;
+use crate::{
+    context::Context,
+    remotedb_client::{RemoteDBClientMessages, RemoteDBClientSender},
+};
 
 const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 4096;
 pub async fn handle_desktop_websocket(
@@ -26,7 +29,10 @@ pub async fn handle_desktop_websocket(
     info!("DesktopWebsocket connection from {}", addr);
     let (ws_tx, mut ws_rx) = websocket.split();
     let ws_tx = spawn_websocket_writer(ws_tx, DEFAULT_CHANNEL_BUFFER_SIZE, addr.to_string()).await;
-    let topology_server = context.read().await.topology_server.clone();
+    let (topology_server, remotedb_client) = {
+        let lock = context.read().await;
+        (lock.topology_server.clone(), lock.remotedb_client.clone())
+    };
     /*
      * Unwrap the layering here:
      * 1. WebSockets has it's own Message Type
@@ -45,8 +51,15 @@ pub async fn handle_desktop_websocket(
                 };
                 match serde_json::from_str(json_msg) {
                     Ok(msg) => {
-                        handle_desktop_message(&topology_server, msg, &ws_tx, &user_agent, &addr)
-                            .await;
+                        handle_desktop_message(
+                            &topology_server,
+                            &remotedb_client,
+                            msg,
+                            &ws_tx,
+                            &user_agent,
+                            &addr,
+                        )
+                        .await;
                     }
                     Err(e) => {
                         warn!("Failed to parse json message {}", e);
@@ -61,6 +74,7 @@ pub async fn handle_desktop_websocket(
 
 async fn handle_desktop_message(
     topology_server: &TopologyServerSender,
+    remotedb_client: &RemoteDBClientSender,
     msg: DesktopToTopologyServer,
     ws_tx: &Sender<TopologyServerToDesktop>,
     user_agent: &str,
@@ -71,29 +85,47 @@ async fn handle_desktop_message(
         Hello => handle_hello(ws_tx, user_agent, addr).await,
         StoreConnectionMeasurement {
             connection_measurements: connection_measurement,
-        } => handle_store(connection_measurement, topology_server).await,
+        } => handle_store_measurements(connection_measurement, topology_server).await,
         InferCongestion {
             connection_measurements,
         } => handle_infer_congestion(ws_tx, connection_measurements, topology_server).await,
         PushCounters {
             timestamp,
             counters,
-        } => handle_push_counters(ws_tx, timestamp, counters, addr).await,
+            os,
+            version,
+        } => handle_push_counters(remotedb_client, timestamp, counters, addr, os, version).await,
     }
 }
 
 async fn handle_push_counters(
-    _ws_tx: &Sender<TopologyServerToDesktop>,
+    remotedb_client: &RemoteDBClientSender,
     timestamp: chrono::prelude::DateTime<chrono::prelude::Utc>,
     counters: indexmap::IndexMap<String, u64>,
     addr: &SocketAddr,
+    os: String,
+    version: String,
 ) {
-    info!(
-        "Got {} counters from {}  at {} - TODO - store them!",
+    debug!(
+        "Got {} counters from {}  at {} - OS {} version {} : TODO - store them!",
         counters.len(),
         addr,
-        timestamp
+        timestamp,
+        os,
+        version
     );
+    send_or_log_async!(
+        remotedb_client,
+        "handle_push_counters",
+        RemoteDBClientMessages::StoreCounters {
+            counters,
+            source: addr.to_string(), // TODO: replace this with an obfuscated client identifier!
+            time: timestamp,
+            os,
+            version
+        }
+    )
+    .await;
 }
 
 async fn handle_infer_congestion(
@@ -135,7 +167,7 @@ async fn handle_infer_congestion(
 /**
  * Just forward on to the TopologyServer for storage
  */
-async fn handle_store(
+async fn handle_store_measurements(
     connection_measurements: Box<libconntrack_wasm::ConnectionMeasurements>,
     topology_server: &TopologyServerSender,
 ) {

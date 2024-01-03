@@ -1,4 +1,6 @@
-use std::{collections::HashSet, error::Error, net::IpAddr, str::FromStr, sync::Arc};
+use std::{
+    collections::HashSet, error::Error, net::IpAddr, str::FromStr, sync::Arc, time::Duration,
+};
 
 use clap::Parser;
 use common_wasm::timeseries_stats::{SharedExportedStatRegistries, SuperRegistry};
@@ -15,7 +17,10 @@ use libconntrack::{
     topology_client::TopologyServerSender,
 };
 
-use crate::topology_server;
+use crate::{
+    remotedb_client::{RemoteDBClient, RemoteDBClientSender},
+    topology_server,
+};
 
 // All of the web server state that's maintained across
 // parallel threads.  This will be wrapped in an
@@ -35,6 +40,7 @@ pub struct WebServerContext {
     pub connection_tracker: ConnectionTrackerSender,
     pub topology_server: TopologyServerSender,
     pub counter_registries: SharedExportedStatRegistries,
+    pub remotedb_client: RemoteDBClientSender,
 }
 
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
@@ -90,6 +96,13 @@ impl WebServerContext {
         let (tx, rx) = tokio::sync::mpsc::channel(MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
         let (topology_server_tx, topology_server_rx) =
             tokio::sync::mpsc::channel(MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE);
+        let remotedb_client = RemoteDBClient::spawn(
+            args.timescaledb_auth_file.clone(),
+            MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE,
+            Duration::from_secs(5),
+            counter_registries.new_registry("remotedb_client"),
+        )
+        .unwrap();
         let context = WebServerContext {
             user_db: UserDb::new(),
             html_root: args.html_root.clone(),
@@ -101,6 +114,7 @@ impl WebServerContext {
             topology_server: topology_server_tx.clone(),
             max_connections_per_tracker: args.max_connections_per_tracker,
             counter_registries: counter_registries.registries(),
+            remotedb_client,
         };
 
         // TODO Spawn lots for multi-processing
@@ -199,6 +213,10 @@ pub struct Args {
     /// The SQLite db path, e.g., a filename
     #[arg(long, default_value = "./connections.sqlite3")]
     pub topology_server_db_path: String,
+
+    /// The path to the TimescaleDB Cloud service auth credential
+    #[arg(long, default_value = ".timescaledb_auth")]
+    pub timescaledb_auth_file: String,
 }
 
 pub type Context = Arc<RwLock<WebServerContext>>;
@@ -281,9 +299,10 @@ pub mod test {
     pub fn make_test_context() -> Context {
         let test_pass = TEST_PASSWD;
         let test_hash = UserDb::new_password(test_pass).unwrap();
-        // create a connection tracker to nothing for the test context
-        let (tx, _rx) = tokio::sync::mpsc::channel(128);
+        // create trackers but don't connect them to anything...
+        let (connection_tracker_tx, _rx) = tokio::sync::mpsc::channel(128);
         let (topology_server_tx, _rx) = tokio::sync::mpsc::channel(128);
+        let (remotedb_client, _rx) = tokio::sync::mpsc::channel(128);
         let counter_registries = SuperRegistry::new(Instant::now()).registries();
         Arc::new(RwLock::new(WebServerContext {
             user_db: UserDb::testing_demo(test_hash),
@@ -292,10 +311,11 @@ pub mod test {
             pcap_device: libconntrack::pcap::lookup_egress_device().unwrap(),
             local_tcp_listen_port: 3030,
             local_ips: HashSet::new(),
-            connection_tracker: tx,
+            connection_tracker: connection_tracker_tx,
             topology_server: topology_server_tx,
             max_connections_per_tracker: 4096,
             counter_registries,
+            remotedb_client,
         }))
     }
 }

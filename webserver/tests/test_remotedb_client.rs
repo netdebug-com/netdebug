@@ -1,4 +1,5 @@
 use chrono::Utc;
+use common_wasm::get_git_hash_version;
 use indexmap::IndexMap;
 use libwebserver::remotedb_client::RemoteDBClient;
 use pg_embed::pg_fetch::{PgFetchSettings, PG_V13};
@@ -24,7 +25,14 @@ async fn test_remotedb_client() {
     let alice_counters =
         IndexMap::from_iter([("count1".to_string(), 2), ("count2".to_string(), 43)]);
     remotedb_client
-        .handle_store_counters(&client, alice_counters, "alice".to_string(), now)
+        .handle_store_counters(
+            &client,
+            alice_counters,
+            "alice".to_string(),
+            now,
+            "testOS".to_string(),
+            get_git_hash_version(),
+        )
         .await
         .unwrap();
     let rows = remotedb_client
@@ -34,7 +42,14 @@ async fn test_remotedb_client() {
     assert_eq!(rows, 2);
     let bob_counters = IndexMap::from_iter([("count1".to_string(), 2), ("count2".to_string(), 43)]);
     remotedb_client
-        .handle_store_counters(&client, bob_counters, "bob".to_string(), now)
+        .handle_store_counters(
+            &client,
+            bob_counters,
+            "bob".to_string(),
+            now,
+            "testOS2".to_string(),
+            get_git_hash_version(),
+        )
         .await
         .unwrap();
     let rows = remotedb_client

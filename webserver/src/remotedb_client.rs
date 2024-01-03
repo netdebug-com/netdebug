@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration, StatType, Units};
 use indexmap::IndexMap;
 use libconntrack::utils::PerfMsgCheck;
-use log::{info, warn};
+use log::{error, info, warn};
 use tokio::sync::mpsc::channel;
 use tokio_postgres::Client;
 
@@ -49,12 +49,14 @@ pub enum RemoteDBClientMessages {
     StoreCounters {
         counters: IndexMap<String, u64>,
         source: String,
+        os: String,
+        version: String,
         time: DateTime<Utc>,
     },
 }
 
 impl RemoteDBClient {
-    pub async fn spawn(
+    pub fn spawn(
         auth_file: String,
         max_queue: usize,
         retry_time_max: tokio::time::Duration,
@@ -62,7 +64,10 @@ impl RemoteDBClient {
     ) -> Result<RemoteDBClientSender, Box<dyn Error>> {
         let (tx, rx) = channel(max_queue);
         let auth_file = RemoteDBClient::get_fully_qualified_auth_file(auth_file);
-        let auth_token = std::fs::read_to_string(auth_file)?;
+        let auth_token = std::fs::read_to_string(auth_file.clone()).map_err(|e| {
+            error!("Failed to read timescaledb_auth: {}", auth_file.display());
+            e
+        })?;
         let url = format!("postgres://tsdbadmin:{}@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require", auth_token);
         let url_no_auth = format!("postgres://tsdbadmin:{}@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require", "XXXXXXX");
 
@@ -131,8 +136,10 @@ impl RemoteDBClient {
                         counters,
                         source,
                         time,
+                        os,
+                        version,
                     } => {
-                        self.handle_store_counters(&client, counters, source, time)
+                        self.handle_store_counters(&client, counters, source, time, os, version)
                             .await
                     }
                 } {
@@ -168,6 +175,8 @@ impl RemoteDBClient {
         counters: IndexMap<String, u64>,
         source: String,
         time: DateTime<Utc>,
+        os: String,
+        version: String,
     ) -> Result<(), tokio_postgres::error::Error> {
         /* GRRR - the more efficient 'COPY {table} FROM STDIN
          * doesn't compile... can't figure out why
@@ -197,7 +206,7 @@ impl RemoteDBClient {
         client.execute("BEGIN", &[]).await?;
         let statement = client
             .prepare(&format!(
-                "INSERT INTO {} (counter, value, source, time) VALUES ($1, $2, $3, $4)",
+                "INSERT INTO {} (counter, value, source, time, os, version) VALUES ($1, $2, $3, $4, $5, $6)",
                 self.counters_table_name
             ))
             .await?;
@@ -205,7 +214,7 @@ impl RemoteDBClient {
             let v_i64 = *v as i64; // TODO: change this conversion once we move to i64 counters
                                    // NOTE: converting DateTime<UTC> to postgres requires the magical 'with-chrono-0_4' feature
             client
-                .query(&statement, &[c, &v_i64, &source, &time])
+                .query(&statement, &[c, &v_i64, &source, &time, &os, &version])
                 .await?;
         }
         client.execute("COMMIT", &[]).await?;
@@ -231,11 +240,11 @@ impl RemoteDBClient {
             .query(
                 format!(
                     "CREATE TABLE {} ( \
-                        counter VARCHAR(256), \
+                        counter TEXT, \
                         value BIGINT, \
-                        os VARCHAR(128), \
-                        version INT, \
-                        source VARCHAR(256), \
+                        os TEXT, \
+                        version TEXT, \
+                        source TEXT, \
                         time TIMESTAMPTZ)",
                     self.counters_table_name
                 )
