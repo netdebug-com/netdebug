@@ -844,7 +844,7 @@ mod test {
     fn verify_windows_load_os_client_cache() {
         use std::fs::File;
 
-        let mut dns_tracker = DnsTracker::new(10);
+        let mut dns_tracker = DnsTracker::new(10, mk_stats_registry());
         let input = File::open(test_dir(
             "libconntrack",
             "tests/windows_get_dnsclientcache.txt",
