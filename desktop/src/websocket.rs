@@ -16,6 +16,7 @@ use libconntrack::{
     perf_check,
     process_tracker::ProcessTrackerSender,
     send_or_log_async, send_or_log_sync,
+    system_tracker::SystemTrackerSender,
     utils::PerfMsgCheck,
 };
 use libconntrack_wasm::{bidir_bandwidth_to_chartjs, topology_server_messages::CongestionSummary};
@@ -62,6 +63,7 @@ pub async fn websocket_sender(
  * Loop until closed, reading websocket GuiToServer messages off of the wire
  * (after converting from JSON) and dispatch to the relevant handlers.
  */
+#[allow(clippy::too_many_arguments)] // Who cares what the @(*@*(#$& paperclip thinks...
 async fn handle_websocket_rx_messages(
     mut ws_rx: SplitStream<WebSocket>,
     tx: UnboundedSender<DesktopToGuiMessages>,
@@ -69,6 +71,7 @@ async fn handle_websocket_rx_messages(
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     _process_tracker: ProcessTrackerSender,
     topology_client: TopologyServerSender,
+    system_tracker: SystemTrackerSender,
     counter_registries: SharedExportedStatRegistries,
 ) {
     while let Some(msg_result) = ws_rx.next().await {
@@ -84,6 +87,7 @@ async fn handle_websocket_rx_messages(
                                 &connection_tracker,
                                 &dns_tracker,
                                 &topology_client,
+                                &system_tracker,
                                 &counter_registries,
                             )
                             .await
@@ -107,6 +111,7 @@ async fn handle_gui_to_server_msg(
     connection_tracker: &ConnectionTrackerSender,
     dns_tracker: &UnboundedSender<DnsTrackerMessage>,
     topology_client: &TopologyServerSender,
+    system_tracker: &SystemTrackerSender,
     counter_registries: &SharedExportedStatRegistries,
 ) {
     let start = std::time::Instant::now();
@@ -126,8 +131,35 @@ async fn handle_gui_to_server_msg(
         CongestedLinksRequest => {
             handle_congested_links_request(tx, topology_client, connection_tracker).await
         }
+        DumpSystemNetworkHistory => handle_system_network_history(tx, system_tracker).await,
     }
     perf_check!("process gui message", start, Duration::from_millis(200));
+}
+
+async fn handle_system_network_history(
+    tx: &UnboundedSender<DesktopToGuiMessages>,
+    system_tracker: &mpsc::Sender<PerfMsgCheck<libconntrack::system_tracker::SystemTrackerMessage>>,
+) {
+    let (reply_tx, mut reply_rx) = channel(10);
+    send_or_log_async!(
+        system_tracker,
+        "handle_system_network_history",
+        libconntrack::system_tracker::SystemTrackerMessage::GetDebugInfo { tx: reply_tx }
+    )
+    .await;
+    let network_interface_history = match reply_rx.recv().await {
+        Some(system_debug_info) => system_debug_info.historic_network,
+        None => {
+            warn!("Got a None reply from the SystemTracker!?");
+            Vec::new() // send an empty vec just to keep the GUI happy
+        }
+    };
+    use DesktopToGuiMessages::*;
+    if let Err(e) = tx.send(DumpSystemNetworkHistoryReply {
+        network_interface_history,
+    }) {
+        warn!("Error sending DumpSystemNetworkHistoryReply to GUI: {}", e);
+    }
 }
 
 /**
@@ -360,6 +392,7 @@ pub async fn websocket_handler(
     dns_tracker: UnboundedSender<DnsTrackerMessage>,
     process_tracker: ProcessTrackerSender,
     topology_client: TopologyServerSender,
+    system_tracker: SystemTrackerSender,
     counter_registries: SharedExportedStatRegistries,
     ws: WebSocket,
 ) {
@@ -379,6 +412,7 @@ pub async fn websocket_handler(
             dns_tracker,
             process_tracker,
             topology_client,
+            system_tracker,
             counter_registries,
         )
         .await;

@@ -6,7 +6,7 @@ pub use connection_key::*;
 pub use connection_measurements::*;
 pub use traffic_stats::*;
 
-use std::{fmt::Display, num::ParseIntError, str::FromStr};
+use std::{fmt::Display, net::IpAddr, num::ParseIntError, str::FromStr};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -150,6 +150,66 @@ impl FromStr for IpProtocol {
         let ip_proto = u8::from_str(s)?;
         // once we get here, we can convert anything
         Ok(IpProtocol::from_wire(ip_proto))
+    }
+}
+
+// sigh... really wish pcap::Device implemented Serialize/Deserialize
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TypeDef)]
+pub struct NetworkInterfaceState {
+    /// The default gw IPs, if known/assigned.  Could be empty
+    pub gateways: Vec<IpAddr>,
+    /// The name the OS gave to the interface, if exists/active
+    /// If this is None then there is no active network.
+    pub interface_name: Option<String>,
+    /// The list of IPs bound to the interface, if exists. Could be empty.
+    pub interface_ips: Vec<IpAddr>,
+    /// A comment for when/how we got this info
+    pub comment: String,
+    /// Does the Network interface have link and is admin UP?
+    pub has_link: bool,
+    /// Is this a wireless interface?
+    pub is_wireless: bool,
+    /// The first time this config was set.
+    #[type_def(type_of = "String")]
+    pub start_time: DateTime<Utc>,
+    /// If this is no longer the current config, when did it stop?
+    #[type_def(type_of = "Option<String>")]
+    pub end_time: Option<DateTime<Utc>>,
+}
+
+impl NetworkInterfaceState {
+    /**
+     * Walk through the important variables between the two states and see if they are the same
+     * or different.  This is similar to PartialEq or Eq but ignores the timestamps and comment
+     */
+    pub fn has_state_changed(&self, state_update: &NetworkInterfaceState) -> bool {
+        self.gateways
+            .cmp(&state_update.gateways)
+            .then(self.interface_name.cmp(&state_update.interface_name))
+            .then(self.interface_ips.cmp(&state_update.interface_ips))
+            .then(self.has_link.cmp(&state_update.has_link))
+            .then(self.is_wireless.cmp(&state_update.is_wireless))
+            .is_ne()
+    }
+
+    pub fn is_network_configured(&self) -> bool {
+        self.interface_name.is_some()
+    }
+
+    /**
+     * Don't mark as #[cfg(test)] because we want to reference it from other crates
+     */
+    pub fn mk_mock(interface_name: String, start_time: DateTime<Utc>) -> NetworkInterfaceState {
+        NetworkInterfaceState {
+            gateways: Vec::new(),
+            interface_name: Some(interface_name),
+            interface_ips: Vec::new(),
+            comment: "mock".to_string(),
+            has_link: true,
+            is_wireless: false,
+            start_time,
+            end_time: None,
+        }
     }
 }
 

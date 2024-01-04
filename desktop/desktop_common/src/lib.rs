@@ -2,7 +2,7 @@ use std::{collections::HashMap, net::IpAddr};
 
 use libconntrack_wasm::{
     topology_server_messages::CongestionSummary, AggregateStatEntry, ChartJsBandwidth,
-    ConnectionMeasurements, DnsTrackerEntry,
+    ConnectionMeasurements, DnsTrackerEntry, NetworkInterfaceState,
 };
 /**
  * Anything in this file must compile for both native rust/x86 AND WASM
@@ -32,6 +32,9 @@ pub enum DesktopToGuiMessages {
         congestion_summary: CongestionSummary,
         connection_measurements: Vec<ConnectionMeasurements>,
     },
+    DumpSystemNetworkHistoryReply {
+        network_interface_history: Vec<NetworkInterfaceState>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TypeDef)]
@@ -42,6 +45,7 @@ pub enum GuiToDesktopMessages {
     DumpAggregateCounters,
     DumpStatCounters,
     DumpDnsAggregateCounters,
+    DumpSystemNetworkHistory,
     WhatsMyIp,
     CongestedLinksRequest,
 }
