@@ -33,3 +33,5 @@ asset=$(gh api repos/${org}/${repo}/releases --jq '.[0].assets.[0].url')
 curl -L -o pre-prod-release.tgz "$asset" \
    -H "Accept: application/octet-stream" \
    -H "Authorization: Bearer $ACCESS_TOKEN"
+
+tar xzvf pre-prod-release.tgz
