@@ -3,7 +3,7 @@ use std::{
     net::IpAddr,
 };
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use common_wasm::{
     analysis_messages::AnalysisInsights,
     evicting_hash_map::EvictingHashMap,
@@ -43,10 +43,22 @@ use crate::{
 const MAX_ENTRIES_TO_EVICT: usize = 10;
 /// If a connection has not seen any packets in this many milliseconds, the connection is
 /// evicted. This is done regardless of the connection is open or closed.
-const TIME_WAIT_MS: u64 = 60_000;
+const TIME_WAIT_MS: i64 = 60_000;
 
 pub type ConnectionTrackerSender = Sender<PerfMsgCheck<ConnectionTrackerMsg>>;
 pub type ConnectionTrackerReceiver = Receiver<PerfMsgCheck<ConnectionTrackerMsg>>;
+
+/// Certain query operations (e.g., dump flows, traffic stats, etc.) require us to update/
+/// move forward the time. This enum specifies what time source should be used.
+/// This will only make a material difference if (a) we are reading a previously captured
+/// trace or (b) we are doing a live capture but the network has been idle for a while.
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum TimeMode {
+    /// Use the Wallclock time, i.e., Utc::now()
+    Wallclock,
+    /// Use the time as derived from received packet timestamps.
+    PacketTime,
+}
 
 /**
  * ConnectionTracker uses the Agent model :: https://en.wikipedia.org/wiki/Agent-oriented_programming
@@ -82,6 +94,7 @@ pub enum ConnectionTrackerMsg {
     },
     GetConnectionMeasurements {
         tx: mpsc::UnboundedSender<Vec<ConnectionMeasurements>>,
+        time_mode: TimeMode,
     },
     SetConnectionRemoteHostnameDns {
         keys: Vec<ConnectionKey>,
@@ -93,9 +106,11 @@ pub enum ConnectionTrackerMsg {
     },
     GetTrafficCounters {
         tx: mpsc::UnboundedSender<BidirBandwidthHistory>,
+        time_mode: TimeMode,
     },
     GetDnsTrafficCounters {
         tx: mpsc::Sender<Vec<AggregateStatEntry>>,
+        time_mode: TimeMode,
     },
 }
 
@@ -104,9 +119,13 @@ pub enum ConnectionTrackerMsg {
  * to the remote topology server for storage.
  */
 
-fn send_connection_storage_msg(topology_client: &Option<TopologyServerSender>, c: &mut Connection) {
+fn send_connection_storage_msg(
+    topology_client: &Option<TopologyServerSender>,
+    c: &mut Connection,
+    now: DateTime<Utc>,
+) {
     if let Some(tx) = topology_client.as_ref() {
-        let measurement = Box::new(c.to_connection_measurements(Utc::now(), None));
+        let measurement = Box::new(c.to_connection_measurements(now, None));
         if !measurement.probe_report_summary.raw_reports.is_empty() {
             // only send the connection info if we have at least one successful probe round
             debug!(
@@ -174,6 +193,8 @@ impl ConnectionStatHandles {
 
 pub struct ConnectionTracker<'a> {
     connections: EvictingHashMap<'a, ConnectionKey, Connection>,
+    last_packet_time: DateTime<Utc>,
+    max_connections: usize,
     local_addrs: HashSet<IpAddr>,
     prober_helper: ProberHelper,
     topology_client: Option<TopologyServerSender>,
@@ -203,6 +224,8 @@ pub struct ConnectionTracker<'a> {
     pcap_to_wall_delay: StatHandleDuration,
     /// Tracks the time between enqueing and dequeing messages to the connection tracker
     dequeue_delay_stats: StatHandleDuration,
+    /// Number of connections evicted due to us reaching the the max_connection limit
+    evictions_due_to_size_limit: StatHandle,
 }
 impl<'a> ConnectionTracker<'a> {
     pub fn new(
@@ -217,15 +240,21 @@ impl<'a> ConnectionTracker<'a> {
         unlimited_probes: bool,
     ) -> ConnectionTracker<'a> {
         let (tx, rx) = tokio::sync::mpsc::channel(max_queue_size);
-        let storage_service_msg_tx_clone = topology_client.clone();
         ConnectionTracker {
             connections: EvictingHashMap::new(
-                max_connections_per_tracker,
-                move |_k, mut v: Connection| {
-                    debug!("Evicting connection");
-                    send_connection_storage_msg(&storage_service_msg_tx_clone, &mut v);
+                // we are not actually using the EvictingHashmap's eviction. We manually handle evictions in
+                // `Self::evict_connections()`. Why? We need the most recent time based on pkt timestamps
+                // and we can't easily make that accessible from the callback (not without Arc<Mutex<DateTime<....>>>).
+                // Also, we need to handle evictions based on TIME_WAIT anyways.
+                // Why use `EvictingHashMap` and not `LinkedHashMap`? Cleaner API, IMHO. `LinkedHashMap::get()` does
+                // not update the LRU, which can IMHO lead to subtle bugs.
+                max_connections_per_tracker + 1,
+                move |_k, mut _v| {
+                    log::error!("The eviction callback got triggered. This should not happen. We expect to evict connections sooner");
                 },
             ),
+            last_packet_time: DateTime::<Utc>::UNIX_EPOCH,
+            max_connections: max_connections_per_tracker,
             local_addrs,
             prober_helper: ProberHelper::new(prober_tx, unlimited_probes),
             topology_client,
@@ -262,6 +291,11 @@ impl<'a> ConnectionTracker<'a> {
                 "dequeue_delay",
                 Units::Microseconds,
                 [StatType::MAX, StatType::AVG, StatType::COUNT],
+            ),
+            evictions_due_to_size_limit: stats.add_stat(
+                "evictions_due_to_size_limit",
+                Units::None,
+                [StatType::COUNT],
             ),
         }
     }
@@ -317,8 +351,8 @@ impl<'a> ConnectionTracker<'a> {
                         );
                     }
                 }
-                GetConnectionMeasurements { tx } => {
-                    self.handle_get_connection_measurements(tx);
+                GetConnectionMeasurements { tx, time_mode } => {
+                    self.handle_get_connection_measurements(tx, time_mode);
                 }
                 SetConnectionRemoteHostnameDns {
                     keys,
@@ -326,13 +360,16 @@ impl<'a> ConnectionTracker<'a> {
                 } => {
                     self.set_connection_remote_hostname_dns(&keys, remote_hostname);
                 }
-                GetTrafficCounters { tx } => self.get_conntrack_traffic_counters(tx),
+                GetTrafficCounters { tx, time_mode } => {
+                    self.get_conntrack_traffic_counters(tx, time_mode)
+                }
                 SetConnectionApplication { key, application } => {
                     self.set_connection_application(key, application)
                 }
-                GetDnsTrafficCounters { tx } => self.get_aggregate_traffic_counters(
+                GetDnsTrafficCounters { tx, time_mode } => self.get_aggregate_traffic_counters(
                     |kind| matches!(kind, AggregateStatKind::DnsDstDomain { .. }),
                     tx,
+                    time_mode,
                 ),
             }
         }
@@ -341,6 +378,7 @@ impl<'a> ConnectionTracker<'a> {
 
     pub fn add(&mut self, packet: Box<OwnedParsedPacket>) {
         let mut needs_dns_and_process_lookup = false;
+        self.last_packet_time = packet.timestamp;
         match packet.to_connection_key(&self.local_addrs) {
             Ok((key, src_is_local)) => {
                 self.sucessfully_parsed_packets.bump();
@@ -352,7 +390,7 @@ impl<'a> ConnectionTracker<'a> {
                             return;
                         }
                         // else create the state and look it up again
-                        self.new_connection(key.clone());
+                        self.new_connection(key.clone(), packet.timestamp);
                         needs_dns_and_process_lookup = true;
                         self.connections.get_mut(&key).unwrap()
                     }
@@ -409,7 +447,7 @@ impl<'a> ConnectionTracker<'a> {
                         }
                     }
                 }
-                self.evict_old_connections();
+                self.evict_connections(pkt_timestamp);
             }
             Err(ConnectionKeyError::IcmpInnerPacketError) => self.icmp_extract_failed_packet.bump(),
             Err(ConnectionKeyError::IgnoredPacket) => self.no_conn_key_packets.bump(),
@@ -419,16 +457,33 @@ impl<'a> ConnectionTracker<'a> {
         // just return and move on for now
     }
 
-    /// Check the connections that haven't seen any updates the longest, and evict all that
-    /// have been in-active for more than `TIME_WAIT_SECONDS`. Evict at most `MAX_ENTRIES_TO_EVICT`
-    fn evict_old_connections(&mut self) {
+    /// Evict connections if
+    /// a) We have more than `self.max_connections`
+    /// or b) check the connections that haven't seen any updates the longest, and evict all that
+    /// have been in-active for more than `TIME_WAIT_SECONDS`. Evict at most `MAX_ENTRIES_TO_EVICT` in
+    /// this case
+    fn evict_connections(&mut self, now: DateTime<Utc>) {
+        // Size based eviction
+        while self.connections.len() > self.max_connections {
+            let (key, mut conn) = self.connections.pop_front().unwrap();
+            self.evictions_due_to_size_limit.bump();
+            debug!(
+                "Evicting connection {} from connection_tracker due to size limit",
+                key
+            );
+            send_connection_storage_msg(&self.topology_client, &mut conn, now);
+        }
+        // TIME_WAIT evictions
         let mut eviction_cnt = 0;
         while let Some((_key, conn)) = self.connections.front() {
-            let elapsed_ms = conn.last_packet_instant().elapsed().as_millis();
-            if eviction_cnt < MAX_ENTRIES_TO_EVICT && elapsed_ms > TIME_WAIT_MS as u128 {
+            let elapsed_ms = (now - conn.last_packet_time()).num_milliseconds();
+            if eviction_cnt < MAX_ENTRIES_TO_EVICT && elapsed_ms > TIME_WAIT_MS {
                 let (key, mut conn) = self.connections.pop_front().unwrap();
-                debug!("Evicting connection {} from connection_tracker", key);
-                send_connection_storage_msg(&self.topology_client, &mut conn);
+                debug!(
+                    "Evicting connection {} from connection_tracker due to idle",
+                    key
+                );
+                send_connection_storage_msg(&self.topology_client, &mut conn, now);
                 eviction_cnt += 1;
             } else {
                 break;
@@ -436,11 +491,9 @@ impl<'a> ConnectionTracker<'a> {
         }
     }
 
-    fn new_connection(&mut self, key: ConnectionKey) {
-        let now = Utc::now();
-
+    fn new_connection(&mut self, key: ConnectionKey, pkt_timestamp: DateTime<Utc>) {
         debug!("Tracking new connection: {}", &key);
-        let connection = Connection::new(key.clone(), now, self.stat_handles.clone());
+        let connection = Connection::new(key.clone(), pkt_timestamp, self.stat_handles.clone());
 
         self.connections.insert(key, connection);
     }
@@ -511,11 +564,13 @@ impl<'a> ConnectionTracker<'a> {
     fn handle_get_connection_measurements(
         &mut self,
         tx: tokio::sync::mpsc::UnboundedSender<Vec<ConnectionMeasurements>>,
+        time_mode: TimeMode,
     ) {
+        let now = self.get_current_timestamp(time_mode);
         let connections = self
             .connections
             .iter_mut()
-            .map(|(_key, c)| c.to_connection_measurements(Utc::now(), None))
+            .map(|(_key, c)| c.to_connection_measurements(now, None))
             .collect::<Vec<ConnectionMeasurements>>();
         if let Err(e) = tx.send(connections) {
             warn!(
@@ -568,15 +623,21 @@ impl<'a> ConnectionTracker<'a> {
         self.tx.clone()
     }
 
-    fn get_conntrack_traffic_counters(&self, tx: UnboundedSender<BidirBandwidthHistory>) {
+    fn get_conntrack_traffic_counters(
+        &self,
+        tx: UnboundedSender<BidirBandwidthHistory>,
+        time_mode: TimeMode,
+    ) {
         let mut traffic_stats = self
             .aggregate_traffic_stats
             .get(&AggregateStatKind::ConnectionTracker)
             .unwrap() // unwrap is ok b/c we should always have this counter
             .clone();
         // force send and recv counters to be up to date with now and time sync'd
-        traffic_stats.advance_time(Utc::now());
-        if let Err(e) = tx.send(traffic_stats.as_bidir_bandwidth_history(Utc::now())) {
+        traffic_stats.advance_time(self.get_current_timestamp(time_mode));
+        if let Err(e) =
+            tx.send(traffic_stats.as_bidir_bandwidth_history(self.get_current_timestamp(time_mode)))
+        {
             warn!(
                 "Tried to send traffic_counters back to caller but got {}",
                 e
@@ -617,9 +678,10 @@ impl<'a> ConnectionTracker<'a> {
         &mut self,
         match_rule: impl Fn(&AggregateStatKind) -> bool,
         tx: Sender<Vec<AggregateStatEntry>>,
+        time_mode: TimeMode,
     ) {
         let mut entries: HashMap<AggregateStatKind, AggregateStatEntry> = HashMap::new();
-        let now = Utc::now();
+        let now = self.get_current_timestamp(time_mode);
         for (_key, connection) in self.connections.iter_mut() {
             // we clone aggregate_groups here. If we don't we borrow `connection` immutable, and
             // we can't call `to_connection_measurements()` later (since that requires a mut borrow)
@@ -627,7 +689,7 @@ impl<'a> ConnectionTracker<'a> {
                 if !match_rule(&kind) {
                     continue;
                 }
-                let m = connection.to_connection_measurements(Utc::now(), None);
+                let m = connection.to_connection_measurements(now, None);
                 let (rx_lost_bytes, tx_lost_bytes) = (m.rx_stats.lost_bytes, m.tx_stats.lost_bytes);
                 // if we've already seen this kind before
                 if let Some(entry) = entries.get_mut(&kind) {
@@ -665,6 +727,13 @@ impl<'a> ConnectionTracker<'a> {
                 "Failed to return the aggregate counters to their caller!?: {}",
                 e
             );
+        }
+    }
+
+    pub fn get_current_timestamp(&self, time_mode: TimeMode) -> DateTime<Utc> {
+        match time_mode {
+            TimeMode::Wallclock => Utc::now(),
+            TimeMode::PacketTime => self.last_packet_time,
         }
     }
 }
@@ -1149,7 +1218,10 @@ pub mod test {
         let (connections_tx, mut connections_rx) = tokio::sync::mpsc::unbounded_channel();
         conn_track_tx
             .try_send(PerfMsgCheck::new(
-                ConnectionTrackerMsg::GetConnectionMeasurements { tx: connections_tx },
+                ConnectionTrackerMsg::GetConnectionMeasurements {
+                    tx: connections_tx,
+                    time_mode: TimeMode::PacketTime,
+                },
             ))
             .unwrap();
         // make sure there's one and make sure remote_host is populated as expected
@@ -1199,8 +1271,8 @@ pub mod test {
         );
     }
 
-    #[tokio::test]
-    async fn test_time_wait_eviction() {
+    #[test]
+    fn test_time_wait_eviction() {
         let mut mock_prober = MockRawSocketProber::new();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
         let (evict_tx, mut evict_rx) = mpsc::channel(10);
@@ -1224,7 +1296,9 @@ pub mod test {
         assert!(packets[9].clone().transport.unwrap().tcp().unwrap().fin);
 
         // Read the first couple of packets. Ensure connection is created.
+        let mut last_packet_time = DateTime::<Utc>::UNIX_EPOCH;
         for pkt in packets.iter().take(5) {
+            last_packet_time = pkt.timestamp;
             connection_tracker.add(pkt.clone());
         }
         assert_eq!(connection_tracker.connections.len(), 1);
@@ -1232,13 +1306,6 @@ pub mod test {
         // feed the mock'd probes into the connection tracker so it thinks
         // it has a valid ProbeReport
         mock_prober.redirect_into_connection_tracker(&mut connection_tracker);
-
-        // pause() halt updating of the tokio Instant timer.
-        tokio::time::pause();
-        // But if there's no more work todo, the tokio runtime will
-        // auto-advance any pending sleeps / timers, etc. So this sleep
-        // call will not take any real wall-time - important b/c this is 60s!!
-        tokio::time::sleep(tokio::time::Duration::from_millis(TIME_WAIT_MS + 10)).await;
 
         // Create a packet from a different connection.
         let mut pkt_unrelated_conn_raw: Vec<u8> = Vec::new();
@@ -1254,8 +1321,11 @@ pub mod test {
         .tcp(12345, 80, 42, 1024)
         .write(&mut pkt_unrelated_conn_raw, &[])
         .unwrap();
-        let pkt_unrelated_conn =
-            OwnedParsedPacket::try_from_fake_time(pkt_unrelated_conn_raw).unwrap();
+        let pkt_unrelated_conn = OwnedParsedPacket::try_from_timestamp(
+            pkt_unrelated_conn_raw,
+            last_packet_time + Duration::milliseconds(TIME_WAIT_MS + 10),
+        )
+        .unwrap();
         let unrelated_conn_key = pkt_unrelated_conn
             .clone()
             .to_connection_key(&local_addrs)
@@ -1284,14 +1354,12 @@ pub mod test {
             .connections
             .get_no_lru(&unrelated_conn_key)
             .is_some());
-
-        tokio::time::resume();
     }
 
     /// Tests that when a connection gets evicted we only send it to the storage server
     /// if it has probe information in it.
-    #[tokio::test]
-    async fn test_send_only_conns_with_probe_to_storage() {
+    #[test]
+    fn test_send_only_conns_with_probe_to_storage() {
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
         let (evict_tx, mut evict_rx) = mpsc::channel(10);
         let mut connection_tracker = mk_mock_connection_tracker(local_addrs.clone());
@@ -1305,21 +1373,21 @@ pub mod test {
         ))
         .unwrap();
         let mut num_pks = 0;
+        let mut last_pkt_timne = DateTime::<Utc>::UNIX_EPOCH;
         while let Ok(pkt) = capture.next_packet() {
             if num_pks >= 3 {
                 // just the 3-way handshake
                 break;
             }
-            connection_tracker.add(OwnedParsedPacket::try_from(pkt).unwrap());
+            let parsed_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            last_pkt_timne = parsed_pkt.timestamp;
+            connection_tracker.add(parsed_pkt);
             num_pks += 1;
         }
 
         assert_eq!(connection_tracker.connections.len(), 1);
 
-        // pause() halt updating of the tokio Instant timer.
-        tokio::time::pause();
-        // this sleep won't actually sleep but just advande the Instant timer
-        tokio::time::sleep(tokio::time::Duration::from_millis(TIME_WAIT_MS + 10)).await;
+        let timestamp = last_pkt_timne + Duration::milliseconds(TIME_WAIT_MS + 10);
 
         // Create a packet from a different connection.
         let mut pkt_unrelated_conn_raw: Vec<u8> = Vec::new();
@@ -1329,7 +1397,7 @@ pub mod test {
             .write(&mut pkt_unrelated_conn_raw, &[])
             .unwrap();
         let pkt_unrelated_conn =
-            OwnedParsedPacket::try_from_fake_time(pkt_unrelated_conn_raw).unwrap();
+            OwnedParsedPacket::try_from_timestamp(pkt_unrelated_conn_raw, timestamp).unwrap();
         let unrelated_conn_key = pkt_unrelated_conn
             .clone()
             .to_connection_key(&local_addrs)
@@ -1351,9 +1419,8 @@ pub mod test {
             .connections
             .get_no_lru(&unrelated_conn_key)
             .is_some());
-
-        tokio::time::resume();
     }
+
     /***
      * Verify that we send a lookup messasge to the ProcessTracker on new connections (not a rst)
      * and that we set them properly when we get the reply.
@@ -1410,7 +1477,10 @@ pub mod test {
         let (conns_tx, mut conns_rx) = tokio::sync::mpsc::unbounded_channel();
         conntrack_tx
             .send(PerfMsgCheck::new(
-                ConnectionTrackerMsg::GetConnectionMeasurements { tx: conns_tx },
+                ConnectionTrackerMsg::GetConnectionMeasurements {
+                    tx: conns_tx,
+                    time_mode: TimeMode::PacketTime,
+                },
             ))
             .await
             .unwrap();

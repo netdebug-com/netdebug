@@ -17,7 +17,7 @@ use libconntrack_wasm::{
 #[cfg(not(test))]
 use log::{debug, warn};
 use netstat2::ProtocolSocketInfo;
-use tokio::{sync::mpsc, time::Instant};
+use tokio::sync::mpsc;
 
 #[cfg(test)]
 use std::{println as debug, println as warn}; // Workaround to use prinltn! for logs.
@@ -117,11 +117,11 @@ pub struct ProbeRound {
     pub incoming_reply_timestamps: HashMap<ProbeId, HashSet<OwnedParsedPacket>>,
 }
 impl ProbeRound {
-    fn new(round_number: usize, probe_pkt_seq_no: TcpSeq64) -> ProbeRound {
+    fn new(round_number: usize, probe_pkt_seq_no: TcpSeq64, now: DateTime<Utc>) -> ProbeRound {
         ProbeRound {
             round_number,
             probe_pkt_seq_no,
-            start_time: Utc::now(),
+            start_time: now,
             next_end_host_reply: PROBE_MAX_TTL - 1,
             outgoing_probe_timestamps: HashMap::new(),
             incoming_reply_timestamps: HashMap::new(),
@@ -138,14 +138,10 @@ impl ProbeRound {
 #[derive(Clone, Debug, Getters)]
 pub struct Connection {
     connection_key: ConnectionKey,
-    /// System clock
+    /// From packet timestamps
     start_tracking_time: DateTime<Utc>,
-    /// monotonic clock, also respects tokio::sleep::pause() for testing
-    start_tracking_time_instant: Instant,
-    /// Human readable time of the last packet for logging
+    /// Human readable time of the last packet for logging. From packet timestamps
     last_packet_time: DateTime<Utc>,
-    /// The time of the last packet used for evictions and statekeeping
-    last_packet_instant: tokio::time::Instant,
     /// data packet sent from the local side, used for probe retransmits
     local_data: Option<OwnedParsedPacket>,
     probe_round: Option<ProbeRound>,
@@ -178,9 +174,7 @@ impl Connection {
             user_agent: None,
             associated_apps: None,
             start_tracking_time: ts,
-            start_tracking_time_instant: tokio::time::Instant::now(),
             last_packet_time: ts,
-            last_packet_instant: tokio::time::Instant::now(),
             remote_hostname: None,
             traffic_stats: BidirectionalStats::new(std::time::Duration::from_millis(
                 MAX_BURST_RATE_TIME_WINDOW_MILLIS,
@@ -206,7 +200,6 @@ impl Connection {
         self.last_packet_time = packet.timestamp;
         let pcap_wall_dt = (Utc::now() - packet.timestamp).abs();
         pcap_to_wall_delay.add_duration_value(pcap_wall_dt.to_std().unwrap());
-        self.last_packet_instant = tokio::time::Instant::now();
         self.traffic_stats
             .add_packet_with_time(src_is_local, packet.len as u64, packet.timestamp);
         match &packet.transport {
@@ -441,6 +434,7 @@ impl Connection {
                     self.probe_round = Some(ProbeRound::new(
                         self.probe_report_summary.raw_reports.len(),
                         pkt_seq_no,
+                        packet.timestamp,
                     ));
                     // tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock ).unwrap();
                     let min_ttl = prober_helper.get_min_ttl();
@@ -884,14 +878,12 @@ impl Connection {
         // if there's an active probe round going, finish it/generate the report if it's been longer
         // then probe_timeout
         if let Some(probe_round) = self.probe_round.as_ref() {
-            let now_instant = tokio::time::Instant::now();
-            // Use the monotonic clock not the system clock as it respects
-            // tokio::time::pause() which is required for some tests, e.g.,
-            // connection_tracker::test::test_time_wait_eviction()
-            let delta = now_instant - self.start_tracking_time_instant;
+            // FIXME: why start_tracking_time? This won't work properly once we reprobe
+            // connections after a while. Should this be `probe_round.start_time`??
+            let delta = now - self.start_tracking_time;
             let timeout = match probe_timeout {
-                Some(timeout) => timeout.to_std().unwrap(),
-                None => Duration::milliseconds(500).to_std().unwrap(),
+                Some(timeout) => timeout,
+                None => Duration::milliseconds(500),
             };
             if delta > timeout {
                 self.generate_probe_report(probe_round.round_number as u32, None, false);
