@@ -105,8 +105,6 @@ const FlowsByDnsDomain: React.FC = () => {
     },
   });
 
-  statEntries.forEach((x) => console.log(x.kind));
-
   return (
     <>
       <SwitchHelper
