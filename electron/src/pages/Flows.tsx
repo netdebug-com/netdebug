@@ -65,6 +65,20 @@ const columns: GridColDef[] = [
     ...getDefaultRateGridColDef("B/s"),
   },
   {
+    field: "send_burst_bw",
+    headerName: "Send Burst B/W",
+    valueGetter: (params: GridValueGetterParams<ConnectionMeasurements>) =>
+      params.row.tx_stats?.burst_byte_rate,
+    ...getDefaultRateGridColDef("B/s"),
+  },
+  {
+    field: "recv_burst_bw",
+    headerName: "Recv Burst B/W",
+    valueGetter: (params: GridValueGetterParams<ConnectionMeasurements>) =>
+      params.row.rx_stats?.burst_byte_rate,
+    ...getDefaultRateGridColDef("B/s"),
+  },
+  {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
     field: "send_bytes",
     headerName: "Send Bytes",
@@ -164,6 +178,8 @@ const Flows: React.FC = () => {
             columns: {
               // Hide these columns by default.
               columnVisibilityModel: {
+                send_burst_bw: false,
+                recv_burst_bw: false,
                 send_bytes: false,
                 recv_bytes: false,
                 send_lost_bytes: false,
