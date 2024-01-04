@@ -1,11 +1,6 @@
 import React, { useState } from "react";
 import { ConnectionMeasurements } from "../netdebug_types";
-import {
-  connIdString,
-  dataGridDefaultSxProp,
-  prettyPrintSiUnits,
-  sortCmpWithNull,
-} from "../utils";
+import { connIdString, dataGridDefaultSxProp, sortCmpWithNull } from "../utils";
 import { SwitchHelper } from "../components/SwitchHelper";
 import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 import { Box } from "@mui/material";
@@ -17,6 +12,11 @@ import {
   GridValueGetterParams,
 } from "@mui/x-data-grid";
 import { FlowSummary } from "../components/FlowSummary";
+import {
+  calculateLossPercentage,
+  getDefaultPercentageGridColDef,
+  getDefaultRateGridColDef,
+} from "../common/flow_common";
 
 function formatAssociatedApps(
   params: GridValueFormatterParams<ConnectionMeasurements["associated_apps"]>,
@@ -33,21 +33,6 @@ function formatAssociatedApps(
   return app;
 }
 
-const defaultRateGridColDef: {
-  valueFormatter: GridColDef["valueFormatter"];
-  align: GridColDef["align"];
-  flex: number;
-  headerAlign: GridColDef["align"];
-  sortComparator: GridColDef["sortComparator"];
-} = {
-  valueFormatter: (params: GridValueFormatterParams<number>) =>
-    prettyPrintSiUnits(params.value, "B/s"),
-  align: "right",
-  flex: 10,
-  headerAlign: "right",
-  sortComparator: sortCmpWithNull,
-};
-
 const columns: GridColDef[] = [
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
@@ -60,6 +45,7 @@ const columns: GridColDef[] = [
       <FlowSummary flow={params.row} />
     ),
   },
+
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
     // to derive the actual value of this field, but DataGrid still requires a unique field name
@@ -68,7 +54,7 @@ const columns: GridColDef[] = [
     headerName: "Send B/W",
     valueGetter: (params: GridValueGetterParams<ConnectionMeasurements>) =>
       params.row.tx_stats?.last_min_byte_rate,
-    ...defaultRateGridColDef,
+    ...getDefaultRateGridColDef("B/s"),
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurements
@@ -76,12 +62,54 @@ const columns: GridColDef[] = [
     headerName: "Recv B/W",
     valueGetter: (params: GridValueGetterParams<ConnectionMeasurements>) =>
       params.row.rx_stats?.last_min_byte_rate,
-    ...defaultRateGridColDef,
+    ...getDefaultRateGridColDef("B/s"),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "send_bytes",
+    headerName: "Send Bytes",
+    valueGetter: (params) => params.row.tx_stats?.bytes,
+    ...getDefaultRateGridColDef("B"),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "recv_bytes",
+    headerName: "Recv Bytes",
+    valueGetter: (params) => params.row.rx_stats?.bytes,
+    ...getDefaultRateGridColDef("B"),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "send_lost_bytes",
+    headerName: "Send Lost Bytes",
+    valueGetter: (params) => params.row.tx_stats?.lost_bytes,
+    ...getDefaultRateGridColDef("B"),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "recv_lost_bytes",
+    headerName: "Recv Lost Bytes",
+    valueGetter: (params) => params.row.rx_stats?.lost_bytes,
+    ...getDefaultRateGridColDef("B"),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "send_loss",
+    headerName: "Send Loss",
+    valueGetter: (params) => calculateLossPercentage(params.row.tx_stats),
+    ...getDefaultPercentageGridColDef(),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "recv_loss",
+    headerName: "Recv Loss",
+    valueGetter: (params) => calculateLossPercentage(params.row.rx_stats),
+    ...getDefaultPercentageGridColDef(),
   },
   {
     field: "associated_apps",
     headerName: "Associated Apps",
-    flex: 30,
+    flex: 25,
     valueFormatter: formatAssociatedApps,
   },
 ];
@@ -132,6 +160,15 @@ const Flows: React.FC = () => {
           initialState={{
             sorting: {
               sortModel: [{ field: "recv_bw", sort: "desc" }],
+            },
+            columns: {
+              // Hide these columns by default.
+              columnVisibilityModel: {
+                send_bytes: false,
+                recv_bytes: false,
+                send_lost_bytes: false,
+                recv_lost_bytes: false,
+              },
             },
           }}
           slots={{

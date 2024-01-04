@@ -1,30 +1,15 @@
 import React, { useState } from "react";
 import { AggregateStatEntry, AggregateStatKind } from "../netdebug_types";
-import {
-  dataGridDefaultSxProp,
-  prettyPrintSiUnits,
-  sortCmpWithNull,
-} from "../utils";
+import { dataGridDefaultSxProp, sortCmpWithNull } from "../utils";
 import { SwitchHelper } from "../components/SwitchHelper";
 import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 import { Box } from "@mui/material";
 import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
-
-function getDefaultRateGridColDef(unitSuffix: string): {
-  valueFormatter: GridColDef["valueFormatter"];
-  align: GridColDef["align"];
-  flex: number;
-  headerAlign: GridColDef["align"];
-  sortComparator: GridColDef["sortComparator"];
-} {
-  return {
-    valueFormatter: (params) => prettyPrintSiUnits(params.value, unitSuffix),
-    align: "right",
-    flex: 10,
-    headerAlign: "right",
-    sortComparator: sortCmpWithNull,
-  };
-}
+import {
+  calculateLossPercentage,
+  getDefaultPercentageGridColDef,
+  getDefaultRateGridColDef as getDefaultGridColDefWithUnits,
+} from "../common/flow_common";
 
 function getDnsNameFromAggKind(kind: AggregateStatKind) {
   return kind.tag === "DnsDstDomain" ? kind.name : "";
@@ -41,31 +26,59 @@ const columns: GridColDef[] = [
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
-    field: "send_bytes",
-    headerName: "Send Bytes",
-    valueGetter: (params) => params.row.summary.tx?.bytes,
-    ...getDefaultRateGridColDef("B"),
-  },
-  {
-    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
-    field: "recv_bytes",
-    headerName: "Recv Bytes",
-    valueGetter: (params) => params.row.summary.rx?.bytes,
-    ...getDefaultRateGridColDef("B"),
-  },
-  {
-    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
     field: "send_bw",
     headerName: "Send B/W",
     valueGetter: (params) => params.row.summary.tx?.last_min_byte_rate,
-    ...getDefaultRateGridColDef("B/s"),
+    ...getDefaultGridColDefWithUnits("B/s"),
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
     field: "recv_bw",
     headerName: "Recv B/W",
     valueGetter: (params) => params.row.summary.rx?.last_min_byte_rate,
-    ...getDefaultRateGridColDef("B/s"),
+    ...getDefaultGridColDefWithUnits("B/s"),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "send_bytes",
+    headerName: "Send Bytes",
+    valueGetter: (params) => params.row.summary.tx?.bytes,
+    ...getDefaultGridColDefWithUnits("B"),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "recv_bytes",
+    headerName: "Recv Bytes",
+    valueGetter: (params) => params.row.summary.rx?.bytes,
+    ...getDefaultGridColDefWithUnits("B"),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "send_lost_bytes",
+    headerName: "Send Lost Bytes",
+    valueGetter: (params) => params.row.summary.tx?.lost_bytes,
+    ...getDefaultGridColDefWithUnits("B"),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "recv_lost_bytes",
+    headerName: "Recv Lost Bytes",
+    valueGetter: (params) => params.row.summary.rx?.lost_bytes,
+    ...getDefaultGridColDefWithUnits("B"),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "send_loss",
+    headerName: "Send Loss",
+    valueGetter: (params) => calculateLossPercentage(params.row.summary.tx),
+    ...getDefaultPercentageGridColDef(),
+  },
+  {
+    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
+    field: "recv_loss",
+    headerName: "Recv Loss",
+    valueGetter: (params) => calculateLossPercentage(params.row.summary.rx),
+    ...getDefaultPercentageGridColDef(),
   },
 ];
 
@@ -117,6 +130,13 @@ const FlowsByDnsDomain: React.FC = () => {
           initialState={{
             sorting: {
               sortModel: [{ field: "recv_bw", sort: "desc" }],
+            },
+            columns: {
+              // Hide these columns by default.
+              columnVisibilityModel: {
+                send_lost_bytes: false,
+                recv_lost_bytes: false,
+              },
             },
           }}
           slots={{
