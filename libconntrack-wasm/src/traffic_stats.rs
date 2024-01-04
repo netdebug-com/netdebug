@@ -111,6 +111,9 @@ pub struct TrafficStatsSummary {
     // if the total duration was < 1min: over the total duration.
     pub last_min_pkt_rate: Option<f64>,
     pub last_min_byte_rate: Option<f64>,
+
+    /// Lost bytes, as indicated by SACK blocks.
+    pub lost_bytes: Option<u64>,
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
@@ -179,6 +182,8 @@ pub struct TrafficStats {
     bytes: u64,
     /// Total packets
     packets: u64,
+    /// Lost bytes, as indicated by SACK blocks. None for non-TCP connections
+    lost_bytes: Option<u64>,
     /// Timestamp of first packet
     first_time: DateTime<Utc>,
     /// Timestamp of last packet
@@ -201,6 +206,7 @@ impl TrafficStats {
         TrafficStats {
             bytes: 0,
             packets: 0,
+            lost_bytes: None,
             first_time: now,
             last_time: now,
             max_burst_rate: MaxBurstRate::new(burst_time_window),
@@ -255,6 +261,25 @@ impl TrafficStats {
         self.last_hour.update_buckets(now);
     }
 
+    pub fn set_lost_bytes(&mut self, lost_bytes: u64) {
+        if lost_bytes == 0 {
+            self.lost_bytes = None;
+        } else {
+            self.lost_bytes = Some(lost_bytes);
+        }
+    }
+
+    pub fn add_lost_bytes(&mut self, new_lost_bytes: u64) {
+        if new_lost_bytes == 0 {
+            return;
+        }
+        if self.lost_bytes.is_none() {
+            self.lost_bytes = Some(new_lost_bytes)
+        } else {
+            *self.lost_bytes.as_mut().unwrap() += new_lost_bytes;
+        }
+    }
+
     pub fn as_stats_summary(&mut self, now: DateTime<Utc>) -> TrafficStatsSummary {
         self.advance_time(now);
         let active_dur = self.last_time - self.first_time;
@@ -278,6 +303,7 @@ impl TrafficStats {
             burst_byte_rate: self.max_burst_rate.get_byte_rate(),
             last_min_pkt_rate: pkt_rate,
             last_min_byte_rate: byte_rate,
+            lost_bytes: self.lost_bytes,
         }
     }
 
@@ -346,6 +372,14 @@ impl BidirectionalStats {
             self.tx_or_create(now).add_packet_with_time(bytes, now);
         } else {
             self.rx_or_create(now).add_packet_with_time(bytes, now);
+        }
+    }
+
+    pub fn add_new_lost_bytes(&mut self, is_tx: bool, lost_bytes: u64, now: DateTime<Utc>) {
+        if is_tx {
+            self.tx_or_create(now).add_lost_bytes(lost_bytes);
+        } else {
+            self.rx_or_create(now).add_lost_bytes(lost_bytes);
         }
     }
 

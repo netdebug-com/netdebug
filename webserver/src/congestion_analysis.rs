@@ -240,6 +240,7 @@ mod test {
             burst_byte_rate: None,
             last_min_pkt_rate: None,
             last_min_byte_rate: None,
+            lost_bytes: None,
         }
     }
 }

@@ -36,6 +36,8 @@ use crate::{
 
 pub const MAX_BURST_RATE_TIME_WINDOW_MILLIS: u64 = 10;
 
+type LostBytesWrapper = u64;
+
 /**
  * Create a ConnectionKey from a remote socket addr and the global context
  *
@@ -199,7 +201,8 @@ impl Connection {
         src_is_local: bool,
         dns_tx: &Option<mpsc::UnboundedSender<DnsTrackerMessage>>,
         mut pcap_to_wall_delay: StatHandleDuration,
-    ) {
+    ) -> LostBytesWrapper {
+        let mut ret_val = 0;
         self.last_packet_time = packet.timestamp;
         let pcap_wall_dt = (Utc::now() - packet.timestamp).abs();
         pcap_to_wall_delay.add_duration_value(pcap_wall_dt.to_std().unwrap());
@@ -208,7 +211,7 @@ impl Connection {
             .add_packet_with_time(src_is_local, packet.len as u64, packet.timestamp);
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
-                self.update_tcp(src_is_local, &packet, tcp, prober_helper);
+                ret_val = self.update_tcp(src_is_local, &packet, tcp, prober_helper);
             }
             Some(TransportHeader::Icmpv4(icmp4)) => {
                 if src_is_local {
@@ -241,6 +244,7 @@ impl Connection {
                 );
             }
         }
+        ret_val
     }
 
     /**
@@ -289,7 +293,8 @@ impl Connection {
         packet: &OwnedParsedPacket,
         tcp: &TcpHeader,
         prober_helper: &mut ProberHelper,
-    ) {
+    ) -> LostBytesWrapper {
+        let mut lost_bytes = 0;
         let (state_opt, side) = if src_is_local {
             (&mut self.local_tcp_state, ConnectionSide::Local)
         } else {
@@ -329,10 +334,11 @@ impl Connection {
                 )
             });
             // TODO: do we need to use `tcp_paylod_len` instead of `payload.is_empty()`??
-            let is_dup_ack = other_state.process_rx_ack(packet.payload.is_empty(), tcp);
+            let ack_ret_val = other_state.process_rx_ack(packet.payload.is_empty(), tcp);
+            lost_bytes = ack_ret_val.new_lost_bytes;
 
             // Dup-ack handling for possible probe replies
-            if is_dup_ack {
+            if ack_ret_val.is_dup_ack {
                 // The unwrap is safe. If `is_dup_ack` is true, than this segment's
                 // ack_no is in window and it's equal to `other_state.recv_ack_no`
                 let cur_pkt_ack = other_state.recv_ack_no().unwrap();
@@ -403,6 +409,7 @@ impl Connection {
                 }
             }
         }
+        lost_bytes
     }
 
     /// For packets sent by the local side: do any processing for probes
@@ -890,6 +897,14 @@ impl Connection {
                 self.generate_probe_report(probe_round.round_number as u32, None, false);
             }
         }
+        if let Some(tx_stat) = self.traffic_stats.tx.as_mut() {
+            let lost_bytes_opt = self.local_tcp_state.as_ref().map(|s| *s.lost_bytes());
+            tx_stat.set_lost_bytes(lost_bytes_opt.unwrap_or_default());
+        }
+        if let Some(rx_stat) = self.traffic_stats.rx.as_mut() {
+            let lost_bytes_opt = self.remote_tcp_state.as_ref().map(|s| *s.lost_bytes());
+            rx_stat.set_lost_bytes(lost_bytes_opt.unwrap_or_default());
+        }
         libconntrack_wasm::ConnectionMeasurements {
             tx_stats: self.traffic_stats.tx_stats_summary(now),
             rx_stats: self.traffic_stats.rx_stats_summary(now),
@@ -1139,7 +1154,7 @@ pub mod test {
                 src_is_local,
                 &None,
                 self.pcap_to_wall_delay.clone(),
-            )
+            );
         }
     }
 

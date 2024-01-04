@@ -119,6 +119,11 @@ export type TrafficStatsSummary = {
     "burst_byte_rate": (F64 | null);
     "last_min_pkt_rate": (F64 | null);
     "last_min_byte_rate": (F64 | null);
+
+    /**
+     * Lost bytes, as indicated by SACK blocks.
+     */
+    "lost_bytes": (U64 | null);
 };
 export type ConnectionMeasurements = {
     "key": ConnectionKey;
