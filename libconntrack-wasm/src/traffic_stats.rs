@@ -249,13 +249,12 @@ impl TrafficStats {
         self.last_hour.add_value(bytes, timestamp);
     }
 
-    /// Advances the wall-time but does *NOT* update `last_packet_time`. It is used
-    /// to rotate the `BucketedTimeSeries` buckets
     pub fn advance_time(&mut self, now: DateTime<Utc>) {
         if now < self.last_time {
             // check for time going backwards
             return;
         }
+        self.last_time = now;
         self.last_5_sec.update_buckets(now);
         self.last_min.update_buckets(now);
         self.last_hour.update_buckets(now);

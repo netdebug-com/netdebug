@@ -1211,13 +1211,15 @@ pub mod test {
         }
         let conn_meas = conn.to_connection_measurements(t, None);
 
-        // Average TX rate is unchanged since no more packets were received
+        // Average TX rate is changed due to more elapsed time
+        // total elapsed time is now
+        assert_eq!(t - start, chrono::Duration::milliseconds(42));
         assert_eq!(
             conn_meas.tx_stats.last_min_byte_rate.unwrap(),
-            16. * 142. / 0.015
+            16. * 142. / (0.042)
         );
-        assert_eq!(conn_meas.tx_stats.last_min_pkt_rate.unwrap(), 16. / 0.015);
-        // 24 packets, 242 bytes each over 12.5ms
+        assert_eq!(conn_meas.tx_stats.last_min_pkt_rate.unwrap(), 16. / 0.042);
+        // 24 packets, 242 bytes each over 11.5ms
         assert_eq!(
             conn_meas.rx_stats.last_min_byte_rate.unwrap(),
             24. * 242. / 0.0115
