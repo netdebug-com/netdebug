@@ -2,7 +2,7 @@ import { getConnKeyForDisplay } from "../utils";
 import { ConnectionMeasurements } from "../netdebug_types";
 import { useState } from "react";
 import Popover from "@mui/material/Popover";
-import Button from "@mui/material/Button";
+import MuiLink from "@mui/material/Link";
 
 // Re-usable components to show the detailed information in a flow
 // Assumes we already have the corresponding connection measurement
@@ -39,7 +39,12 @@ export const FlowSummary: React.FC<FlowSummaryProps> = (props) => {
   const flow_closed = props.flow.close_has_started;
   return (
     <div>
-      <Button aria-describedby={id} onClick={handleClick}>
+      <MuiLink
+        component="button"
+        underline="hover"
+        aria-describedby={id}
+        onClick={handleClick}
+      >
         {
           // if a flow is closed, render it with strikethrough
           flow_closed ? (
@@ -48,7 +53,7 @@ export const FlowSummary: React.FC<FlowSummaryProps> = (props) => {
             getConnKeyForDisplay(props.flow)
           )
         }
-      </Button>
+      </MuiLink>
       <Popover
         id={id}
         open={open}
