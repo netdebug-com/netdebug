@@ -42,7 +42,7 @@ function spawn_desktop_binary(command: string) {
   const args: string[] = [
     // default to connecting to a local webserver/topology server on ws://localhost:3030/desktop
   ];
-  const options: SpawnOptions = { stdio: "inherit" };
+  const options: SpawnOptions = { stdio: "inherit", windowsHide: true };
   desktopProcess = spawn(command, args, options);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   desktopProcess.on("exit", (code, signal) => {
