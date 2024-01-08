@@ -83,7 +83,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         std::time::Duration::from_millis(500),
         1024,
         counter_registries.new_registry("system_tracker"),
-    );
+    )
+    .await;
     trackers.system_tracker = Some(system_tracker.clone());
 
     let topology_client = TopologyServerConnection::spawn(

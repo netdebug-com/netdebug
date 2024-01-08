@@ -24,6 +24,7 @@ libc = "0.2.146"
 libconntrack-wasm = { path = "../libconntrack-wasm" }
 log = "0.4.19"
 netstat2 = "0.9.1"
+net-route = "0.2.8" # for getting default route
 # PublicSufficeList - but statically includes official list from https://publicsuffix.org/
 psl = "2.1.4"
 rand = "0.8.5"
