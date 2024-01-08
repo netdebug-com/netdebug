@@ -105,10 +105,9 @@ impl UnidirectionalTcpState {
                 return;
             }
         };
+        let payload_len = tcp_payload_len(packet, tcp) as u64;
         // None < Some(x) for every x, so this nicely does the right thing :-)
-        self.sent_seq_no = self
-            .sent_seq_no
-            .max(Some(cur_pkt_seq + tcp_payload_len(packet, tcp) as u64));
+        self.sent_seq_no = self.sent_seq_no.max(Some(cur_pkt_seq + payload_len));
         if tcp.syn {
             if self.syn_pkt.is_some() {
                 self.stat_handles.multiple_syns.bump();
@@ -122,16 +121,19 @@ impl UnidirectionalTcpState {
         if tcp.fin {
             // FIN's "use" a sequence number as if they sent a byte of data
             if let Some(fin_seq) = self.fin_seq {
-                if fin_seq != cur_pkt_seq {
-                    self.stat_handles.multiple_fins.bump();
+                if fin_seq != cur_pkt_seq + payload_len {
+                    self.stat_handles.multiple_fins_different_seqno.bump();
                     warn!(
                         "{}: {}: Weird: got multiple FIN seqnos: {} != {}",
-                        self.connection_key, self.side, fin_seq, cur_pkt_seq
+                        self.connection_key,
+                        self.side,
+                        fin_seq,
+                        cur_pkt_seq + payload_len
                     );
                 }
                 // else it's just a duplicate packet
             }
-            self.fin_seq = Some(cur_pkt_seq);
+            self.fin_seq = Some(cur_pkt_seq + payload_len);
         }
     }
 
@@ -282,7 +284,8 @@ pub fn tcp_payload_len(packet: &OwnedParsedPacket, tcp: &TcpHeader) -> u16 {
 mod test {
     use std::{net::IpAddr, str::FromStr};
 
-    use common_wasm::timeseries_stats::ExportedStatRegistry;
+    use common::test_utils::test_dir;
+    use common_wasm::timeseries_stats::{CounterProvider, ExportedStatRegistry};
     use libconntrack_wasm::IpProtocol;
 
     use super::*;
@@ -673,5 +676,39 @@ mod test {
             &[mkrange(initial_ack64 + 60, initial_ack64 + 75)]
         );
         assert_eq!(state.lost_bytes, 55);
+    }
+
+    #[test]
+    fn test_fin_retransmit() {
+        let stat_registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
+        let stat_handles = ConnectionStatHandles::new(&stat_registry);
+        let mut capture =
+        // NOTE: this capture has no FINs so contracker will not remove it
+        pcap::Capture::from_file(test_dir("libconntack", "tests/fin-retransmit.pcap"))
+            .unwrap();
+        // take all of the packets in the capture and pipe them into the connection tracker
+        let key = ConnectionKey {
+            local_ip: IpAddr::from_str("192.168.1.238").unwrap(),
+            remote_ip: IpAddr::from_str("147.28.154.173").unwrap(),
+            local_l4_port: 55190,
+            remote_l4_port: 443,
+            ip_proto: IpProtocol::TCP,
+        };
+        let mut state =
+            UnidirectionalTcpState::new(3_283_100_000, ConnectionSide::Local, key, stat_handles);
+        assert_eq!(state.tcp_window().seq64(3_283_100_000), Some(3_283_100_000));
+        while let Ok(pkt) = capture.next_packet() {
+            let owned_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
+            let tcph = owned_pkt.transport.clone().unwrap().tcp().unwrap();
+            state.process_pkt(&owned_pkt, &tcph);
+        }
+        assert_eq!(*state.fin_seq(), Some(3_283_150_784));
+        let counters = stat_registry.get_counter_map();
+        assert_eq!(
+            *counters
+                .get("testing.multiple_fins_different_seqno.COUNT")
+                .unwrap(),
+            0
+        );
     }
 }
