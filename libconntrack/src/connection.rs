@@ -878,9 +878,7 @@ impl Connection {
         // if there's an active probe round going, finish it/generate the report if it's been longer
         // then probe_timeout
         if let Some(probe_round) = self.probe_round.as_ref() {
-            // FIXME: why start_tracking_time? This won't work properly once we reprobe
-            // connections after a while. Should this be `probe_round.start_time`??
-            let delta = now - self.start_tracking_time;
+            let delta = now - probe_round.start_time;
             let timeout = match probe_timeout {
                 Some(timeout) => timeout,
                 None => Duration::milliseconds(500),
