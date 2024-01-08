@@ -25,6 +25,9 @@ use crate::{
 };
 use dns_parser::{self, QueryType};
 
+// TODO: update this to use Sender<PerfCheckMsg<DnsTrackerMessage>>
+pub type DnsTrackerSender = UnboundedSender<DnsTrackerMessage>;
+
 pub const UDP_DNS_PORT: u16 = 53;
 pub struct DnsPendingEntry {
     sent_timestamp: DateTime<Utc>,
@@ -138,7 +141,7 @@ impl<'a> DnsTracker<'a> {
     pub async fn spawn(
         expired_entries_capacity: usize,
         stats_registry: ExportedStatRegistry,
-    ) -> (UnboundedSender<DnsTrackerMessage>, JoinHandle<()>) {
+    ) -> (DnsTrackerSender, JoinHandle<()>) {
         let mut dns_tracker = DnsTracker::new(expired_entries_capacity, stats_registry);
         let (tx, rx) = unbounded_channel::<DnsTrackerMessage>();
         let join = tokio::spawn(async move { dns_tracker.do_async_loop(rx).await });

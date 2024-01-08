@@ -5,6 +5,7 @@ use clap::Parser;
 use common_wasm::timeseries_stats::{
     CounterProvider, CounterProviderWithTimeUpdate, SharedExportedStatRegistries, SuperRegistry,
 };
+use libconntrack::dns_tracker::DnsTrackerSender;
 use libconntrack::system_tracker::{SystemTracker, SystemTrackerSender};
 use libconntrack::topology_client::{self, TopologyServerSender};
 use libconntrack::{
@@ -16,11 +17,28 @@ use libconntrack::{
 };
 use log::info;
 use std::{collections::HashSet, error::Error, net::IpAddr};
-use tokio::sync::mpsc::UnboundedSender;
 use warp::Filter;
 use websocket::websocket_handler;
 
 use libconntrack::topology_client::TopologyServerConnection;
+
+/// Struct to hold all of the various trackers
+/// We can clone this arbitrarily with no state/locking issues
+#[derive(Clone, Debug, Default)]
+pub struct Trackers {
+    pub connection_tracker: Option<ConnectionTrackerSender>,
+    pub dns_tracker: Option<DnsTrackerSender>,
+    pub system_tracker: Option<SystemTrackerSender>,
+    pub process_tracker: Option<ProcessTrackerSender>,
+    pub topology_client: Option<TopologyServerSender>,
+}
+
+impl Trackers {
+    /// Return an empty set of trackers to be filled in later
+    pub fn empty() -> Trackers {
+        Trackers::default()
+    }
+}
 
 /// Netdebug desktop
 #[derive(Parser, Debug, Clone)]
@@ -52,6 +70,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let system_epoch = std::time::Instant::now();
 
+    let mut trackers = Trackers::empty();
+
     let mut counter_registries = SuperRegistry::new(system_epoch);
     // create a channel for the ConnectionTracker
     let (tx, rx) = tokio::sync::mpsc::channel::<PerfMsgCheck<ConnectionTrackerMsg>>(
@@ -62,8 +82,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
         std::time::Duration::from_millis(500),
         1024,
-        counter_registries.new_registry("topology_server_connection"),
+        counter_registries.new_registry("system_tracker"),
     );
+    trackers.system_tracker = Some(system_tracker.clone());
 
     let topology_client = TopologyServerConnection::spawn(
         args.topology_server_url.clone(),
@@ -72,6 +93,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         counter_registries.registries(),
         counter_registries.new_registry("topology_server_connection"),
     );
+    trackers.topology_client = Some(topology_client.clone());
 
     let devices = libconntrack::pcap::find_interesting_pcap_interfaces(&args.pcap_device)?;
     let local_addrs = devices
@@ -84,6 +106,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         counter_registries.new_registry("process_tracker"),
     );
     let (process_tx, _join) = process_tracker.spawn(Duration::milliseconds(500)).await;
+    trackers.process_tracker = Some(process_tx.clone());
 
     // launch the DNS tracker; cache localhost entries
     let (dns_tx, _) = DnsTracker::spawn(
@@ -91,6 +114,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         counter_registries.new_registry("dns_tracker"),
     )
     .await;
+    trackers.dns_tracker = Some(dns_tx.clone());
     let dns_tx_clone = dns_tx.clone();
     let process_tx_clone = process_tx.clone();
     for ip in local_addrs.clone() {
@@ -114,6 +138,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // launch the connection tracker as a tokio::task in the background
     let args_clone = args.clone();
     let connection_manager_tx = tx.clone();
+    trackers.connection_tracker = Some(connection_manager_tx.clone());
 
     let conn_track_counters = counter_registries.new_registry("conn_tracker");
     let topology_client_clone = topology_client.clone();
@@ -146,11 +171,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let listen_addr = ([127, 0, 0, 1], args.listen_port);
 
     warp::serve(make_common_desktop_http_routes(
-        tx,
-        dns_tx,
-        process_tx,
-        topology_client,
-        system_tracker,
+        trackers,
         counter_registries.registries(),
     ))
     .run(listen_addr)
@@ -173,22 +194,11 @@ pub fn make_counter_routes(
 /***** A bunch of copied/funged code from libwebserver - think about how to refactor */
 
 pub fn make_common_desktop_http_routes(
-    connection_tracker: ConnectionTrackerSender,
-    dns_tracker: UnboundedSender<DnsTrackerMessage>,
-    process_tracker: ProcessTrackerSender,
-    topology_client: TopologyServerSender,
-    system_tracker: SystemTrackerSender,
+    trackers: Trackers,
     counter_registries: SharedExportedStatRegistries,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-    let ws = make_desktop_ws_route(
-        connection_tracker,
-        dns_tracker,
-        process_tracker,
-        topology_client,
-        system_tracker,
-        counter_registries.clone(),
-    )
-    .with(warp::log("websocket"));
+    let ws =
+        make_desktop_ws_route(trackers, counter_registries.clone()).with(warp::log("websocket"));
     let counter_path =
         make_counter_routes(counter_registries).with(warp::log("counters/get_counters"));
 
@@ -196,45 +206,11 @@ pub fn make_common_desktop_http_routes(
 }
 
 // this function just wraps the connection tracker to make sure the types are understood
-fn with_connection_tracker(
-    connection_tracker: ConnectionTrackerSender,
-) -> impl warp::Filter<Extract = (ConnectionTrackerSender,), Error = std::convert::Infallible> + Clone
-{
-    let connection_tracker = connection_tracker.clone();
-    warp::any().map(move || connection_tracker.clone())
-}
-
-fn with_dns_tracker(
-    dns_tracker: UnboundedSender<DnsTrackerMessage>,
-) -> impl warp::Filter<
-    Extract = (UnboundedSender<DnsTrackerMessage>,),
-    Error = std::convert::Infallible,
-> + Clone {
-    let dns_tracker = dns_tracker.clone();
-    warp::any().map(move || dns_tracker.clone())
-}
-
-fn with_process_tracker(
-    process_tracker: ProcessTrackerSender,
-) -> impl warp::Filter<Extract = (ProcessTrackerSender,), Error = std::convert::Infallible> + Clone
-{
-    let process_tracker = process_tracker.clone();
-    warp::any().map(move || process_tracker.clone())
-}
-
-fn with_system_tracker(
-    system_tracker: SystemTrackerSender,
-) -> impl warp::Filter<Extract = (SystemTrackerSender,), Error = std::convert::Infallible> + Clone {
-    let system_tracker = system_tracker.clone();
-    warp::any().map(move || system_tracker.clone())
-}
-
-fn with_topology_client(
-    topology_client: TopologyServerSender,
-) -> impl warp::Filter<Extract = (TopologyServerSender,), Error = std::convert::Infallible> + Clone
-{
-    let topology_client = topology_client.clone();
-    warp::any().map(move || topology_client.clone())
+fn with_trackers(
+    trackers: Trackers,
+) -> impl warp::Filter<Extract = (Trackers,), Error = std::convert::Infallible> + Clone {
+    let trackers = trackers.clone();
+    warp::any().map(move || trackers.clone())
 }
 
 fn with_counter_registries(
@@ -245,41 +221,19 @@ fn with_counter_registries(
 }
 
 fn make_desktop_ws_route(
-    connection_tracker: ConnectionTrackerSender,
-    dns_tracker: UnboundedSender<DnsTrackerMessage>,
-    process_tracker: ProcessTrackerSender,
-    topology_client: TopologyServerSender,
-    system_tracker: SystemTrackerSender,
+    trackers: Trackers,
     counter_registries: SharedExportedStatRegistries,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     warp::path("ws")
-        .and(with_connection_tracker(connection_tracker))
-        .and(with_dns_tracker(dns_tracker))
-        .and(with_process_tracker(process_tracker))
-        .and(with_topology_client(topology_client))
-        .and(with_system_tracker(system_tracker))
+        .and(with_trackers(trackers))
         .and(with_counter_registries(counter_registries))
         .and(warp::ws())
         .and_then(websocket_desktop)
 }
 pub async fn websocket_desktop(
-    connection_tracker: ConnectionTrackerSender,
-    dns_tracker: UnboundedSender<DnsTrackerMessage>,
-    process_tracker: ProcessTrackerSender,
-    topology_client: TopologyServerSender,
-    system_tracker: SystemTrackerSender,
+    trackers: Trackers,
     counter_registries: SharedExportedStatRegistries,
     ws: warp::ws::Ws,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    Ok(ws.on_upgrade(move |websocket| {
-        websocket_handler(
-            connection_tracker,
-            dns_tracker,
-            process_tracker,
-            topology_client,
-            system_tracker,
-            counter_registries,
-            websocket,
-        )
-    }))
+    Ok(ws.on_upgrade(move |websocket| websocket_handler(trackers, counter_registries, websocket)))
 }
