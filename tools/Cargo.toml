@@ -1,0 +1,18 @@
+[package]
+name = "tools"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pcap-util"
+path = "src/pcap-util.rs"
+
+[dependencies]
+clap = { workspace = true }
+common = { path = "../common" }
+common-wasm = { path = "../common/wasm" }
+indexmap = { workspace = true }
+libconntrack = { path = "../libconntrack" }
+libconntrack-wasm = { path = "../libconntrack-wasm" }
+pcap = { workspace = true }
+tokio = { version = "1.28.2", features = ["full"] }

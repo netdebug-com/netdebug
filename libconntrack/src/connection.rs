@@ -160,7 +160,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub(crate) fn new(
+    pub fn new(
         key: ConnectionKey,
         ts: DateTime<Utc>,
         stat_handles: ConnectionStatHandles,
@@ -196,7 +196,7 @@ impl Connection {
         dns_tx: &Option<mpsc::UnboundedSender<DnsTrackerMessage>>,
         mut pcap_to_wall_delay: StatHandleDuration,
     ) -> LostBytesWrapper {
-        let mut ret_val = 0;
+        let mut new_lost_bytes = 0;
         self.last_packet_time = packet.timestamp;
         let pcap_wall_dt = (Utc::now() - packet.timestamp).abs();
         pcap_to_wall_delay.add_duration_value(pcap_wall_dt.to_std().unwrap());
@@ -204,7 +204,12 @@ impl Connection {
             .add_packet_with_time(src_is_local, packet.len as u64, packet.timestamp);
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
-                ret_val = self.update_tcp(src_is_local, &packet, tcp, prober_helper);
+                new_lost_bytes = self.update_tcp(src_is_local, &packet, tcp, prober_helper);
+                self.traffic_stats.add_new_lost_bytes(
+                    !src_is_local, // The side that lost the bytes, is the opposite of the one sending ACKs
+                    new_lost_bytes,
+                    packet.timestamp,
+                );
             }
             Some(TransportHeader::Icmpv4(icmp4)) => {
                 if src_is_local {
@@ -237,7 +242,7 @@ impl Connection {
                 );
             }
         }
-        ret_val
+        new_lost_bytes
     }
 
     /**
@@ -362,8 +367,9 @@ impl Connection {
                             } else {
                                 self.stat_handles.sack_not_a_probe.bump();
                                 debug!(
-                                "Looks like we got a dupACK but it's not a probe response possible probe id: {} :: {:?}. Expected probe seq: {}, got SACK.LE: {}",
-                                probe_id, packet, active_probe_round.probe_pkt_seq_no, sack.left()
+                                "Looks like we got a dupACK but it's not a probe response possible probe key: {}, id: {}. Expected probe seq: {}, got SACK.LE: {}",
+                                self.connection_key,
+                                probe_id, active_probe_round.probe_pkt_seq_no, sack.left()
                             );
                             }
                         }
@@ -886,14 +892,6 @@ impl Connection {
             if delta > timeout {
                 self.generate_probe_report(probe_round.round_number as u32, None, false);
             }
-        }
-        if let Some(tx_stat) = self.traffic_stats.tx.as_mut() {
-            let lost_bytes_opt = self.local_tcp_state.as_ref().map(|s| *s.lost_bytes());
-            tx_stat.set_lost_bytes(lost_bytes_opt.unwrap_or_default());
-        }
-        if let Some(rx_stat) = self.traffic_stats.rx.as_mut() {
-            let lost_bytes_opt = self.remote_tcp_state.as_ref().map(|s| *s.lost_bytes());
-            rx_stat.set_lost_bytes(lost_bytes_opt.unwrap_or_default());
         }
         libconntrack_wasm::ConnectionMeasurements {
             tx_stats: self.traffic_stats.tx_stats_summary(now),

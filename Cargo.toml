@@ -11,13 +11,16 @@ members = [
   "ip-asn-lookup",
   "libconntrack",
   "probe-o-matic",
+  "tools",
   "webserver",
   "webserver/web-client",
 ]
 resolver = "2"
 
 [workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
 derive-getters = "0.3"
+indexmap = { version = "2", features = ["serde"] }
+pcap = "1.1.0"
 thiserror = "1"
 typescript-type-def = { git = "https://github.com/gregor-netdebug/rust-typescript-type-def", branch = "ipaddr-support" }
-indexmap = { version="2", features = ["serde"] }

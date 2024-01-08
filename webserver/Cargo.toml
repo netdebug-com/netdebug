@@ -39,7 +39,7 @@ cli = []
 [dependencies]
 # pls keep in alpha order
 chrono = "0.4.26"
-clap = { version = "4.2.7", features = ["derive"] }
+clap = { workspace = true }
 common = { path = "../common" }
 common-wasm = { path = "../common/wasm" }
 # move back to the public branch once https://github.com/JulianSchmid/etherparse/pull/66 is merged
