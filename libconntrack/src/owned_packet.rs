@@ -509,6 +509,22 @@ impl OwnedParsedPacket {
         let parsed = etherparse::PacketHeaders::from_ethernet_slice(&pkt)?;
         Ok(Box::new(OwnedParsedPacket::new(parsed, pcap_header)))
     }
+
+    /**
+     * Utility to simplify testing - don't use in real code
+     */
+    #[cfg(test)]
+    pub(crate) fn try_from_timestamp(
+        pkt: Vec<u8>,
+        ts: DateTime<Utc>,
+    ) -> Result<Box<OwnedParsedPacket>, Box<dyn Error>> {
+        let parsed = etherparse::PacketHeaders::from_ethernet_slice(&pkt)?;
+        Ok(Box::new(OwnedParsedPacket::from_headers_and_ts(
+            parsed,
+            ts,
+            pkt.len() as u32,
+        )))
+    }
 }
 
 /**

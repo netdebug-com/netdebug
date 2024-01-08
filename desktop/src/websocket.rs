@@ -11,7 +11,7 @@ use futures_util::{
     SinkExt, StreamExt,
 };
 use libconntrack::{
-    connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
+    connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender, TimeMode},
     dns_tracker::DnsTrackerMessage,
     perf_check,
     process_tracker::ProcessTrackerSender,
@@ -144,7 +144,10 @@ async fn handle_congested_links_request(
     send_or_log_async!(
         connection_tracker,
         "handle_congested_links_request() - conntracker",
-        ConnectionTrackerMsg::GetConnectionMeasurements { tx: reply_tx }
+        ConnectionTrackerMsg::GetConnectionMeasurements {
+            tx: reply_tx,
+            time_mode: TimeMode::Wallclock
+        }
     )
     .await;
     let connection_measurements = match reply_rx.recv().await {
@@ -232,7 +235,10 @@ async fn handle_dump_aggregate_connection_tracker_counters(
     let start = std::time::Instant::now();
     let (reply_tx, mut reply_rx) = mpsc::unbounded_channel();
     if let Err(e) = connection_tracker.try_send(PerfMsgCheck::new(
-        ConnectionTrackerMsg::GetTrafficCounters { tx: reply_tx },
+        ConnectionTrackerMsg::GetTrafficCounters {
+            tx: reply_tx,
+            time_mode: TimeMode::Wallclock,
+        },
     )) {
         warn!(
             "Failed to send GetAggregateCounters to the connection tracker!?: {}",
@@ -289,7 +295,10 @@ async fn handle_gui_dump_dns_flows(
     send_or_log_sync!(
         connection_tracker,
         "connection_tracker",
-        GetDnsTrafficCounters { tx: reply_tx }
+        GetDnsTrafficCounters {
+            tx: reply_tx,
+            time_mode: TimeMode::Wallclock,
+        }
     );
     let stat_entries = match reply_rx.recv().await {
         Some(entries) => entries,
@@ -317,7 +326,10 @@ async fn handle_gui_dumpflows(
     let func_start = Instant::now();
     // get the cache of current connections
     let (reply_tx, mut reply_rx) = tokio::sync::mpsc::unbounded_channel();
-    let request = ConnectionTrackerMsg::GetConnectionMeasurements { tx: reply_tx };
+    let request = ConnectionTrackerMsg::GetConnectionMeasurements {
+        tx: reply_tx,
+        time_mode: TimeMode::Wallclock,
+    };
     if let Err(e) = connection_tracker.try_send(PerfMsgCheck::new(request)) {
         warn!("Connection Tracker queue problem: {}", e);
     }
