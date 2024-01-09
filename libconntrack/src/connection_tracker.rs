@@ -27,7 +27,7 @@ use std::{println as debug, println as warn}; // Workaround to use prinltn! for 
 
 use crate::{
     analyze::analyze,
-    connection::{Connection, MAX_BURST_RATE_TIME_WINDOW_MILLIS},
+    connection::{Connection, ConnectionUpdateListener, MAX_BURST_RATE_TIME_WINDOW_MILLIS},
     dns_tracker::DnsTrackerMessage,
     in_band_probe::ProbeMessage,
     owned_packet::{ConnectionKeyError, OwnedParsedPacket},
@@ -111,6 +111,20 @@ pub enum ConnectionTrackerMsg {
     GetDnsTrafficCounters {
         tx: mpsc::Sender<Vec<AggregateStatEntry>>,
         time_mode: TimeMode,
+    },
+    AddConnectionUpdateListener {
+        /// a description of what the listener is doing; must be unique across listeners
+        desc: String,
+        /// a tx queue to send updates to
+        tx: ConnectionUpdateListener,
+        /// a Connection identifier to listen to
+        key: ConnectionKey,
+    },
+    DelConnectionUpdateListener {
+        /// the desc string passed when adding it
+        desc: String,
+        /// the connection key to delete the update listener
+        key: ConnectionKey,
     },
 }
 
@@ -238,6 +252,13 @@ pub struct ConnectionTracker<'a> {
     dequeue_delay_stats: StatHandleDuration,
     /// Number of connections evicted due to us reaching the the max_connection limit
     evictions_due_to_size_limit: StatHandle,
+    /// For each connection key, A (potentially empty) map of places to update if this connection gets an update
+    /// The key is some sort of human read-able descriptor of what the caller is doing, e.g.,
+    /// "Default Gw Ping Tracker" => tx
+    /// NOTE: we put this here instead of in each connection so that the caller doesn't have to race
+    /// with the packet handling code and risk trying to install a listenner for a connection that doesn't
+    /// exist yet.
+    pub(crate) update_listeners: HashMap<ConnectionKey, HashMap<String, ConnectionUpdateListener>>,
 }
 impl<'a> ConnectionTracker<'a> {
     pub fn new(
@@ -310,6 +331,7 @@ impl<'a> ConnectionTracker<'a> {
                 Units::None,
                 [StatType::COUNT],
             ),
+            update_listeners: HashMap::new(),
         }
     }
 
@@ -395,6 +417,12 @@ impl<'a> ConnectionTracker<'a> {
                     time_mode,
                 );
             }
+            AddConnectionUpdateListener { tx, key, desc } => {
+                self.add_connection_update_listener(tx, key, desc)
+            }
+            DelConnectionUpdateListener { key, desc } => {
+                self.del_connection_update_listener(desc, key)
+            }
         }
     }
 
@@ -426,6 +454,14 @@ impl<'a> ConnectionTracker<'a> {
                         self.connections.get_mut(&key).unwrap()
                     }
                 };
+                // NOTE: adding a listener to a connection is expensive as we copy every packet; use sparingly!
+                if let Some(listenners_map) = self.update_listeners.get(&key) {
+                    for (desc, tx) in listenners_map {
+                        if let Err(e) = tx.try_send((packet.clone(), key.clone())) {
+                            warn!("Update ConnectionListener {} failed: {}", desc, e);
+                        }
+                    }
+                }
                 let pkt_timestamp = packet.timestamp; // copy before we move packet into connection.update()
                 let pkt_len = packet.len as u64; // copy before we move packet into connection.update()
                 let new_lost_bytes = connection.update(
@@ -756,6 +792,44 @@ impl<'a> ConnectionTracker<'a> {
             TimeMode::PacketTime => self.last_packet_time,
         }
     }
+
+    /**
+     * Subscribe this tx to all packet updates for a given ConnectionKey.  The ConnectionKey
+     * doesn't have to exist yet which avoids a nasty race condition.
+     *
+     * the 'desc' is a human readable id of who is listening, e.g., "Ping Updater" and needs to be unique
+     */
+    fn add_connection_update_listener(
+        &mut self,
+        tx: ConnectionUpdateListener,
+        key: ConnectionKey,
+        desc: String,
+    ) {
+        self.update_listeners
+            .entry(key)
+            .or_default()
+            .insert(desc, tx);
+    }
+
+    /**
+     * Unsubscribe from an `ConnectionTracker::add_connection_update_listener` call.  Pass the same
+     * desc and ConnectionKey as when adding
+     */
+    fn del_connection_update_listener(&mut self, desc: String, key: ConnectionKey) {
+        if let Some(listenners_map) = self.update_listeners.get_mut(&key) {
+            if listenners_map.remove(&desc).is_none() {
+                warn!(
+                    "Tried to add a ConnectionUpdateListener ({}) for {} but desc not found",
+                    desc, key
+                );
+            }
+        } else {
+            warn!(
+                "Tried to add a ConnectionUpdateListener ({}) for {} but key not found",
+                desc, key
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -953,6 +1027,45 @@ pub mod test {
         // probe and reply match!
         assert_eq!(*probe_id, 7);
         assert_eq!(*reply_id, 7);
+    }
+
+    #[tokio::test]
+    /**
+     * Subscribe to the update_listener for a connection and make sure we get the updates
+     */
+    async fn connection_tracker_update_listener() {
+        let local_addrs = HashSet::from([IpAddr::from_str("172.31.2.61").unwrap()]);
+        let mut connection_tracker = mk_mock_connection_tracker(local_addrs.clone());
+
+        let probe = OwnedParsedPacket::try_from_fake_time(TEST_PROBE.to_vec()).unwrap();
+
+        let icmp_reply = OwnedParsedPacket::try_from_fake_time(TEST_REPLY.to_vec()).unwrap();
+
+        let (tx, mut rx) = channel(10);
+        let (key, _src_is_local) = probe.to_connection_key(&local_addrs).unwrap();
+        let desc = "test listener".to_string();
+        assert_eq!(connection_tracker.update_listeners.len(), 0);
+        connection_tracker.add_connection_update_listener(tx, key.clone(), desc.clone());
+        assert_eq!(connection_tracker.update_listeners.len(), 1);
+
+        connection_tracker.add(probe.clone());
+        connection_tracker.add(icmp_reply.clone());
+
+        // get the first packet update
+        let (test_probe, test_key) = rx.recv().await.unwrap();
+        assert_eq!(test_probe, probe);
+        assert_eq!(test_key, key);
+        // get the second packet update
+        let (test_reply, test_key) = rx.recv().await.unwrap();
+        assert_eq!(test_reply, icmp_reply);
+        assert_eq!(test_key, key);
+
+        // now remove
+        connection_tracker.del_connection_update_listener(desc, key.clone());
+        assert_eq!(
+            connection_tracker.update_listeners.get(&key).unwrap().len(),
+            0
+        );
     }
 
     // as copied from the first few packets of 'aws-sjc-ist-one-stream.pcap'

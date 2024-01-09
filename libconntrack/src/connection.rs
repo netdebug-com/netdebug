@@ -17,7 +17,7 @@ use libconntrack_wasm::{
 #[cfg(not(test))]
 use log::{debug, warn};
 use netstat2::ProtocolSocketInfo;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, Sender};
 
 #[cfg(test)]
 use std::{println as debug, println as warn}; // Workaround to use prinltn! for logs.
@@ -129,12 +129,15 @@ impl ProbeRound {
     }
 }
 
+pub type ConnectionUpdateListener = Sender<(Box<OwnedParsedPacket>, ConnectionKey)>;
+
 /**
  * Main connection tracking structure - one per connection.
  *
  * NOTE: everything in this struct will get serialized to a logfile on the connection's close
  * for analysis, so be thoughtful what you add here.
  */
+// TODO: we should enable Connection to support Default for better serdes future compat
 #[derive(Clone, Debug, Getters)]
 pub struct Connection {
     connection_key: ConnectionKey,
