@@ -3,7 +3,7 @@ use std::fmt::Display;
 use derive_getters::Getters;
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement};
 use libconntrack_wasm::ConnectionKey;
-use log::warn;
+use log::{debug, warn};
 
 use crate::{
     connection_tracker::ConnectionStatHandles, get_holes_from_sack,
@@ -111,8 +111,8 @@ impl UnidirectionalTcpState {
         if tcp.syn {
             if self.syn_pkt.is_some() {
                 self.stat_handles.multiple_syns.bump();
-                warn!(
-                    "{}: {}: Weird - multiple SYNs on the same connection",
+                debug!(
+                    "{}: {}: Multiple SYNs on the same connection. Likely retransmit",
                     self.connection_key, self.side,
                 );
             }
