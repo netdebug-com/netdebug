@@ -170,6 +170,7 @@ pub struct ConnectionStatHandles {
     pub probe_rounds_dst_ratelimit: StatHandle,
     pub weird_probes_found: StatHandle,
     pub weird_replies_found: StatHandle,
+    pub packet_loss_event: StatHandle,
 }
 
 impl ConnectionStatHandles {
@@ -187,6 +188,7 @@ impl ConnectionStatHandles {
             probe_rounds_dst_ratelimit: add_stat("probe_round_dst_ratelimit"),
             weird_probes_found: add_stat("weird_probes_found"),
             weird_replies_found: add_stat("weird_replies_found"),
+            packet_loss_event: add_stat("packet_loss_event"),
         }
     }
 }
