@@ -817,7 +817,7 @@ mod test {
             pcap::Capture::from_file(test_dir("libconntrack", "tests/dns_traces.pcap")).unwrap();
         // grab each packet and dump it into the dns tracker
         while let Ok(pkt) = capture.next_packet() {
-            let pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            let pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
             let udp = match &pkt.transport {
                 Some(TransportHeader::Udp(udp)) => udp,
                 _ => panic!("Non-UDP packet in the DNS+UDP only trace"),
@@ -902,7 +902,7 @@ mod test {
         let mut capture =
             pcap::Capture::from_file(test_dir("libconntrack", "tests/lost_dns.pcap")).unwrap();
         while let Ok(pkt) = capture.next_packet() {
-            let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            let owned_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
             connection_tracker.add(owned_pkt);
         }
         // NOTE that 'tests/lost_dns.ips_all' includes IPs that we don't see in DNS!

@@ -16,7 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 chrono = { version = "0.4.31", features = ["serde"] }
-clap = { version = "4.2.7", features = ["derive"] }
+clap = { workspace = true }
 common = { path = "../common" }
 etherparse = { git = "https://github.com/robs-zeynet/etherparse", branch = "tcp_header" }
 libconntrack = { path = "../libconntrack" }

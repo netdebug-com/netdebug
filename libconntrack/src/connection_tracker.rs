@@ -118,33 +118,41 @@ pub enum ConnectionTrackerMsg {
  * Send a copy of the ConnectionMeasurements() struct associated with this connection
  * to the remote topology server for storage.
  */
-
-fn send_connection_storage_msg(
-    topology_client: &Option<TopologyServerSender>,
-    c: &mut Connection,
-    now: DateTime<Utc>,
-) {
-    if let Some(tx) = topology_client.as_ref() {
-        let measurement = Box::new(c.to_connection_measurements(now, None));
-        if !measurement.probe_report_summary.raw_reports.is_empty() {
-            // only send the connection info if we have at least one successful probe round
-            debug!(
-                "Sending connection measurements to topology server for {}",
-                c.connection_key()
-            );
-            send_or_log_sync!(
-                tx,
-                "send_connection_storage_msg()",
-                TopologyServerMessage::StoreConnectionMeasurements {
-                    connection_measurements: measurement
-                }
-            );
-        } else {
-            debug!(
-                "Not sending connection measurement to storage server: {} measurements {}",
-                measurement.probe_report_summary.raw_reports.len(),
-                c.connection_key()
-            );
+// TODO: I'll move this down where the rest if the ConnectionTracker impl is in another
+// diff. But doing it this way keeps the diff more readable
+impl<'a> ConnectionTracker<'a> {
+    fn send_connection_storage_msg(&mut self, c: &mut Connection, now: DateTime<Utc>) {
+        if let Some(tx) = self.topology_client.as_ref() {
+            let measurement = Box::new(c.to_connection_measurements(now, None));
+            if !measurement.probe_report_summary.raw_reports.is_empty() {
+                // only send the connection info if we have at least one successful probe round
+                debug!(
+                    "Sending connection measurements to topology server for {}",
+                    c.connection_key()
+                );
+                send_or_log_sync!(
+                    tx,
+                    "send_connection_storage_msg()",
+                    TopologyServerMessage::StoreConnectionMeasurements {
+                        connection_measurements: measurement
+                    }
+                );
+            } else {
+                debug!(
+                    "Not sending connection measurement to storage server: {} measurements {}",
+                    measurement.probe_report_summary.raw_reports.len(),
+                    c.connection_key()
+                );
+            }
+        }
+        if let Some(tx) = self.all_evicted_connections_listener.as_ref() {
+            let measurement = Box::new(c.to_connection_measurements(now, None));
+            if let Err(e) = tx.try_send(measurement) {
+                warn!(
+                    "Failed to send data to all_evicted_connections :: err {}",
+                    e
+                );
+            }
         }
     }
 }
@@ -198,6 +206,8 @@ pub struct ConnectionTracker<'a> {
     local_addrs: HashSet<IpAddr>,
     prober_helper: ProberHelper,
     topology_client: Option<TopologyServerSender>,
+    // If set, all evicted connections are send here. Mostly used for debugging/testing
+    all_evicted_connections_listener: Option<Sender<Box<ConnectionMeasurements>>>,
     dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
     process_tx: Option<ProcessTrackerSender>,
     tx: ConnectionTrackerSender, // so we can tell others how to send msgs to us
@@ -258,6 +268,7 @@ impl<'a> ConnectionTracker<'a> {
             local_addrs,
             prober_helper: ProberHelper::new(prober_tx, unlimited_probes),
             topology_client,
+            all_evicted_connections_listener: None,
             dns_tx: None,
             process_tx: None,
             tx,
@@ -300,9 +311,6 @@ impl<'a> ConnectionTracker<'a> {
         }
     }
 
-    /**
-     * Change the default rate limiter; needed for webserver
-     */
     pub fn set_topology_client(&mut self, topology_client: Option<TopologyServerSender>) {
         self.topology_client = topology_client;
     }
@@ -315,65 +323,77 @@ impl<'a> ConnectionTracker<'a> {
         self.process_tx = Some(process_tx);
     }
 
+    pub fn set_all_evicted_connections_listener(
+        &mut self,
+        all_evicted_connections: Sender<Box<ConnectionMeasurements>>,
+    ) {
+        self.all_evicted_connections_listener = Some(all_evicted_connections);
+    }
+
     pub async fn rx_loop(&mut self) {
         while let Some(msg) = self.rx.recv().await {
-            use ConnectionTrackerMsg::*;
             let msg = msg.perf_check_get_with_stats(
                 "ConnectionTracker::rx_loop",
                 &mut self.dequeue_delay_stats,
             );
-            match msg {
-                Pkt(pkt) => self.add(pkt),
-                ProbeReport {
-                    key,
-                    should_probe_again: clear_state,
-                    tx,
-                    probe_round,
-                    application_rtt,
-                } => {
-                    self.generate_report(&key, probe_round, application_rtt, clear_state, tx)
-                        .await
+            self.handle_one_msg(msg);
+        }
+        warn!("ConnectionTracker exiting rx_loop()");
+    }
+
+    pub fn handle_one_msg(&mut self, msg: ConnectionTrackerMsg) {
+        use ConnectionTrackerMsg::*;
+        match msg {
+            Pkt(pkt) => self.add(pkt),
+            ProbeReport {
+                key,
+                should_probe_again: clear_state,
+                tx,
+                probe_round,
+                application_rtt,
+            } => {
+                self.generate_report(&key, probe_round, application_rtt, clear_state, tx);
+            }
+            SetUserAnnotation { annotation, key } => {
+                self.set_user_annotation(&key, annotation);
+            }
+            GetInsights { key, tx } => self.get_insights(&key, tx),
+            SetUserAgent { user_agent, key } => {
+                self.set_user_agent(&key, user_agent);
+            }
+            GetConnectionKeys { tx } => {
+                // so simple, no need for a dedicated function
+                let keys = self.connections.keys().cloned().collect();
+                if let Err(e) = tx.try_send(keys) {
+                    warn!(
+                        "Error sendings keys back to caller in GetConnectionKeys(): {}",
+                        e
+                    );
                 }
-                SetUserAnnotation { annotation, key } => {
-                    self.set_user_annotation(&key, annotation).await;
-                }
-                GetInsights { key, tx } => self.get_insights(&key, tx).await,
-                SetUserAgent { user_agent, key } => {
-                    self.set_user_agent(&key, user_agent).await;
-                }
-                GetConnectionKeys { tx } => {
-                    // so simple, no need for a dedicated function
-                    let keys = self.connections.keys().cloned().collect();
-                    if let Err(e) = tx.send(keys).await {
-                        warn!(
-                            "Error sendings keys back to caller in GetConnectionKeys(): {}",
-                            e
-                        );
-                    }
-                }
-                GetConnectionMeasurements { tx, time_mode } => {
-                    self.handle_get_connection_measurements(tx, time_mode);
-                }
-                SetConnectionRemoteHostnameDns {
-                    keys,
-                    remote_hostname,
-                } => {
-                    self.set_connection_remote_hostname_dns(&keys, remote_hostname);
-                }
-                GetTrafficCounters { tx, time_mode } => {
-                    self.get_conntrack_traffic_counters(tx, time_mode)
-                }
-                SetConnectionApplication { key, application } => {
-                    self.set_connection_application(key, application)
-                }
-                GetDnsTrafficCounters { tx, time_mode } => self.get_aggregate_traffic_counters(
+            }
+            GetConnectionMeasurements { tx, time_mode } => {
+                self.handle_get_connection_measurements(tx, time_mode);
+            }
+            SetConnectionRemoteHostnameDns {
+                keys,
+                remote_hostname,
+            } => {
+                self.set_connection_remote_hostname_dns(&keys, remote_hostname);
+            }
+            GetTrafficCounters { tx, time_mode } => {
+                self.get_conntrack_traffic_counters(tx, time_mode)
+            }
+            SetConnectionApplication { key, application } => {
+                self.set_connection_application(key, application)
+            }
+            GetDnsTrafficCounters { tx, time_mode } => {
+                self.get_aggregate_traffic_counters(
                     |kind| matches!(kind, AggregateStatKind::DnsDstDomain { .. }),
                     tx,
                     time_mode,
-                ),
+                );
             }
         }
-        warn!("ConnectionTracker exiting rx_loop()");
     }
 
     pub fn add(&mut self, packet: Box<OwnedParsedPacket>) {
@@ -409,7 +429,7 @@ impl<'a> ConnectionTracker<'a> {
                     if let Some(traffic_stats) = self.aggregate_traffic_stats.get_mut(group) {
                         traffic_stats.add_packet_with_time(src_is_local, pkt_len, pkt_timestamp);
                         traffic_stats.add_new_lost_bytes(
-                            src_is_local,
+                            !src_is_local, // The side that lost the bytes, is the opposite of the one sending ACKs
                             new_lost_bytes,
                             pkt_timestamp,
                         );
@@ -471,7 +491,7 @@ impl<'a> ConnectionTracker<'a> {
                 "Evicting connection {} from connection_tracker due to size limit",
                 key
             );
-            send_connection_storage_msg(&self.topology_client, &mut conn, now);
+            self.send_connection_storage_msg(&mut conn, now);
         }
         // TIME_WAIT evictions
         let mut eviction_cnt = 0;
@@ -483,7 +503,7 @@ impl<'a> ConnectionTracker<'a> {
                     "Evicting connection {} from connection_tracker due to idle",
                     key
                 );
-                send_connection_storage_msg(&self.topology_client, &mut conn, now);
+                self.send_connection_storage_msg(&mut conn, now);
                 eviction_cnt += 1;
             } else {
                 break;
@@ -504,7 +524,7 @@ impl<'a> ConnectionTracker<'a> {
      * If called with a bad key, caller will get back None from rx.recv() if we exit without
      */
 
-    async fn generate_report(
+    fn generate_report(
         &mut self,
         key: &ConnectionKey,
         probe_round: u32,
@@ -515,7 +535,7 @@ impl<'a> ConnectionTracker<'a> {
         if let Some(connection) = self.connections.get_mut(key) {
             let report =
                 connection.generate_probe_report(probe_round, application_rtt, clear_state);
-            if let Err(e) = tx.send(report).await {
+            if let Err(e) = tx.try_send(report) {
                 warn!("Error sending back report: {}", e);
             }
         } else {
@@ -524,7 +544,7 @@ impl<'a> ConnectionTracker<'a> {
         }
     }
 
-    async fn set_user_annotation(&mut self, key: &ConnectionKey, annotation: String) {
+    fn set_user_annotation(&mut self, key: &ConnectionKey, annotation: String) {
         if let Some(connection) = self.connections.get_mut(key) {
             connection.user_annotation = Some(annotation);
         } else {
@@ -535,7 +555,7 @@ impl<'a> ConnectionTracker<'a> {
         }
     }
 
-    async fn set_user_agent(&mut self, key: &ConnectionKey, user_agent: String) {
+    fn set_user_agent(&mut self, key: &ConnectionKey, user_agent: String) {
         if let Some(connection) = self.connections.get_mut(key) {
             connection.user_agent = Some(user_agent);
         } else {
@@ -546,14 +566,14 @@ impl<'a> ConnectionTracker<'a> {
         }
     }
 
-    async fn get_insights(
+    fn get_insights(
         &mut self,
         key: &ConnectionKey,
         tx: tokio::sync::mpsc::Sender<Vec<AnalysisInsights>>,
     ) {
         if let Some(connection) = self.connections.get_mut(key) {
             let insights = analyze(connection.probe_report_summary());
-            if let Err(e) = tx.send(insights).await {
+            if let Err(e) = tx.try_send(insights) {
                 warn!("get_insights: {} :: {}", key, e);
             }
         } else {
@@ -580,7 +600,7 @@ impl<'a> ConnectionTracker<'a> {
         }
     }
 
-    fn set_connection_remote_hostname_dns(
+    pub fn set_connection_remote_hostname_dns(
         &mut self,
         keys: &Vec<ConnectionKey>,
         remote_hostname: Option<String>,
@@ -690,7 +710,6 @@ impl<'a> ConnectionTracker<'a> {
                     continue;
                 }
                 let m = connection.to_connection_measurements(now, None);
-                let (rx_lost_bytes, tx_lost_bytes) = (m.rx_stats.lost_bytes, m.tx_stats.lost_bytes);
                 // if we've already seen this kind before
                 if let Some(entry) = entries.get_mut(&kind) {
                     // just add this connection to the list
@@ -710,15 +729,6 @@ impl<'a> ConnectionTracker<'a> {
                             },
                         );
                     }
-                }
-                // Update the lost bytes in the summary stats with the lost bytes from this
-                // connection
-                let entry = entries.get_mut(&kind).unwrap();
-                if let Some(bytes) = rx_lost_bytes {
-                    *entry.summary.rx.lost_bytes.get_or_insert(0) += bytes;
-                }
-                if let Some(bytes) = tx_lost_bytes {
-                    *entry.summary.tx.lost_bytes.get_or_insert(0) += bytes;
                 }
             }
         }
@@ -791,7 +801,7 @@ pub mod test {
                 .unwrap();
         // take all of the packets in the capture and pipe them into the connection tracker
         while let Ok(pkt) = capture.next_packet() {
-            let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            let owned_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
             connection_tracker.add(owned_pkt);
         }
         assert_eq!(connection_tracker.connections.len(), 1);
@@ -858,7 +868,7 @@ pub mod test {
         .unwrap();
         // take all of the packets in the capture and pipe them into the connection tracker
         while let Ok(pkt) = capture.next_packet() {
-            let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            let owned_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
             let (key, _) = owned_pkt.to_connection_key(&local_addrs).unwrap();
             if let Some(prev_key) = connection_key {
                 assert_eq!(prev_key, key);
@@ -961,7 +971,7 @@ pub mod test {
         // take all of the packets in the capture and pipe them into the connection tracker
         let mut conn_key = None;
         while let Ok(pkt) = capture.next_packet() {
-            let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            let owned_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
             conn_key = Some(owned_pkt.to_connection_key(&local_addrs).unwrap().0);
             connection_tracker.add(owned_pkt);
         }
@@ -1026,7 +1036,7 @@ pub mod test {
         // take all of the packets in the capture and pipe them into the connection tracker
         let mut conn_key = None;
         while let Ok(pkt) = capture.next_packet() {
-            let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            let owned_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
             conn_key = Some(owned_pkt.to_connection_key(local_addrs).unwrap().0);
             connection_tracker.add(owned_pkt);
         }
@@ -1063,7 +1073,7 @@ pub mod test {
         .unwrap();
         // take all of the packets in the capture and pipe them into the connection tracker
         while let Ok(pkt) = capture.next_packet() {
-            let owned_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            let owned_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
             let (key, _) = owned_pkt.to_connection_key(&local_addrs).unwrap();
             // make sure every packet in trace maps to same connection key
             if let Some(prev_key) = connection_key {
@@ -1286,7 +1296,7 @@ pub mod test {
         .unwrap();
         let mut packets = Vec::new();
         while let Ok(pkt) = capture.next_packet() {
-            packets.push(OwnedParsedPacket::try_from(pkt).unwrap());
+            packets.push(OwnedParsedPacket::try_from_pcap(pkt).unwrap());
         }
         // The trace has 11 packets total.
         // packets[7] is the first FIN
@@ -1379,7 +1389,7 @@ pub mod test {
                 // just the 3-way handshake
                 break;
             }
-            let parsed_pkt = OwnedParsedPacket::try_from(pkt).unwrap();
+            let parsed_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
             last_pkt_timne = parsed_pkt.timestamp;
             connection_tracker.add(parsed_pkt);
             num_pks += 1;
@@ -1513,7 +1523,7 @@ pub mod test {
         ))
         .unwrap();
         while let Ok(pkt) = capture.next_packet() {
-            connection_tracker.add(OwnedParsedPacket::try_from(pkt).unwrap());
+            connection_tracker.add(OwnedParsedPacket::try_from_pcap(pkt).unwrap());
         }
         assert_eq!(connection_tracker.connections.len(), 1);
         // assert_eq!(connection_tracker.no_conn_key_packets.get_sum()!?, 0);

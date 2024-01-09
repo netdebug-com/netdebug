@@ -3167,6 +3167,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tools"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "common",
+ "common-wasm",
+ "indexmap 2.1.0",
+ "libconntrack",
+ "libconntrack-wasm",
+ "pcap",
+ "tokio",
+]
+
+[[package]]
 name = "tower-service"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
