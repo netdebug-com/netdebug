@@ -601,12 +601,12 @@ fn dns_ptr_decode(name: &str) -> Result<IpAddr, Box<dyn std::error::Error>> {
     let name = name.trim_end_matches('.'); // remove trailing period if there
     if name.ends_with(DNS_PTR_V4_DOMAIN) {
         let tokens = name.split('.').collect::<Vec<&str>>();
-        Ok(IpAddr::try_from([
+        Ok(IpAddr::from([
             u8::from_str(tokens[3])?,
             u8::from_str(tokens[2])?,
             u8::from_str(tokens[1])?,
             u8::from_str(tokens[0])?,
-        ])?)
+        ]))
     } else if name.ends_with(DNS_PTR_V6_DOMAIN) {
         let tokens = name.split('.').collect::<Vec<&str>>();
         if tokens.len() < 32 {
@@ -620,7 +620,7 @@ fn dns_ptr_decode(name: &str) -> Result<IpAddr, Box<dyn std::error::Error>> {
                 + u8::from_str_radix(tokens[2 * i], 16)?;
             addr[15 - i] = oct; // put in reverse order
         }
-        Ok(IpAddr::try_from(addr)?)
+        Ok(IpAddr::from(addr))
     } else {
         Err(format!("dns_ptr_decode() Didn't end with known domain: '{}'", name).into())
     }

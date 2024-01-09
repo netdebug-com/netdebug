@@ -302,7 +302,7 @@ impl RemoteDBClient {
         // NOTE that postgres doesn't seem to have a native u64 type so it uses
         // int8 which maps to a i64 in rust.
         // Why allow negative!?
-        let count = rows.get(0).unwrap().get::<_, i64>(0);
+        let count = rows.first().unwrap().get::<_, i64>(0);
         Ok(count)
     }
 }
