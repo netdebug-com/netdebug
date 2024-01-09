@@ -17,7 +17,11 @@ pub struct ConnectionKey {
     pub local_ip: IpAddr,
     #[type_def(type_of = "String")]
     pub remote_ip: IpAddr,
+    /// With ip_proto=TCP|UDP, this is the l4 local port
+    /// But with ICMP4|ICMP6, this is the ICMP_header.type
     pub local_l4_port: u16,
+    /// With ip_proto=TCP|UDP, this is the l4 remote port
+    /// But with ICMP4|ICMP6 echo request|echo reply, this is the IcmpEchoHeader.id
     pub remote_l4_port: u16,
     pub ip_proto: IpProtocol,
 }
