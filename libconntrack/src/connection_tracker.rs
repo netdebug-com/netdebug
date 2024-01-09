@@ -399,6 +399,15 @@ impl<'a> ConnectionTracker<'a> {
     pub fn add(&mut self, packet: Box<OwnedParsedPacket>) {
         let mut needs_dns_and_process_lookup = false;
         self.last_packet_time = packet.timestamp;
+        // We do eviction handling before processing the new packet. All-in-all it doesn't really matter a
+        // lot. However, it will likely make a difference when processing filtered traces in tests. Let's
+        // assume we have a connection with a > TIME_WAIT gap in it. On a live capture, changes are very
+        // high that some other packets arrived during this gap and that the connection gets evicted (and/or
+        // that the first packet after the gap is from a different connection).
+        //  But in a test, the first after-gap packet might be from the same connection and then if we evict
+        // after handling the packet we would not evict that connection. Leading to test behavior that's
+        // different from what one would normally see.
+        self.evict_connections(packet.timestamp);
         match packet.to_connection_key(&self.local_addrs) {
             Ok((key, src_is_local)) => {
                 self.sucessfully_parsed_packets.bump();
@@ -467,7 +476,6 @@ impl<'a> ConnectionTracker<'a> {
                         }
                     }
                 }
-                self.evict_connections(pkt_timestamp);
             }
             Err(ConnectionKeyError::IcmpInnerPacketError) => self.icmp_extract_failed_packet.bump(),
             Err(ConnectionKeyError::IgnoredPacket) => self.no_conn_key_packets.bump(),
@@ -784,7 +792,7 @@ pub mod test {
             local_addrs,
             mock_prober.tx.clone(),
             128,
-            ExportedStatRegistry::new("conn_tracker", Instant::now()),
+            ExportedStatRegistry::new("test.conn_tracker", Instant::now()),
             true,
         )
     }
@@ -1502,6 +1510,104 @@ pub mod test {
         let (test_pid, test_app) = associated_apps.iter().next().unwrap();
         assert_eq!(*test_pid, my_pid);
         assert_eq!(*test_app, Some(my_app));
+    }
+
+    #[test]
+    fn test_tcp_with_tx_loss_trace() {
+        fn handle_dns_msg(
+            dns_rx: &mut mpsc::UnboundedReceiver<DnsTrackerMessage>,
+            conn_tracker: &mut ConnectionTracker,
+        ) {
+            if let Ok(DnsTrackerMessage::Lookup { key, .. }) = dns_rx.try_recv() {
+                conn_tracker.handle_one_msg(ConnectionTrackerMsg::SetConnectionRemoteHostnameDns {
+                    keys: vec![key],
+                    remote_hostname: Some("topology.netdebug.com".to_string()),
+                });
+            }
+        }
+
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
+        let mut conn_track = mk_mock_connection_tracker(local_addrs);
+        let mut capture =
+            pcap::Capture::from_file(test_dir("libconntrack", "tests/tcp-with-tx-loss.pcap"))
+                .unwrap();
+        let (all_conn_meas_tx, mut all_conn_meas_rx) = mpsc::channel(100);
+        conn_track.set_all_evicted_connections_listener(all_conn_meas_tx);
+        let (dns_tx, mut dns_rx) = mpsc::unbounded_channel();
+        conn_track.set_dns_tracker(dns_tx);
+
+        let mut tx_bytes = 0;
+        let mut rx_bytes = 0;
+        let mut tx_loss = 0;
+        let mut rx_loss = 0;
+        let mut tx_loss_per_conn = Vec::new();
+        let mut connection_cnt = 0;
+        let mut handle_conn_measurement = |measurement: &ConnectionMeasurements| {
+            tx_bytes += measurement.tx_stats.bytes;
+            rx_bytes += measurement.rx_stats.bytes;
+            tx_loss += measurement.tx_stats.lost_bytes.unwrap_or_default();
+            tx_loss_per_conn.push(measurement.tx_stats.lost_bytes.unwrap_or_default());
+            rx_loss += measurement.rx_stats.lost_bytes.unwrap_or_default();
+            connection_cnt += 1;
+        };
+        while let Ok(pkt) = capture.next_packet() {
+            let owned_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
+            conn_track.handle_one_msg(ConnectionTrackerMsg::Pkt(owned_pkt));
+            handle_dns_msg(&mut dns_rx, &mut conn_track);
+            if let Ok(measurement) = all_conn_meas_rx.try_recv() {
+                handle_conn_measurement(&measurement);
+            }
+        }
+        // Query conn_tracker for all remaining connections -- there should be one
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        conn_track.handle_one_msg(ConnectionTrackerMsg::GetConnectionMeasurements {
+            tx,
+            time_mode: TimeMode::PacketTime,
+        });
+        if let Ok(measurements) = rx.try_recv() {
+            for m in &measurements {
+                handle_conn_measurement(m);
+            }
+        }
+
+        // NOTE: this trace contains 3 or 4 connections depending on how you count. It has 3
+        // distinct 5-tuples and 3 handshakes. But there is a ~2hr gap in the trace which causes
+        // one of the connections to be evicted due to idle and then recreated.
+        assert_eq!(tx_bytes, 699_668); // incl. L2. Manually computed with ipsumdump
+        assert_eq!(rx_bytes, 41_033); // as above
+        assert_eq!(tx_loss, 8688);
+        assert_eq!(tx_loss_per_conn, vec![0, 7240, 0, 1448]);
+        assert_eq!(rx_loss, 0);
+        assert_eq!(connection_cnt, 4);
+
+        // Query for per domain counters
+        let (agg_counter_dns_tx, mut agg_counter_dns_rx) = mpsc::channel(100);
+        conn_track.handle_one_msg(ConnectionTrackerMsg::GetDnsTrafficCounters {
+            tx: agg_counter_dns_tx,
+            time_mode: TimeMode::PacketTime,
+        });
+        let dns_agg_counters = agg_counter_dns_rx.try_recv().unwrap();
+        assert_eq!(dns_agg_counters.len(), 1);
+        let stat_entry = dns_agg_counters.first().unwrap();
+        assert_eq!(
+            stat_entry.kind,
+            AggregateStatKind::DnsDstDomain("netdebug.com".to_owned())
+        );
+        // The way conntection_tracker handles DNS lookups: on the first packet of a connection,
+        // it sends a lookup request to the DNS tracker. Once the DNS tracker responds, the conn
+        // tracker will start tracking the domain name. Importantly, the DNS response is a conn
+        // tracker message, so the at least the initial packet that triggered the lookup is
+        // ignored. This trace has 4 "connections". Three start with a SYN (78 bytes on wire), the
+        // final one starts with a full data packet (1514 bytes on the wire).
+        // So we expect less bytes reported than the sum of all connections
+        let expected_tx_dns_bytes = 699_668 - 3 * 78 - 1514;
+        assert_eq!(stat_entry.summary.tx.bytes, expected_tx_dns_bytes);
+        assert_eq!(stat_entry.summary.tx.lost_bytes, Some(8688)); // all SACKs were tracked
+
+        // the first packet of every connection happens to be TX, so on RX we don't miss
+        // anything due to the DNS lookup.
+        assert_eq!(stat_entry.summary.rx.bytes, 41_033);
+        assert_eq!(stat_entry.summary.rx.lost_bytes, None); // all SACKs were tracked
     }
 
     /**

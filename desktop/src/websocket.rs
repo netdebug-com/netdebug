@@ -324,6 +324,7 @@ async fn handle_gui_dumpflows(
     connection_tracker: &ConnectionTrackerSender,
 ) {
     let func_start = Instant::now();
+
     // get the cache of current connections
     let (reply_tx, mut reply_rx) = tokio::sync::mpsc::unbounded_channel();
     let request = ConnectionTrackerMsg::GetConnectionMeasurements {
