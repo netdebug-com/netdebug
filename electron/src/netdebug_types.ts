@@ -318,6 +318,49 @@ export type CongestedLink = {
 export type CongestionSummary = {
     "links": (CongestedLink)[];
 };
+export type NetworkInterfaceState = {
+
+    /**
+     * The default gw IPs, if known/assigned.  Could be empty
+     */
+    "gateways": (string)[];
+
+    /**
+     * The name the OS gave to the interface, if exists/active
+     * If this is None then there is no active network.
+     */
+    "interface_name": (string | null);
+
+    /**
+     * The list of IPs bound to the interface, if exists. Could be empty.
+     */
+    "interface_ips": (string)[];
+
+    /**
+     * A comment for when/how we got this info
+     */
+    "comment": string;
+
+    /**
+     * Does the Network interface have link and is admin UP?
+     */
+    "has_link": boolean;
+
+    /**
+     * Is this a wireless interface?
+     */
+    "is_wireless": boolean;
+
+    /**
+     * The first time this config was set.
+     */
+    "start_time": string;
+
+    /**
+     * If this is no longer the current config, when did it stop?
+     */
+    "end_time": (string | null);
+};
 export type DesktopToGuiMessages = ({
     "tag": "VersionCheck";
     "data": string;
@@ -347,6 +390,11 @@ export type DesktopToGuiMessages = ({
         "congestion_summary": CongestionSummary;
         "connection_measurements": (ConnectionMeasurements)[];
     };
+} | {
+    "tag": "DumpSystemNetworkHistoryReply";
+    "data": {
+        "network_interface_history": (NetworkInterfaceState)[];
+    };
 });
 export type GuiToDesktopMessages = ({
     "tag": "DumpFlows";
@@ -358,6 +406,8 @@ export type GuiToDesktopMessages = ({
     "tag": "DumpStatCounters";
 } | {
     "tag": "DumpDnsAggregateCounters";
+} | {
+    "tag": "DumpSystemNetworkHistory";
 } | {
     "tag": "WhatsMyIp";
 } | {

@@ -7,9 +7,11 @@ use std::{
     time::Duration,
 };
 
+use chrono::Utc;
 use clap::{Parser, Subcommand};
 use common_wasm::ProbeReportEntry;
 use itertools::Itertools;
+use libconntrack::pcap::lookup_egress_device;
 use libconntrack_wasm::{ConnectionKey, ConnectionMeasurements, IpProtocol};
 #[cfg(not(test))]
 use log::{error, warn};
@@ -35,6 +37,14 @@ enum CliCommands {
     ExtractRouterIps(IpCmd),
     Endhost(EndhostCmd),
     Search(SearchCmd),
+    IntfTest(IntfTestCmd),
+}
+
+#[derive(Debug, Parser)]
+struct IntfTestCmd {
+    /// Just print interfaces once and exit
+    #[arg(long, default_value_t = false)]
+    pub one_shot: bool,
 }
 #[derive(Debug, Parser)]
 struct ListCmd {
@@ -637,7 +647,58 @@ fn main() -> ExitCode {
                 }
             }
         }
+        IntfTest(args) => run_intf_test(args),
     }
+}
+
+fn run_intf_test(args: IntfTestCmd) -> ExitCode {
+    let mut devices = Vec::new();
+    let mut old_egress_device = lookup_egress_device().unwrap();
+    loop {
+        let new_devices = pcap::Device::list().unwrap();
+        let new_egress_device = lookup_egress_device().unwrap();
+        if compare_devices(&devices, &new_devices) {
+            println!("Network changed!");
+            println!("    Old devices: {:?}", devices);
+            println!("    New devices: {:?}", new_devices);
+            println!("    Old Egress device: {:?}", old_egress_device);
+            println!("    New Egress device: {:?}", new_egress_device);
+        } else {
+            println!("- No change - {:?}", Utc::now());
+        }
+        devices = new_devices;
+        old_egress_device = new_egress_device;
+        if args.one_shot {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    ExitCode::SUCCESS
+}
+
+/// Compare a list of ```pcap::Device```s and return 'true' if they are different
+fn compare_devices(old_devices: &Vec<pcap::Device>, new_devices: &Vec<pcap::Device>) -> bool {
+    if old_devices.len() != new_devices.len() {
+        return true;
+    }
+    // assume they come in the same order - is that true?
+    for (idx, old_dev) in old_devices.iter().enumerate() {
+        let new_dev = new_devices.get(idx).unwrap();
+        if !compare_device(old_dev, new_dev) {
+            println!(" ---- Dev #{} {} not {}", idx, old_dev.name, new_dev.name);
+            return true;
+        }
+    }
+    false
+}
+
+fn compare_device(l: &pcap::Device, r: &pcap::Device) -> bool {
+    l.name == r.name
+        && l.desc == r.desc
+        && l.flags.if_flags == r.flags.if_flags
+        && l.flags.connection_status == r.flags.connection_status
+        && l.addresses.len() == r.addresses.len()
+    // skip comparing the actual interfaces; good enough for this test
 }
 
 // TODO: split each of the cli actions into its own file with libraries; next diff
