@@ -5,7 +5,9 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use etherparse::{Icmpv4Header, Icmpv6Header, IpHeader, TcpHeader, TransportHeader, UdpHeader};
+use etherparse::{
+    IcmpEchoHeader, Icmpv4Header, Icmpv6Header, IpHeader, TcpHeader, TransportHeader, UdpHeader,
+};
 use libconntrack_wasm::{ConnectionKey, IpProtocol};
 use log::warn;
 use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
@@ -215,6 +217,9 @@ impl OwnedParsedPacket {
      *
      * On success it returns an `Ok(ConnectionKey, src_is_local)`. `src_is_local` is
      * a boolean indicating if the `src_ip` of the packet was local or remote
+     *
+     * TODO: this whole function (and the dependent functions) should probably be moved into
+     * ConnectionKey
      */
     pub fn to_connection_key(
         &self,
@@ -301,14 +306,29 @@ impl OwnedParsedPacket {
                     source_is_local, // TODO: figure out UDP + src_ip == dst_ip case
                 ))
             }
-            Some(Icmpv4(icmp4)) => self.to_icmp4_connection_key(icmp4, local_addrs),
-            Some(Icmpv6(icmp6)) => self.to_icmp6_connection_key(icmp6, local_addrs),
+            Some(Icmpv4(icmp4)) => self.to_icmp4_connection_key(
+                icmp4,
+                local_ip,
+                remote_ip,
+                source_is_local,
+                local_addrs,
+            ),
+            Some(Icmpv6(icmp6)) => self.to_icmp6_connection_key(
+                icmp6,
+                local_ip,
+                remote_ip,
+                source_is_local,
+                local_addrs,
+            ),
         }
     }
 
     fn to_icmp4_connection_key(
         &self,
         icmp4: &etherparse::Icmpv4Header,
+        local_ip: IpAddr,
+        remote_ip: IpAddr,
+        src_is_local: bool,
         local_addrs: &HashSet<IpAddr>,
     ) -> Result<(ConnectionKey, bool), ConnectionKeyError> {
         use etherparse::Icmpv4Type::*;
@@ -318,9 +338,12 @@ impl OwnedParsedPacket {
                 code_u8: _,
                 bytes5to8: _,
             } => Err(ConnectionKeyError::IgnoredPacket),
-            EchoReply(_) => Err(ConnectionKeyError::IgnoredPacket),
+            // map ping request/reply to the same key so they can be mapped
+            EchoRequest(echo_hdr) | EchoReply(echo_hdr) => {
+                make_icmp_ping_key(local_ip, remote_ip, src_is_local, echo_hdr)
+            }
             DestinationUnreachable(_d) => self.to_icmp_payload_connection_key(local_addrs),
-            Redirect(_) | EchoRequest(_) => Err(ConnectionKeyError::IgnoredPacket),
+            Redirect(_) => Err(ConnectionKeyError::IgnoredPacket),
             TimeExceeded(_) => self.to_icmp_payload_connection_key(local_addrs),
             ParameterProblem(_) => Err(ConnectionKeyError::IgnoredPacket),
             TimestampRequest(_) => Err(ConnectionKeyError::IgnoredPacket),
@@ -375,23 +398,27 @@ impl OwnedParsedPacket {
     fn to_icmp6_connection_key(
         &self,
         icmp6: &etherparse::Icmpv6Header,
+        local_ip: IpAddr,
+        remote_ip: IpAddr,
+        src_is_local: bool,
         local_addrs: &HashSet<IpAddr>,
     ) -> Result<(ConnectionKey, bool), ConnectionKeyError> {
+        use etherparse::Icmpv6Type::*;
         match icmp6.icmp_type {
-            etherparse::Icmpv6Type::ParameterProblem(_)
-            | etherparse::Icmpv6Type::TimeExceeded(_)
-            | etherparse::Icmpv6Type::PacketTooBig { mtu: _ }
-            | etherparse::Icmpv6Type::DestinationUnreachable(_) => {
-                self.to_icmp_payload_connection_key(local_addrs)
-            }
+            ParameterProblem(_)
+            | TimeExceeded(_)
+            | PacketTooBig { mtu: _ }
+            | DestinationUnreachable(_) => self.to_icmp_payload_connection_key(local_addrs),
             // no embedded packet for these types
             etherparse::Icmpv6Type::Unknown {
                 type_u8: _,
                 code_u8: _,
                 bytes5to8: _,
             } => Err(ConnectionKeyError::IgnoredPacket),
-            etherparse::Icmpv6Type::EchoRequest(_) => Err(ConnectionKeyError::IgnoredPacket),
-            etherparse::Icmpv6Type::EchoReply(_) => Err(ConnectionKeyError::IgnoredPacket),
+            etherparse::Icmpv6Type::EchoRequest(echo_hdr)
+            | etherparse::Icmpv6Type::EchoReply(echo_hdr) => {
+                make_icmp_ping_key(local_ip, remote_ip, src_is_local, &echo_hdr)
+            }
         }
     }
 
@@ -523,6 +550,44 @@ impl OwnedParsedPacket {
             pkt.len() as u32,
         )))
     }
+}
+
+/**
+ * We want the echo request and echo reply packets from the same ping stream/flow to have
+ * the same connection key.  This means not just the src+dst IPs match and the ICMP types,
+ * but also the IcmpEchoHeader.id (which traditionally is the pid of the ping process)
+ *
+ * Map all of this into a ConnectionKey
+ */
+fn make_icmp_ping_key(
+    local_ip: IpAddr,
+    remote_ip: IpAddr,
+    src_is_local: bool,
+    echo_hdr: &IcmpEchoHeader,
+) -> Result<(ConnectionKey, bool), ConnectionKeyError> {
+    let (ip_proto, echo_type) = if local_ip.is_ipv4() {
+        (
+            IpProtocol::ICMP,
+            etherparse::icmpv4::TYPE_ECHO_REQUEST as u16,
+        )
+    } else {
+        (
+            IpProtocol::ICMP6,
+            etherparse::icmpv6::TYPE_ECHO_REQUEST as u16,
+        )
+    };
+    Ok((
+        ConnectionKey {
+            local_ip,
+            remote_ip,
+            // HACK!  IMHO the pain of adding extra fields to this struct is worse
+            // than this work around, but let's discuss
+            local_l4_port: echo_type,
+            remote_l4_port: echo_hdr.id,
+            ip_proto,
+        },
+        src_is_local,
+    ))
 }
 
 /**
@@ -824,6 +889,84 @@ mod test {
             pkt.to_connection_key(&local_addrs),
             Err(ConnectionKeyError::NoLocalAddr)
         );
+    }
+
+    /**
+     * Build an icmp4 echo request/reply pair of packets, sanity check their ConnectionKeys and make sure they match
+     */
+    #[test]
+    fn test_icmp4_ping() {
+        let source_ip = IpAddr::from([1, 1, 1, 1]);
+        let remote_ip = IpAddr::from([2, 2, 2, 2]);
+        let local_addrs = HashSet::from([source_ip]);
+        let builder = etherparse::PacketBuilder::ethernet2([1, 1, 1, 1, 1, 1], [2, 2, 2, 2, 2, 2])
+            .ipv4([1, 1, 1, 1], [2, 2, 2, 2], 64)
+            .icmpv4_echo_request(10, 2);
+        let payload = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        let mut echo_request = Vec::<u8>::with_capacity(builder.size(payload.len()));
+        builder.write(&mut echo_request, &payload).unwrap();
+        let echo_request_pkt = OwnedParsedPacket::try_from_fake_time(echo_request).unwrap();
+        let (echo_request_key, src_is_local) =
+            echo_request_pkt.to_connection_key(&local_addrs).unwrap();
+        assert!(src_is_local);
+        assert_eq!(echo_request_key.local_ip, source_ip);
+        assert_eq!(echo_request_key.remote_ip, remote_ip);
+
+        let builder = etherparse::PacketBuilder::ethernet2([2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 1, 1])
+            .ipv4([2, 2, 2, 2], [1, 1, 1, 1], 64)
+            .icmpv4_echo_reply(10, 2);
+        let payload = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        // now build the reply
+        let mut echo_reply = Vec::<u8>::with_capacity(builder.size(payload.len()));
+        builder.write(&mut echo_reply, &payload).unwrap();
+        let echo_reply_pkt = OwnedParsedPacket::try_from_fake_time(echo_reply).unwrap();
+        let (echo_reply_key, src_is_local) =
+            echo_reply_pkt.to_connection_key(&local_addrs).unwrap();
+        assert!(!src_is_local);
+        assert_eq!(echo_reply_key, echo_request_key);
+    }
+
+    /**
+     * Build an icmp6 echo request/reply pair of packets, sanity check their ConnectionKeys and make sure they match
+     */
+    #[test]
+    fn test_icmp6_ping() {
+        let source_ip_raw = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+        let remote_ip_raw = [
+            100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
+        ];
+        let source_ip = IpAddr::from(source_ip_raw);
+        let remote_ip = IpAddr::from(remote_ip_raw);
+        let local_addrs = HashSet::from([source_ip]);
+        let builder = etherparse::PacketBuilder::ethernet2([1, 1, 1, 1, 1, 1], [2, 2, 2, 2, 2, 2])
+            .ipv6(source_ip_raw, remote_ip_raw, 64)
+            .icmpv6_echo_request(10, 2);
+        let payload = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        let mut echo_request = Vec::<u8>::with_capacity(builder.size(payload.len()));
+        builder.write(&mut echo_request, &payload).unwrap();
+        let echo_request_pkt = OwnedParsedPacket::try_from_fake_time(echo_request).unwrap();
+        let (echo_request_key, src_is_local) =
+            echo_request_pkt.to_connection_key(&local_addrs).unwrap();
+        assert!(src_is_local);
+        assert_eq!(echo_request_key.local_ip, source_ip);
+        assert_eq!(echo_request_key.remote_ip, remote_ip);
+
+        let builder = etherparse::PacketBuilder::ethernet2([2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 1, 1])
+            .ipv6(remote_ip_raw, source_ip_raw, 64)
+            .icmpv6_echo_reply(10, 2);
+        let payload = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        // now build the reply
+        let mut echo_reply = Vec::<u8>::with_capacity(builder.size(payload.len()));
+        builder.write(&mut echo_reply, &payload).unwrap();
+        let echo_reply_pkt = OwnedParsedPacket::try_from_fake_time(echo_reply).unwrap();
+        let (echo_reply_key, src_is_local) =
+            echo_reply_pkt.to_connection_key(&local_addrs).unwrap();
+        assert!(!src_is_local);
+        assert_eq!(echo_reply_key, echo_request_key);
     }
 
     // TODO: add tests for ICMP packets and to_connection_key() !!

@@ -15,7 +15,17 @@ export type IpProtocol = ("ICMP" | "TCP" | "UDP" | "ICMP6" | {
 export type ConnectionKey = {
     "local_ip": string;
     "remote_ip": string;
+
+    /**
+     * With ip_proto=TCP|UDP, this is the l4 local port
+     * But with ICMP4|ICMP6, this is the ICMP_header.type
+     */
     "local_l4_port": U16;
+
+    /**
+     * With ip_proto=TCP|UDP, this is the l4 remote port
+     * But with ICMP4|ICMP6 echo request|echo reply, this is the IcmpEchoHeader.id
+     */
     "remote_l4_port": U16;
     "ip_proto": IpProtocol;
 };
