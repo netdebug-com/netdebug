@@ -13,9 +13,7 @@ use futures_util::{
 use libconntrack::{
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender, TimeMode},
     dns_tracker::DnsTrackerMessage,
-    perf_check,
-    process_tracker::ProcessTrackerSender,
-    send_or_log_async, send_or_log_sync,
+    perf_check, send_or_log_async, send_or_log_sync,
     system_tracker::SystemTrackerSender,
     utils::PerfMsgCheck,
 };
@@ -26,7 +24,10 @@ use warp::ws::{self, Message, WebSocket};
 
 use desktop_common::{DesktopToGuiMessages, GuiToDesktopMessages};
 
-use crate::topology_client::{TopologyServerMessage, TopologyServerSender};
+use crate::{
+    topology_client::{TopologyServerMessage, TopologyServerSender},
+    Trackers,
+};
 
 /**
  * We have a lot of different threads that want to send from the desktop server to the GUI client,
@@ -63,17 +64,17 @@ pub async fn websocket_sender(
  * Loop until closed, reading websocket GuiToServer messages off of the wire
  * (after converting from JSON) and dispatch to the relevant handlers.
  */
-#[allow(clippy::too_many_arguments)] // Who cares what the @(*@*(#$& paperclip thinks...
 async fn handle_websocket_rx_messages(
     mut ws_rx: SplitStream<WebSocket>,
     tx: UnboundedSender<DesktopToGuiMessages>,
-    connection_tracker: ConnectionTrackerSender,
-    dns_tracker: UnboundedSender<DnsTrackerMessage>,
-    _process_tracker: ProcessTrackerSender,
-    topology_client: TopologyServerSender,
-    system_tracker: SystemTrackerSender,
+    trackers: Trackers,
     counter_registries: SharedExportedStatRegistries,
 ) {
+    let connection_tracker = trackers.connection_tracker.unwrap();
+    let dns_tracker = trackers.dns_tracker.unwrap();
+    let topology_client = trackers.topology_client.unwrap();
+    let system_tracker = trackers.system_tracker.unwrap();
+    let _process_tracker = trackers.process_tracker.unwrap();
     while let Some(msg_result) = ws_rx.next().await {
         match msg_result {
             Ok(msg) => {
@@ -388,11 +389,7 @@ async fn handle_gui_dumpflows(
  * Top-level websocket handler
  */
 pub async fn websocket_handler(
-    connection_tracker: ConnectionTrackerSender,
-    dns_tracker: UnboundedSender<DnsTrackerMessage>,
-    process_tracker: ProcessTrackerSender,
-    topology_client: TopologyServerSender,
-    system_tracker: SystemTrackerSender,
+    trackers: Trackers,
     counter_registries: SharedExportedStatRegistries,
     ws: WebSocket,
 ) {
@@ -403,19 +400,8 @@ pub async fn websocket_handler(
     let tx = websocket_sender(ws_tx).await;
 
     let tx_clone = tx.clone();
-    let connection_tracker_clone = connection_tracker.clone();
     let _rx_handler = tokio::spawn(async move {
-        handle_websocket_rx_messages(
-            ws_rx,
-            tx_clone,
-            connection_tracker_clone,
-            dns_tracker,
-            process_tracker,
-            topology_client,
-            system_tracker,
-            counter_registries,
-        )
-        .await;
+        handle_websocket_rx_messages(ws_rx, tx_clone, trackers, counter_registries).await;
     });
 
     if let Err(e) = tx.send(DesktopToGuiMessages::VersionCheck(
