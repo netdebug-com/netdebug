@@ -101,23 +101,19 @@ pub struct SystemTracker {
 }
 
 impl SystemTracker {
-    pub fn spawn(
+    pub async fn spawn(
         max_queue: usize,
         update_period: Duration,
         max_histories: usize,
         stats_registry: ExportedStatRegistry,
     ) -> SystemTrackerSender {
         let (tx, rx) = channel(max_queue);
-        let device = network_interface_state_from_pcap_device(
-            lookup_egress_device(),
-            Vec::new(),
-            "System start".to_string(),
-        );
+        let interface = SystemTracker::snapshot_current_network_state().await;
         let system_tracker = SystemTracker::new(
             tx.clone(),
             rx,
             update_period,
-            device,
+            interface,
             stats_registry,
             max_histories,
         );
@@ -257,11 +253,7 @@ impl SystemTracker {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(update_period).await;
-                let device_state = network_interface_state_from_pcap_device(
-                    lookup_egress_device(),
-                    Vec::new(), // TODO: figure out gateway
-                    "Update".to_string(),
-                );
+                let device_state = SystemTracker::snapshot_current_network_state().await;
                 // send the update whether it's changed or not; let the other side figure it out
                 send_or_log_async!(
                     system_tracker_tx,
@@ -271,6 +263,40 @@ impl SystemTracker {
                 .await;
             }
         });
+    }
+
+    pub async fn snapshot_current_network_state() -> NetworkInterfaceState {
+        let gateways = match SystemTracker::get_default_gateways().await {
+            Ok(g) => g,
+            Err(e) => {
+                warn!(
+                    "Failed to collect the network route table !? :: {} - trying again later",
+                    e
+                );
+                Vec::new()
+            }
+        };
+        network_interface_state_from_pcap_device(
+            lookup_egress_device(),
+            gateways,
+            "Update".to_string(),
+        )
+    }
+
+    /// Get all of the default routes in the system in an OS-independent way
+    pub async fn get_default_gateways() -> std::io::Result<Vec<IpAddr>> {
+        // this magic crate claims to list the routing table on MacOs/Linux/Windows... let's see
+        let handle = net_route::Handle::new()?;
+        // we could do this whole function on one statement because Rust is Beautiful, but that seems like too much
+        // don't use the handle.default_route() function as it only returns the first route it finds where we
+        // want all of them (v4 and v6)
+        Ok(handle
+            .list()
+            .await?
+            .into_iter()
+            // needs to have a prefix of 0 and a valid gateway to be considered a 'default' route
+            .filter_map(|r| if r.prefix == 0 { r.gateway } else { None })
+            .collect())
     }
 }
 
@@ -297,5 +323,18 @@ mod test {
         let intf2 =
             NetworkInterfaceState::mk_mock("mock dev2".to_string(), now + Duration::from_secs(2));
         assert!(system_tracker.handle_update_network_state(intf2).await);
+    }
+
+    /**
+     * Assume what ever system we're running the test on has a valid network with at least
+     * one default route
+     */
+    #[tokio::test]
+    async fn test_get_default_routes() {
+        let gateways = SystemTracker::get_default_gateways().await.unwrap();
+        for gw in &gateways {
+            println!("Found a default gw: {}", gw);
+        }
+        assert_ne!(gateways.len(), 0);
     }
 }
