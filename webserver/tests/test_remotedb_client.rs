@@ -92,7 +92,7 @@ async fn test_pm_embed() {
 }
 
 async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
-    let db_dir = random_db_dir();
+    let db_dir = db_dir(database_name);
     // https://github.com/faokunega/pg-embed/issues/31
     // can't bind '0' for an ephemeral port :-( so just fake it and pray :-()
     let port = rand::thread_rng().gen_range(1024..65000);
@@ -105,8 +105,7 @@ async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
         password: "password".to_string(),
         // authentication method
         auth_method: PgAuthMethod::Plain,
-        // If persistent is false clean up files and directories on drop, otherwise keep them
-        persistent: true, // keep for now?
+        persistent: false, // clean up after done
         // duration to wait before terminating process execution
         // pg_ctl start/stop and initdb timeout
         // if set to None the process will not be terminated
@@ -165,14 +164,12 @@ async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
     Ok((client, pg))
 }
 
-fn random_db_dir() -> PathBuf {
-    let mut rng = rand::thread_rng();
-    let random: u32 = rng.gen();
+fn db_dir(test_name: &str) -> PathBuf {
     let mut db_path = if let Ok(_metadata) = std::fs::metadata("/tmp") {
         PathBuf::from("/tmp")
     } else {
         PathBuf::from(".")
     };
-    db_path.push(format!("netdebug-db-test-{}", random));
+    db_path.push(format!("netdebug-db-test-{}", test_name));
     db_path
 }
