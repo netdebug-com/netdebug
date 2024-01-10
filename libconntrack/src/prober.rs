@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, net::IpAddr};
 
 use common_wasm::PROBE_MAX_TTL;
 use etherparse::{PacketHeaders, TcpHeader, TransportHeader};
@@ -9,8 +9,17 @@ use crate::{owned_packet::OwnedParsedPacket, pcap::RawSocketWriter, utils::PerfM
 
 pub enum ProbeMessage {
     SendProbe {
-        packet: OwnedParsedPacket,
+        packet: Box<OwnedParsedPacket>,
         min_ttl: u8,
+    },
+    SendPing {
+        local_mac: [u8; 6],
+        local_ip: IpAddr,
+        /// If remote_mac is not known, use the broadcast mac ff:ff:ff:ff:ff:ff
+        remote_mac: Option<[u8; 6]>,
+        remote_ip: IpAddr,
+        id: u16,
+        seq: u16,
     },
 }
 
@@ -25,7 +34,7 @@ where
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             let msg = msg.perf_check_get("spawn_raw_prober");
-            prober_handle_one_message(&mut raw_sock, &msg);
+            prober_handle_one_message(&mut raw_sock, msg);
         }
     });
     tx
@@ -34,13 +43,66 @@ where
 /**
  * Split this function out for ease of testing
  */
-pub fn prober_handle_one_message(raw_sock: &mut dyn RawSocketWriter, message: &ProbeMessage) {
+pub fn prober_handle_one_message(raw_sock: &mut dyn RawSocketWriter, message: ProbeMessage) {
+    use ProbeMessage::*;
     match message {
-        ProbeMessage::SendProbe { packet, min_ttl } => {
-            if let Err(e) = tcp_inband_probe(packet, raw_sock, *min_ttl) {
+        SendProbe { packet, min_ttl } => {
+            if let Err(e) = tcp_inband_probe(&packet, raw_sock, min_ttl) {
                 warn!("Problem running tcp_inband_probe: {}", e);
             }
         }
+        SendPing {
+            local_mac,
+            local_ip,
+            remote_mac,
+            remote_ip,
+            id,
+            seq,
+        } => icmp_ping(
+            raw_sock, local_mac, local_ip, remote_mac, remote_ip, id, seq,
+        ),
+    }
+}
+
+fn icmp_ping(
+    raw_sock: &mut dyn RawSocketWriter,
+    local_mac: [u8; 6],
+    local_ip: IpAddr,
+    remote_mac: Option<[u8; 6]>,
+    remote_ip: IpAddr,
+    id: u16,
+    seq: u16,
+) {
+    // If we don't know the remote_mac address, fall back to broadcast
+    let remote_mac = remote_mac.unwrap_or([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+    let payload = [0u8; 128];
+    let builder = etherparse::PacketBuilder::ethernet2(local_mac, remote_mac);
+    let buf = match (local_ip, remote_ip) {
+        (IpAddr::V4(local_ip4), IpAddr::V4(remote_ip4)) => {
+            let builder = builder
+                .ipv4(local_ip4.octets(), remote_ip4.octets(), 64)
+                .icmpv4_echo_request(id, seq);
+            // NOTE: this looks like duplicate code with the ipv6 case, but the types are different
+            let mut buf = Vec::with_capacity(builder.size(payload.len()));
+            builder.write(&mut buf, &payload).unwrap();
+            buf
+        }
+        (IpAddr::V6(local_ip6), IpAddr::V6(remote_ip6)) => {
+            let builder = builder
+                .ipv6(local_ip6.octets(), remote_ip6.octets(), 64)
+                .icmpv6_echo_request(id, seq);
+            // NOTE: this looks like duplicate code with the ipv6 case, but the types are different
+            let mut buf = Vec::with_capacity(builder.size(payload.len()));
+            builder.write(&mut buf, &payload).unwrap();
+            buf
+        }
+        _ => panic!(
+            "Tried to mix a v4 and v6 local and remote ip - no can do!: {} vs. {}",
+            local_ip, remote_ip
+        ),
+    };
+    if let Err(e) = raw_sock.sendpacket(&buf) {
+        warn!("Error sending ping in icmp_ping: {}", e);
     }
 }
 

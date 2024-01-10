@@ -343,8 +343,8 @@ impl RawSocketWriter for PcapRawSocketWriter {
  */
 #[cfg(test)]
 pub struct MockRawSocketProber {
-    pub tx: Sender<PerfMsgCheck<crate::in_band_probe::ProbeMessage>>,
-    pub rx: Receiver<PerfMsgCheck<crate::in_band_probe::ProbeMessage>>,
+    pub tx: Sender<PerfMsgCheck<crate::prober::ProbeMessage>>,
+    pub rx: Receiver<PerfMsgCheck<crate::prober::ProbeMessage>>,
     pub captured: Vec<Vec<u8>>,
 }
 
@@ -376,7 +376,7 @@ impl MockRawSocketProber {
     ) {
         while let Ok(msg) = self.rx.try_recv() {
             let msg = msg.skip_perf_check();
-            crate::in_band_probe::prober_handle_one_message(self, &msg);
+            crate::prober::prober_handle_one_message(self, msg);
             while let Some(probe) = self.captured.pop() {
                 let parsed_probe = OwnedParsedPacket::try_from_fake_time(probe).unwrap();
                 connection_tracker.add(parsed_probe);

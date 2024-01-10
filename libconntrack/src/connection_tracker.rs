@@ -29,8 +29,8 @@ use crate::{
     analyze::analyze,
     connection::{Connection, ConnectionUpdateListener, MAX_BURST_RATE_TIME_WINDOW_MILLIS},
     dns_tracker::DnsTrackerMessage,
-    in_band_probe::ProbeMessage,
     owned_packet::{ConnectionKeyError, OwnedParsedPacket},
+    prober::ProbeMessage,
     prober_helper::ProberHelper,
     process_tracker::{ProcessTrackerEntry, ProcessTrackerMessage, ProcessTrackerSender},
     send_or_log_sync,
@@ -363,6 +363,23 @@ impl<'a> ConnectionTracker<'a> {
             self.handle_one_msg(msg);
         }
         warn!("ConnectionTracker exiting rx_loop()");
+    }
+
+    /**
+     * Used for testing; just one-shot process all of the queued messages and then return;
+     * subtly different from rx_loop() in that it uses try_recv() which will never block
+     */
+    #[cfg(test)]
+    pub async fn flush_rx_loop(&mut self) {
+        // read only the queued messages, don't block
+        while let Ok(msg) = self.rx.try_recv() {
+            let msg = msg.perf_check_get_with_stats(
+                "ConnectionTracker::rx_loop",
+                &mut self.dequeue_delay_stats,
+            );
+            self.handle_one_msg(msg);
+        }
+        // return when done
     }
 
     pub fn handle_one_msg(&mut self, msg: ConnectionTrackerMsg) {

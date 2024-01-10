@@ -11,7 +11,7 @@ use libconntrack::topology_client::{self, TopologyServerSender};
 use libconntrack::{
     connection_tracker::{ConnectionTracker, ConnectionTrackerMsg, ConnectionTrackerSender},
     dns_tracker::{DnsTracker, DnsTrackerMessage},
-    in_band_probe::spawn_raw_prober,
+    prober::spawn_raw_prober,
     process_tracker::{ProcessTracker, ProcessTrackerSender},
     utils::PerfMsgCheck,
 };
@@ -77,14 +77,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut counter_registries = SuperRegistry::new(system_epoch);
     // create a channel for the ConnectionTracker
-    let (tx, rx) = tokio::sync::mpsc::channel::<PerfMsgCheck<ConnectionTrackerMsg>>(
-        MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
-    );
+    let (connection_tracker_tx, rx) = tokio::sync::mpsc::channel::<
+        PerfMsgCheck<ConnectionTrackerMsg>,
+    >(MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
+
+    let devices = libconntrack::pcap::find_interesting_pcap_interfaces(&args.pcap_device)?;
+    let local_addrs = devices
+        .iter()
+        .flat_map(|d| d.addresses.iter().map(|a| a.addr).collect::<Vec<IpAddr>>())
+        .collect::<HashSet<IpAddr>>();
+    // TODO! Change this logic so that the binding to the interface can change over time
+    let raw_sock = libconntrack::pcap::bind_writable_pcap_by_name(devices[0].name.clone()).unwrap();
+    let prober_tx = spawn_raw_prober(raw_sock, MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE).await;
 
     let system_tracker = Arc::new(RwLock::new(
-        SystemTracker::new(counter_registries.new_registry("system_tracker"), 1024).await,
+        SystemTracker::new(
+            counter_registries.new_registry("system_tracker"),
+            1024, /* max network histories to keep */
+            1024, /* max pings per gateway to keep */
+            connection_tracker_tx.clone(),
+            prober_tx.clone(),
+        )
+        .await,
     ));
-    SystemTracker::spawn_network_device_state_watcher(
+    SystemTracker::spawn_system_tracker_background_tasks(
         system_tracker.clone(),
         std::time::Duration::from_millis(500),
     );
@@ -99,11 +115,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     trackers.topology_client = Some(topology_client.clone());
 
-    let devices = libconntrack::pcap::find_interesting_pcap_interfaces(&args.pcap_device)?;
-    let local_addrs = devices
-        .iter()
-        .flat_map(|d| d.addresses.iter().map(|a| a.addr).collect::<Vec<IpAddr>>())
-        .collect::<HashSet<IpAddr>>();
     // launch the process tracker
     let process_tracker = ProcessTracker::new(
         MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
@@ -133,7 +144,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for dev in &devices {
         // launch the pcap grabber as a normal OS thread in the background
         // pcap on windows doesn't understand tokio/async
-        let tx_clone = tx.clone();
+        let tx_clone = connection_tracker_tx.clone();
         let device_name = dev.name.clone();
         let _pcap_thread =
             libconntrack::pcap::run_blocking_pcap_loop_in_thread(device_name, None, tx_clone, None);
@@ -141,15 +152,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // launch the connection tracker as a tokio::task in the background
     let args_clone = args.clone();
-    let connection_manager_tx = tx.clone();
+    let connection_manager_tx = connection_tracker_tx.clone();
     trackers.connection_tracker = Some(connection_manager_tx.clone());
 
     let conn_track_counters = counter_registries.new_registry("conn_tracker");
     let topology_client_clone = topology_client.clone();
     let _connection_tracker_task = tokio::spawn(async move {
-        let raw_sock =
-            libconntrack::pcap::bind_writable_pcap_by_name(devices[0].name.clone()).unwrap();
-        let prober_tx = spawn_raw_prober(raw_sock, MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE).await;
         let args = args_clone;
         // Spawn a ConnectionTracker task
         let mut connection_tracker = ConnectionTracker::new(

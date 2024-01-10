@@ -12,8 +12,8 @@ use tokio::sync::RwLock;
 
 use libconntrack::{
     connection_tracker::{ConnectionTracker, ConnectionTrackerSender},
-    in_band_probe::spawn_raw_prober,
     pcap::{bind_writable_pcap, lookup_pcap_device_by_name},
+    prober::spawn_raw_prober,
     topology_client::TopologyServerSender,
 };
 

@@ -328,6 +328,54 @@ export type CongestedLink = {
 export type CongestionSummary = {
     "links": (CongestedLink)[];
 };
+export type NetworkGatewayPingProbe = {
+
+    /**
+     * When we send the ICMP echo request
+     */
+    "sent_time_utc_ns": (U64 | null);
+
+    /**
+     * When we got the ICMP echo reply (if we got it)
+     */
+    "recv_time_utc_ns": (U64 | null);
+
+    /**
+     * The sequence number of the probe
+     */
+    "seqno": U16;
+
+    /**
+     * DId we drop this probe?  Set to true if we got the next one in sequence
+     */
+    "dropped": boolean;
+};
+
+/**
+ * The state for when we ping the gateways local to our network interfaces
+ */
+export type NetworkGatewayPingState = {
+
+    /**
+     * The ConnectionKey that describes our ping's flow
+     */
+    "key": ConnectionKey;
+
+    /**
+     * When we send the next echo_request, what sequence number
+     */
+    "next_seq": U16;
+
+    /**
+     * State for the current outstanding probe; we only send one probe at a time
+     */
+    "current_probe": (NetworkGatewayPingProbe | null);
+
+    /**
+     * An array of Probe sent and received information
+     */
+    "historical_probes": (NetworkGatewayPingProbe)[];
+};
 export type NetworkInterfaceState = {
 
     /**
@@ -370,6 +418,11 @@ export type NetworkInterfaceState = {
      * If this is no longer the current config, when did it stop?
      */
     "end_time": (string | null);
+
+    /**
+     * Ping state for each of the gateways
+     */
+    "gateways_ping": Record<string, NetworkGatewayPingState>;
 };
 export type DesktopToGuiMessages = ({
     "tag": "VersionCheck";

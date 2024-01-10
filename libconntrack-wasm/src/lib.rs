@@ -6,9 +6,15 @@ pub use connection_key::*;
 pub use connection_measurements::*;
 pub use traffic_stats::*;
 
-use std::{fmt::Display, net::IpAddr, num::ParseIntError, str::FromStr};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt::Display,
+    net::IpAddr,
+    num::ParseIntError,
+    str::FromStr,
+};
 
-use chrono::{DateTime, Utc};
+use chrono::{serde::ts_nanoseconds_option, DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use typescript_type_def::TypeDef; // reshare these identifiers in this namespace
 pub mod topology_server_messages;
@@ -153,7 +159,53 @@ impl FromStr for IpProtocol {
     }
 }
 
-// sigh... really wish pcap::Device implemented Serialize/Deserialize
+#[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
+pub struct NetworkGatewayPingProbe {
+    #[serde(with = "ts_nanoseconds_option", rename = "sent_time_utc_ns")]
+    #[type_def(type_of = "Option<u64>")]
+    /// When we send the ICMP echo request
+    pub sent_time: Option<DateTime<Utc>>,
+    #[serde(with = "ts_nanoseconds_option", rename = "recv_time_utc_ns")]
+    #[type_def(type_of = "Option<u64>")]
+    /// When we got the ICMP echo reply (if we got it)
+    pub recv_time: Option<DateTime<Utc>>,
+    /// The sequence number of the probe
+    pub seqno: u16,
+    /// DId we drop this probe?  Set to true if we got the next one in sequence
+    pub dropped: bool,
+}
+
+impl NetworkGatewayPingProbe {
+    pub fn new(seqno: u16) -> NetworkGatewayPingProbe {
+        NetworkGatewayPingProbe {
+            sent_time: None,
+            recv_time: None,
+            seqno,
+            dropped: false,
+        }
+    }
+    pub fn calc_rtt(&self) -> Option<Duration> {
+        match (self.sent_time, self.recv_time) {
+            (Some(s), Some(r)) => Some(r - s),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
+/// The state for when we ping the gateways local to our network interfaces
+pub struct NetworkGatewayPingState {
+    /// The ConnectionKey that describes our ping's flow
+    pub key: ConnectionKey,
+    /// When we send the next echo_request, what sequence number
+    pub next_seq: u16,
+    /// State for the current outstanding probe; we only send one probe at a time
+    pub current_probe: Option<NetworkGatewayPingProbe>,
+    /// An array of Probe sent and received information
+    #[type_def(type_of = "Vec<NetworkGatewayPingProbe>")]
+    pub historical_probes: VecDeque<NetworkGatewayPingProbe>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, TypeDef)]
 pub struct NetworkInterfaceState {
     /// The default gw IPs, if known/assigned.  Could be empty
@@ -175,6 +227,8 @@ pub struct NetworkInterfaceState {
     /// If this is no longer the current config, when did it stop?
     #[type_def(type_of = "Option<String>")]
     pub end_time: Option<DateTime<Utc>>,
+    /// Ping state for each of the gateways
+    pub gateways_ping: HashMap<IpAddr, NetworkGatewayPingState>,
 }
 
 impl NetworkInterfaceState {
@@ -209,6 +263,7 @@ impl NetworkInterfaceState {
             is_wireless: false,
             start_time,
             end_time: None,
+            gateways_ping: HashMap::new(),
         }
     }
 }

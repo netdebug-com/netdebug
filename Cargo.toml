@@ -21,6 +21,8 @@ resolver = "2"
 clap = { version = "4", features = ["derive"] }
 derive-getters = "0.3"
 indexmap = { version = "2", features = ["serde"] }
+# Use our private fork from main until #42 is merged
+mac_address = { git = "https://github.com/netdebug-com/mac_address", branch = "master"}
 pcap = "1.1.0"
 thiserror = "1"
 typescript-type-def = { git = "https://github.com/gregor-netdebug/rust-typescript-type-def", branch = "ipaddr-support" }
