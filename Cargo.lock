@@ -1820,8 +1820,7 @@ dependencies = [
 [[package]]
 name = "net-route"
 version = "0.2.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0cad7d178faefcae6a1b639fcc8ea96554119c45710382af31ba8b456e42c23"
+source = "git+https://github.com/gregor-netdebug/net-route?branch=main#e3c89cd95927efa48e6a665533946bca3870fe95"
 dependencies = [
  "async-stream",
  "bindgen 0.69.1",
