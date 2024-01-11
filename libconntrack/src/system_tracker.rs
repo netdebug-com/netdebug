@@ -16,6 +16,7 @@ use log::{debug, warn};
 use pcap::{ConnectionStatus, IfFlags};
 use tokio::sync::{mpsc::Sender, RwLock};
 
+pub const BROADCAST_MAC_ADDR: [u8; 6] = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
 use crate::{
     connection::ConnectionUpdateListener,
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
@@ -339,12 +340,13 @@ impl SystemTracker {
         let seqno = state.next_seq;
         state.next_seq += 1;
         state.current_probe = Some(NetworkGatewayPingProbe::new(seqno));
+        let local_mac = state.local_mac;
         let key = state.key.clone();
         send_or_log_async!(
             self.prober_tx,
             "send ping",
             ProbeMessage::SendPing {
-                local_mac: [1, 2, 3, 4, 5, 6], // TODO! Look up local mac address
+                local_mac,
                 local_ip: key.local_ip,
                 remote_mac: None, // TODO! Add ArpPing functionality to lookup remote mac
                 remote_ip: key.remote_ip,
@@ -372,11 +374,21 @@ impl SystemTracker {
             )
             .await;
         }
+        let local_mac = mac_address::get_mac_address_by_ip(&key.local_ip)
+            .unwrap_or_else(|_| {
+                warn!(
+                    "Failed to lookup MacAddress for local IP {} - failing back to broadcast",
+                    key.local_ip
+                );
+                Some(mac_address::MacAddress::from(BROADCAST_MAC_ADDR))
+            })
+            .unwrap();
         let state = NetworkGatewayPingState {
             key,
             next_seq: 0,
             current_probe: None,
             historical_probes: VecDeque::new(),
+            local_mac: local_mac.bytes(),
         };
         self.current_network_mut()
             .gateways_ping
@@ -463,6 +475,8 @@ mod test {
             .gateways_ping
             .get(&gateway)
             .unwrap();
+        assert_ne!(ping_state.local_mac, BROADCAST_MAC_ADDR);
+        println!("Sent with local_mac {:X?}", ping_state.local_mac);
         // verify the subscription
         mock_connection_tracker.flush_rx_loop().await; // let the conntrack process the subscription msg
         assert!(mock_connection_tracker
@@ -480,6 +494,7 @@ mod test {
         let (ping_src_ip, ping_dst_ip) = etherparse_ipheaders2ipaddr(&update_pkt.ip).unwrap();
         assert_eq!(ping_src_ip, local_ip);
         assert_eq!(ping_dst_ip, gateway);
+        assert_eq!(update_pkt.link.unwrap().source, ping_state.local_mac);
         match update_pkt.transport {
             Some(TransportHeader::Icmpv4(hdr)) => match hdr.icmp_type {
                 Icmpv4Type::EchoRequest(echo_hdr) => {

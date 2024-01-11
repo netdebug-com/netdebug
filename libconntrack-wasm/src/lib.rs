@@ -201,6 +201,8 @@ pub struct NetworkGatewayPingState {
     pub next_seq: u16,
     /// State for the current outstanding probe; we only send one probe at a time
     pub current_probe: Option<NetworkGatewayPingProbe>,
+    /// The local mac we put in the src field when we ping this gateway
+    pub local_mac: [u8; 6],
     /// An array of Probe sent and received information
     #[type_def(type_of = "Vec<NetworkGatewayPingProbe>")]
     pub historical_probes: VecDeque<NetworkGatewayPingProbe>,
@@ -227,7 +229,9 @@ pub struct NetworkInterfaceState {
     /// If this is no longer the current config, when did it stop?
     #[type_def(type_of = "Option<String>")]
     pub end_time: Option<DateTime<Utc>>,
-    /// Ping state for each of the gateways
+    /// Ping state for each of the gateways; we couple the ping
+    /// state to the interface state b/c if the interface state changes,
+    /// all of the ping state needs to change too
     pub gateways_ping: HashMap<IpAddr, NetworkGatewayPingState>,
 }
 

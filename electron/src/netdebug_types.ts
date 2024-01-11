@@ -372,6 +372,11 @@ export type NetworkGatewayPingState = {
     "current_probe": (NetworkGatewayPingProbe | null);
 
     /**
+     * The local mac we put in the src field when we ping this gateway
+     */
+    "local_mac": [U8, U8, U8, U8, U8, U8];
+
+    /**
      * An array of Probe sent and received information
      */
     "historical_probes": (NetworkGatewayPingProbe)[];
@@ -420,7 +425,9 @@ export type NetworkInterfaceState = {
     "end_time": (string | null);
 
     /**
-     * Ping state for each of the gateways
+     * Ping state for each of the gateways; we couple the ping
+     * state to the interface state b/c if the interface state changes,
+     * all of the ping state needs to change too
      */
     "gateways_ping": Record<string, NetworkGatewayPingState>;
 };
