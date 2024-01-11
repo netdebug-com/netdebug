@@ -35,6 +35,9 @@ pub struct UnidirectionalTcpState {
     /// The SYN (if any) sent by this side
     syn_pkt: Option<OwnedParsedPacket>,
     tcp_window: TcpWindow,
+    /// The first seq number we observed. Could be set by either seq or ack no.
+    /// Might not truely by the initial_seq_no from the SYN (since we might not see a SYN)
+    initial_seq_no: TcpSeq64,
     /// The highest seq no seen from this INCLUDING the TCP payload
     sent_seq_no: Option<TcpSeq64>,
     /// The highest cummulative ACK this side has *received* from the other side.
@@ -47,6 +50,11 @@ pub struct UnidirectionalTcpState {
     /// The amount of lost bytes that have subsequently been ACKed. I.e., the other side first send SACKs
     /// related to these missing bytes, then received a retransmit, and then ACKed them.
     lost_bytes: u64,
+    /// The total number of times we recorded packet loss events. I.e., we received a SACK that
+    /// indicates packet loss. Note, that this might not correspond to the number of lost segments
+    /// since multiple lost segments could be indicated in a single SACK.
+    loss_events: u64,
+
     /// The list of current holes as computed from received SACKs. I.e., any hole between the highest
     /// ACK number received and any data indicated by SACK blocks. This Vec is sorted and the ranges
     /// are overlap free. Furthermore, when we advance `recv_ack_no` we remove any holes that have
@@ -71,16 +79,20 @@ impl UnidirectionalTcpState {
         connection_key: ConnectionKey,
         stat_handles: ConnectionStatHandles,
     ) -> Self {
+        let window = TcpWindow::new(raw_seq_or_ack);
+        let initial_seq_no = window.seq64(raw_seq_or_ack).unwrap(); // save becase seq is in window
         Self {
             connection_key,
             stat_handles,
             syn_pkt: None,
-            tcp_window: TcpWindow::new(raw_seq_or_ack),
+            tcp_window: window,
+            initial_seq_no,
             sent_seq_no: None,
             recv_ack_no: None,
             rst_seen: false,
             fin_seq: None,
             lost_bytes: 0,
+            loss_events: 0,
             holes: Vec::new(),
             side,
         }
@@ -189,6 +201,16 @@ impl UnidirectionalTcpState {
         let new_bytes_in_holes = self.bytes_in_holes();
         let new_lost_bytes = new_bytes_in_holes - prev_bytes_in_holes;
         self.lost_bytes += new_lost_bytes;
+        if new_lost_bytes > 0 {
+            self.stat_handles.packet_loss_event.bump();
+            self.loss_events += 1;
+            debug!(
+                "Presumably packet loss: {}:{} at ACK {}",
+                self.connection_key,
+                self.side,
+                cur_pkt_ack - self.initial_seq_no,
+            );
+        }
         // Note the order of operations. We remove filled holes first and only afterwards
         // (in teh next call) will we `prev_bytes_in_holes`
         remove_filled_holes(self.recv_ack_no.unwrap(), &mut self.holes);
@@ -484,6 +506,7 @@ mod test {
             ]
         );
         assert_eq!(state.lost_bytes, 30);
+        assert_eq!(state.loss_events, 1);
 
         tcph.set_options(&[]).unwrap();
 
@@ -504,6 +527,7 @@ mod test {
             ]
         );
         assert_eq!(state.lost_bytes, 30);
+        assert_eq!(state.loss_events, 1);
 
         // Send the SACK again. Nothing should happen
         tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
@@ -526,6 +550,7 @@ mod test {
             ]
         );
         assert_eq!(state.lost_bytes, 30);
+        assert_eq!(state.loss_events, 1);
         tcph.set_options(&[]).unwrap();
 
         // ACK more data, completely fill first hole
@@ -542,6 +567,7 @@ mod test {
             vec![mkrange(initial_ack64 + 20, initial_ack64 + 40)]
         );
         assert_eq!(state.lost_bytes, 30);
+        assert_eq!(state.loss_events, 1);
 
         // extend SACK block
         tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
@@ -563,6 +589,7 @@ mod test {
             vec![mkrange(initial_ack64 + 20, initial_ack64 + 40),]
         );
         assert_eq!(state.lost_bytes, 30);
+        assert_eq!(state.loss_events, 1);
         tcph.set_options(&[]).unwrap();
 
         // ACK more data, fill everything
@@ -576,6 +603,7 @@ mod test {
         );
         assert_eq!(state.holes, &[]);
         assert_eq!(state.lost_bytes, 30);
+        assert_eq!(state.loss_events, 1);
     }
 
     #[test]
@@ -624,6 +652,7 @@ mod test {
             ]
         );
         assert_eq!(state.lost_bytes, 30);
+        assert_eq!(state.loss_events, 1);
 
         // Partiall fill some holes, create a new hole
         tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
@@ -655,6 +684,7 @@ mod test {
             ]
         );
         assert_eq!(state.lost_bytes, 40);
+        assert_eq!(state.loss_events, 2);
         tcph.set_options(&[]).unwrap();
 
         // ACK more data, fill everything and create a new hole
@@ -676,6 +706,7 @@ mod test {
             &[mkrange(initial_ack64 + 60, initial_ack64 + 75)]
         );
         assert_eq!(state.lost_bytes, 55);
+        assert_eq!(state.loss_events, 3);
     }
 
     #[test]
