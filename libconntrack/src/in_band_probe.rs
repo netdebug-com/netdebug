@@ -25,16 +25,23 @@ where
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             let msg = msg.perf_check_get("spawn_raw_prober");
-            match msg {
-                ProbeMessage::SendProbe { packet, min_ttl } => {
-                    if let Err(e) = tcp_inband_probe(&packet, &mut raw_sock, min_ttl) {
-                        warn!("Problem running tcp_inband_probe: {}", e);
-                    }
-                }
-            }
+            prober_handle_one_message(&mut raw_sock, &msg);
         }
     });
     tx
+}
+
+/**
+ * Split this function out for ease of testing
+ */
+pub fn prober_handle_one_message(raw_sock: &mut dyn RawSocketWriter, message: &ProbeMessage) {
+    match message {
+        ProbeMessage::SendProbe { packet, min_ttl } => {
+            if let Err(e) = tcp_inband_probe(packet, raw_sock, *min_ttl) {
+                warn!("Problem running tcp_inband_probe: {}", e);
+            }
+        }
+    }
 }
 
 /**
