@@ -347,7 +347,8 @@ impl Connection {
                 )
             });
             // TODO: do we need to use `tcp_paylod_len` instead of `payload.is_empty()`??
-            let ack_ret_val = other_state.process_rx_ack(packet.payload.is_empty(), tcp);
+            let ack_ret_val =
+                other_state.process_rx_ack(packet.timestamp, packet.payload.is_empty(), tcp);
             lost_bytes = ack_ret_val.new_lost_bytes;
 
             // Dup-ack handling for possible probe replies
