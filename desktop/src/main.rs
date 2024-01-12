@@ -6,7 +6,7 @@ use common_wasm::timeseries_stats::{
     CounterProvider, CounterProviderWithTimeUpdate, SharedExportedStatRegistries, SuperRegistry,
 };
 use libconntrack::dns_tracker::DnsTrackerSender;
-use libconntrack::system_tracker::{SystemTracker, SystemTrackerSender};
+use libconntrack::system_tracker::SystemTracker;
 use libconntrack::topology_client::{self, TopologyServerSender};
 use libconntrack::{
     connection_tracker::{ConnectionTracker, ConnectionTrackerMsg, ConnectionTrackerSender},
@@ -16,7 +16,9 @@ use libconntrack::{
     utils::PerfMsgCheck,
 };
 use log::info;
+use std::sync::Arc;
 use std::{collections::HashSet, error::Error, net::IpAddr};
+use tokio::sync::RwLock;
 use warp::Filter;
 use websocket::websocket_handler;
 
@@ -28,9 +30,10 @@ use libconntrack::topology_client::TopologyServerConnection;
 pub struct Trackers {
     pub connection_tracker: Option<ConnectionTrackerSender>,
     pub dns_tracker: Option<DnsTrackerSender>,
-    pub system_tracker: Option<SystemTrackerSender>,
     pub process_tracker: Option<ProcessTrackerSender>,
     pub topology_client: Option<TopologyServerSender>,
+    // implemented as a shared lock
+    pub system_tracker: Option<Arc<RwLock<SystemTracker>>>,
 }
 
 impl Trackers {
@@ -78,13 +81,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
     );
 
-    let system_tracker = SystemTracker::spawn(
-        MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
+    let system_tracker = Arc::new(RwLock::new(
+        SystemTracker::new(counter_registries.new_registry("system_tracker"), 1024).await,
+    ));
+    SystemTracker::spawn_network_device_state_watcher(
+        system_tracker.clone(),
         std::time::Duration::from_millis(500),
-        1024,
-        counter_registries.new_registry("system_tracker"),
-    )
-    .await;
+    );
     trackers.system_tracker = Some(system_tracker.clone());
 
     let topology_client = TopologyServerConnection::spawn(

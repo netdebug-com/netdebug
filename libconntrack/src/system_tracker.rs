@@ -1,17 +1,14 @@
-use std::{collections::VecDeque, error::Error, net::IpAddr, time::Duration};
+use std::{collections::VecDeque, error::Error, net::IpAddr, sync::Arc, time::Duration};
 
 use chrono::Utc;
-use common_wasm::timeseries_stats::{
-    ExportedStatRegistry, StatHandle, StatHandleDuration, StatType, Units,
-};
+use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units};
 use itertools::Itertools;
 use libconntrack_wasm::NetworkInterfaceState;
 use log::{debug, warn};
 use pcap::{ConnectionStatus, IfFlags};
-use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::RwLock;
 
-use crate::{pcap::lookup_egress_device, send_or_log_async, utils::PerfMsgCheck};
+use crate::pcap::lookup_egress_device;
 
 /**
  * The System Tracker tracks the state of the system, e.g., what is the current default Gateway, active network interface, cpu load, mem info etc.
@@ -21,22 +18,6 @@ use crate::{pcap::lookup_egress_device, send_or_log_async, utils::PerfMsgCheck};
  * TODO: collect mem and cpu info, particularly to understand if the desktop process is using too much mem/cpu
  */
 
-pub enum SystemTrackerMessage {
-    GetDebugInfo { tx: Sender<SystemDebugInfo> },
-    UpdateNetworkDeviceState { device_state: NetworkInterfaceState },
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct SystemDebugInfo {
-    /// A history of active network devices.
-    /// If there are multiple devices active at the same time, this is the one that connects to the gateway/default route
-    /// A history of active network devices, ordered from oldest to newest
-    /// historic_network.last() is the current active one.
-    pub historic_network: Vec<NetworkInterfaceState>,
-}
-
-pub type SystemTrackerSender = Sender<PerfMsgCheck<SystemTrackerMessage>>;
-pub type SystemTrackerReceiver = Receiver<PerfMsgCheck<SystemTrackerMessage>>;
 /**
  * Convert a pcap Result to a new NetworkInferfaceState.
  * If we got an error (e.g., if no interfaces were up), that's still a new network state and report it as such.
@@ -83,6 +64,7 @@ fn network_interface_state_from_pcap_device(
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct SystemTracker {
     /// A history of active network devices, ordered from oldest to newest
     /// network_history.last() is the current active device; but use helper function
@@ -90,118 +72,46 @@ pub struct SystemTracker {
     network_history: VecDeque<NetworkInterfaceState>,
     /// Max number of histoical network states to keep
     max_histories: usize,
-    tx: SystemTrackerSender,
-    rx: SystemTrackerReceiver,
-    /// how much time between polling the network state
-    device_update_period: Duration,
     /// counter for number of network device changes
     network_device_changes: StatHandle,
-    /// counter for time spent in our rx queue
-    queue_duration: StatHandleDuration,
 }
 
 impl SystemTracker {
-    pub async fn spawn(
-        max_queue: usize,
-        update_period: Duration,
-        max_histories: usize,
-        stats_registry: ExportedStatRegistry,
-    ) -> SystemTrackerSender {
-        let (tx, rx) = channel(max_queue);
-        let interface = SystemTracker::snapshot_current_network_state().await;
-        let system_tracker = SystemTracker::new(
-            tx.clone(),
-            rx,
-            update_period,
-            interface,
-            stats_registry,
-            max_histories,
-        );
-        tokio::spawn(async move {
-            system_tracker.rx_loop().await;
-        });
-
-        tx
+    pub async fn new(stats_registry: ExportedStatRegistry, max_histories: usize) -> SystemTracker {
+        let current_network = SystemTracker::snapshot_current_network_state().await;
+        SystemTracker::new_with_network_state(stats_registry, max_histories, current_network)
     }
-
-    fn new(
-        tx: Sender<PerfMsgCheck<SystemTrackerMessage>>,
-        rx: Receiver<PerfMsgCheck<SystemTrackerMessage>>,
-        update_period: Duration,
-        current_network: NetworkInterfaceState,
+    pub fn new_with_network_state(
         stats_registry: ExportedStatRegistry,
         max_histories: usize,
+        current_network: NetworkInterfaceState,
     ) -> SystemTracker {
         SystemTracker {
             network_history: VecDeque::from([current_network]),
-            tx,
-            rx,
             network_device_changes: stats_registry.add_stat(
                 "network_device_changes",
                 Units::None,
                 [StatType::COUNT],
-            ),
-            device_update_period: update_period,
-            queue_duration: stats_registry.add_duration_stat(
-                "queue_duration",
-                Units::Milliseconds,
-                [StatType::COUNT, StatType::AVG],
             ),
             max_histories,
         }
     }
 
     #[cfg(test)]
-    fn mk_mock(network_device: NetworkInterfaceState) -> SystemTracker {
-        let (tx, rx) = channel(10);
-        SystemTracker::new(
-            tx,
-            rx,
-            Duration::from_millis(100),
-            network_device,
+    async fn mk_mock(network_device: NetworkInterfaceState) -> SystemTracker {
+        SystemTracker::new_with_network_state(
             ExportedStatRegistry::new("testing", std::time::Instant::now()),
             10,
+            network_device,
         )
     }
 
-    async fn rx_loop(mut self) {
-        SystemTracker::spawn_network_device_state_watcher(
-            self.tx.clone(),
-            self.device_update_period,
-        );
-        while let Some(msg) = self.rx.recv().await {
-            let msg =
-                msg.perf_check_get_with_stats("SystemTracker::rx_loop", &mut self.queue_duration);
-            use SystemTrackerMessage::*;
-            match msg {
-                GetDebugInfo { tx } => {
-                    if let Err(e) = tx
-                        .send(SystemDebugInfo {
-                            historic_network: Vec::from(self.network_history.clone()),
-                        })
-                        .await
-                    {
-                        warn!("Error sending SystemDebugInfo back to caller: {}", e);
-                    }
-                }
-                UpdateNetworkDeviceState { device_state } => {
-                    self.handle_update_network_state(device_state).await;
-                }
-            }
-        }
-        warn!("SystemTracker exiting...");
-    }
-
-    pub fn get_tx(&self) -> SystemTrackerSender {
-        self.tx.clone()
-    }
-
-    fn current_network(&self) -> &NetworkInterfaceState {
+    pub fn current_network(&self) -> &NetworkInterfaceState {
         // unwrap is ok b/c there will always be at least one
         self.network_history.iter().last().unwrap()
     }
 
-    fn current_network_mut(&mut self) -> &mut NetworkInterfaceState {
+    pub fn current_network_mut(&mut self) -> &mut NetworkInterfaceState {
         // unwrap is ok b/c there will always be at least one
         self.network_history.iter_mut().last().unwrap()
     }
@@ -211,7 +121,7 @@ impl SystemTracker {
      *
      * Return true if state was updated, false if no update was needed
      */
-    async fn handle_update_network_state(
+    pub async fn handle_update_network_state(
         &mut self,
         interface_state: NetworkInterfaceState,
     ) -> bool {
@@ -236,6 +146,10 @@ impl SystemTracker {
         true
     }
 
+    pub fn get_network_interface_histories(&self) -> Vec<NetworkInterfaceState> {
+        Vec::from(self.network_history.clone())
+    }
+
     /**
      * Spawn a task that just periodically queries the network device state and sends an update message
      * to the SystemTracker.  Do this in a separate task in case it blocks/has random OS delays.  Who knows
@@ -245,28 +159,28 @@ impl SystemTracker {
      *
      * Ideally we could subscribe to OS-specific push updates rather than periodic pulls like this, but this
      * seems more portable.  TODO: investigate if there are other rust crate magics that solve this for us.
+     *
+     * NOTE: this is not spawned automatically on ```SystemTracker::new()``` and must be manually called
      */
-    fn spawn_network_device_state_watcher(
-        system_tracker_tx: SystemTrackerSender,
+    pub fn spawn_network_device_state_watcher(
+        system_tracker: Arc<RwLock<SystemTracker>>,
         update_period: Duration,
     ) {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(update_period).await;
-                let device_state = SystemTracker::snapshot_current_network_state().await;
-                // send the update whether it's changed or not; let the other side figure it out
-                send_or_log_async!(
-                    system_tracker_tx,
-                    "SystemTracker: network device state watcher",
-                    SystemTrackerMessage::UpdateNetworkDeviceState { device_state }
-                )
-                .await;
+                let interface_state = SystemTracker::snapshot_current_network_state().await;
+                system_tracker
+                    .write()
+                    .await
+                    .handle_update_network_state(interface_state)
+                    .await;
             }
         });
     }
 
     pub async fn snapshot_current_network_state() -> NetworkInterfaceState {
-        let gateways = match SystemTracker::get_default_gateways().await {
+        let gateways = match SystemTracker::get_default_gateways_async().await {
             Ok(g) => g,
             Err(e) => {
                 warn!(
@@ -284,10 +198,9 @@ impl SystemTracker {
     }
 
     /// Get all of the default routes in the system in an OS-independent way
-    pub async fn get_default_gateways() -> std::io::Result<Vec<IpAddr>> {
+    pub async fn get_default_gateways_async() -> std::io::Result<Vec<IpAddr>> {
         // this magic crate claims to list the routing table on MacOs/Linux/Windows... let's see
         let handle = net_route::Handle::new()?;
-        // we could do this whole function on one statement because Rust is Beautiful, but that seems like too much
         // don't use the handle.default_route() function as it only returns the first route it finds where we
         // want all of them (v4 and v6)
         Ok(handle
@@ -317,7 +230,7 @@ mod test {
     async fn test_network_device_update() {
         let now = Utc::now();
         let mut intf = NetworkInterfaceState::mk_mock("mock dev1".to_string(), now);
-        let mut system_tracker = SystemTracker::mk_mock(intf.clone());
+        let mut system_tracker = SystemTracker::mk_mock(intf.clone()).await;
         intf.start_time = now + Duration::from_secs(1);
         assert!(!system_tracker.handle_update_network_state(intf).await);
         let intf2 =
@@ -330,8 +243,8 @@ mod test {
      * one default route
      */
     #[tokio::test]
-    async fn test_get_default_routes() {
-        let gateways = SystemTracker::get_default_gateways().await.unwrap();
+    async fn test_get_default_routes_async() {
+        let gateways = SystemTracker::get_default_gateways_async().await.unwrap();
         for gw in &gateways {
             println!("Found a default gw: {}", gw);
         }
