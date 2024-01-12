@@ -86,10 +86,14 @@ pub struct UnidirectionalTcpState {
 /// Returned by `UnidrectionalTcpState::process_rx_ack()`. Inidcates if the processed
 /// ACK was a duplicate ACK and if the ACK inidcated that any data was apparently lost
 /// (via SACK blocks)
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Default, Copy, Eq, PartialEq)]
 pub struct ProcessRxAckReturn {
     pub is_dup_ack: bool,
     pub new_lost_bytes: u64,
+    /// If Some(rtt), it represents the most recent RTT measurements
+    /// (for packets sent by this side to the corresponding ACKs).
+    /// Based on TCP timestamp tracking
+    pub rtt_sample: Option<chrono::Duration>,
 }
 
 impl UnidirectionalTcpState {
@@ -215,10 +219,7 @@ impl UnidirectionalTcpState {
                     "{}:{} ack number is out-of-window -- not processing packet further",
                     self.connection_key, self.side
                 );
-                return ProcessRxAckReturn {
-                    is_dup_ack: false,
-                    new_lost_bytes: 0,
-                };
+                return ProcessRxAckReturn::default();
             }
         };
         let (is_dup_ack, acks_new_data) = match self.recv_ack_no {
@@ -231,11 +232,13 @@ impl UnidirectionalTcpState {
             }
             None => (false, true),
         };
+
+        // RTT calculation
         // Per RFC7323, Section 4.1, we can only use echoed timestamps if they are in packets
         // that ACK new data.
+        let mut rtt = None;
         if acks_new_data {
             if let Some((_tsval, tsecr)) = extract_tcp_timestamp(tcp) {
-                let mut rtt = None;
                 while let Some(observation) = self.timestamp_history.front() {
                     if observation.tsval.lt(tsecr) {
                         self.timestamp_history.pop_front();
@@ -308,6 +311,7 @@ impl UnidirectionalTcpState {
         ProcessRxAckReturn {
             is_dup_ack,
             new_lost_bytes,
+            rtt_sample: rtt,
         }
     }
 
@@ -593,21 +597,21 @@ mod test {
             state.process_rx_ack(pkt_time, false, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
-                new_lost_bytes: 0
+                ..Default::default()
             }
         );
         assert_eq!(
             state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: true,
-                new_lost_bytes: 0
+                ..Default::default()
             }
         );
         assert_eq!(
             state.process_rx_ack(pkt_time, false, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
-                new_lost_bytes: 0
+                ..Default::default()
             }
         );
         tcph.fin = true;
@@ -615,7 +619,7 @@ mod test {
             state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
-                new_lost_bytes: 0
+                ..Default::default()
             }
         );
         tcph.fin = false;
@@ -631,6 +635,7 @@ mod test {
             ProcessRxAckReturn {
                 is_dup_ack: true,
                 new_lost_bytes: 30,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -651,7 +656,8 @@ mod test {
             state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
-                new_lost_bytes: 0
+                new_lost_bytes: 0,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -674,7 +680,8 @@ mod test {
             state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: true,
-                new_lost_bytes: 0
+                new_lost_bytes: 0,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -694,7 +701,8 @@ mod test {
             state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
-                new_lost_bytes: 0
+                new_lost_bytes: 0,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -714,7 +722,8 @@ mod test {
             state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: true,
-                new_lost_bytes: 0
+                new_lost_bytes: 0,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -733,7 +742,8 @@ mod test {
             state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
-                new_lost_bytes: 0
+                new_lost_bytes: 0,
+                ..Default::default()
             }
         );
         assert_eq!(state.holes, &[]);
@@ -761,10 +771,7 @@ mod test {
 
         assert_eq!(
             state.process_rx_ack(pkt_time, true, &tcph),
-            ProcessRxAckReturn {
-                is_dup_ack: false,
-                new_lost_bytes: 0
-            }
+            ProcessRxAckReturn::default()
         );
 
         tcph.set_options(&[TcpOptionElement::SelectiveAcknowledgement(
@@ -778,6 +785,7 @@ mod test {
             ProcessRxAckReturn {
                 is_dup_ack: true,
                 new_lost_bytes: 30,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -807,6 +815,7 @@ mod test {
                 is_dup_ack: false,
                 // Only the hole 50--60 is newly lost.
                 new_lost_bytes: 10,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -835,6 +844,7 @@ mod test {
             ProcessRxAckReturn {
                 is_dup_ack: false,
                 new_lost_bytes: 15,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -1022,19 +1032,22 @@ mod test {
 
         // Add a response
         let (pkt, tcp) = mk_packet_with_ts(false, t0 + mk_dur_ms(30), 1, 42_000);
-        state.process_rx_ack(pkt.timestamp, true, &tcp);
+        let rv = state.process_rx_ack(pkt.timestamp, true, &tcp);
+        assert_eq!(rv.rtt_sample, Some(mk_dur_ms(30)));
         assert_eq!(state.rtt_estimate_ms, 30.0);
         assert_eq!(state.timestamp_history.len(), 2);
 
         // Add a response that does NOT ACK new data ==> noop
         let (pkt, tcp) = mk_packet_with_ts(false, t0 + mk_dur_ms(55), 1, 42_100);
-        state.process_rx_ack(pkt.timestamp, true, &tcp);
+        let rv = state.process_rx_ack(pkt.timestamp, true, &tcp);
+        assert_eq!(rv.rtt_sample, None);
         assert_eq!(state.rtt_estimate_ms, 30.0);
         assert_eq!(state.timestamp_history.len(), 2);
 
         // ACK new data ==> new RTT sample
         let (pkt, tcp) = mk_packet_with_ts(false, t0 + mk_dur_ms(67), 3, 42_100);
-        state.process_rx_ack(pkt.timestamp, true, &tcp);
+        let rv = state.process_rx_ack(pkt.timestamp, true, &tcp);
+        assert_eq!(rv.rtt_sample, Some(mk_dur_ms(42)));
         assert_relative_eq!(state.rtt_estimate_ms, 30.0 * 0.9 + 42.0 * 0.1); // alpha = 0.1; 67.0 - 25 == 42
 
         // all tsval less than the tsecr we just sent should have been evicted.

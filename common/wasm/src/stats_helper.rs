@@ -1,8 +1,13 @@
+use std::fmt::Display;
+
+use serde::{Deserialize, Serialize};
+use typescript_type_def::TypeDef;
+
 /// Compute the mean an variance of a series of samples using
 /// Welford's algorithm (which is an online algorithm that's numerically
 /// stable). See https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm
 /// Also tracks min and max observed values
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, TypeDef)]
 pub struct SimpleStats {
     num_samples: usize,
     mean: f64,
@@ -57,6 +62,20 @@ impl SimpleStats {
 
     pub fn min(&self) -> f64 {
         self.min
+    }
+}
+
+impl Display for SimpleStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[n={} mean={}, var={}, min={}, max={}]",
+            self.num_samples,
+            self.mean(),
+            self.variance(),
+            self.min,
+            self.max
+        )
     }
 }
 
