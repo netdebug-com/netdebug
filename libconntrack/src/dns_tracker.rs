@@ -465,7 +465,7 @@ impl<'a> DnsTracker<'a> {
         for line in all_input.lines() {
             let tokens = line.split_whitespace().collect::<Vec<&str>>();
             // we only care about 'A' and 'AAAA' for now
-            if tokens.len() >= 7 && (tokens[2] == "A" || tokens[2] == "AAAA") {
+            if tokens.len() > 7 && (tokens[2] == "A" || tokens[2] == "AAAA") {
                 let entry = DnsTrackerEntry {
                     hostname: tokens[1].to_string(),
                     created: Utc::now(), // kinda a fudge, oh well
