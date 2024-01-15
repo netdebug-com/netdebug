@@ -11,6 +11,9 @@ use typescript_type_def::TypeDef;
 
 use crate::{DnsTrackerEntry, IpProtocol};
 
+const ICMP4_ECHO_REQUEST_TYPE: u8 = 8;
+const ICMP6_ECHO_REQUEST_TYPE: u8 = 128;
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize, Deserialize, TypeDef)]
 pub struct ConnectionKey {
     #[type_def(type_of = "String")]
@@ -42,6 +45,24 @@ impl ConnectionKey {
             "{} {}::{} --> {}::{} ",
             self.ip_proto, local, self.local_l4_port, remote, self.remote_l4_port,
         )
+    }
+
+    pub fn make_icmp_echo_key(local_ip: IpAddr, remote_ip: IpAddr, ping_id: u16) -> ConnectionKey {
+        let (ip_proto, echo_type) = if local_ip.is_ipv4() {
+            (IpProtocol::ICMP, ICMP4_ECHO_REQUEST_TYPE)
+        } else {
+            (IpProtocol::ICMP6, ICMP6_ECHO_REQUEST_TYPE)
+        };
+
+        ConnectionKey {
+            local_ip,
+            remote_ip,
+            // HACK!  IMHO the pain of adding extra fields to this struct is worse
+            // than this work around, but let's discuss
+            local_l4_port: echo_type as u16,
+            remote_l4_port: ping_id,
+            ip_proto,
+        }
     }
 }
 

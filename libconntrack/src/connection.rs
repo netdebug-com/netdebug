@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     connection_tracker::ConnectionStatHandles,
     dns_tracker::{DnsTrackerMessage, UDP_DNS_PORT},
-    in_band_probe::ProbeMessage,
     owned_packet::OwnedParsedPacket,
+    prober::ProbeMessage,
     prober_helper::ProberHelper,
     utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timestamp_to_ms, PerfMsgCheck},
     ConnectionSide, TcpSeq64, UnidirectionalTcpState,
@@ -216,10 +216,22 @@ impl Connection {
             }
             Some(TransportHeader::Icmpv4(icmp4)) => {
                 if src_is_local {
-                    warn!(
-                        "Ignoring weird ICMP4 from our selves but for this connection: {} : {:?}",
-                        key, packet
-                    );
+                    use etherparse::Icmpv4Type::*;
+                    match icmp4.icmp_type {
+                        Unknown { .. }
+                        | DestinationUnreachable(_)
+                        | Redirect(_)
+                        | TimeExceeded(_)
+                        | ParameterProblem(_)
+                        | TimestampRequest(_)
+                        | TimestampReply(_) => {
+                            warn!(
+                                "Ignoring weird ICMP4 from our selves but for this connection: {} : {:?}",
+                                key, packet
+                            );
+                        }
+                        EchoRequest(_) | EchoReply(_) => (), // do nothing for echo request/reply
+                    }
                 } else {
                     self.update_icmp4_remote(&packet, icmp4);
                 }
@@ -451,7 +463,7 @@ impl Connection {
                         prober_helper
                             .tx()
                             .try_send(PerfMsgCheck::new(ProbeMessage::SendProbe {
-                                packet: packet.clone(),
+                                packet: Box::new(packet.clone()),
                                 min_ttl,
                             }))
                     {
@@ -923,8 +935,8 @@ pub mod test {
 
     use super::*;
 
-    use crate::in_band_probe::test::test_tcp_packet_ports;
     use crate::owned_packet::OwnedParsedPacket;
+    use crate::prober::test::test_tcp_packet_ports;
     /**
      *  ConnectionKey should be a direction agnostic key for mapping packets
      * to a flow identifier.  but, the logic around "is the src of the packet"

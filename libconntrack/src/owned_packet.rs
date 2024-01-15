@@ -565,27 +565,8 @@ fn make_icmp_ping_key(
     src_is_local: bool,
     echo_hdr: &IcmpEchoHeader,
 ) -> Result<(ConnectionKey, bool), ConnectionKeyError> {
-    let (ip_proto, echo_type) = if local_ip.is_ipv4() {
-        (
-            IpProtocol::ICMP,
-            etherparse::icmpv4::TYPE_ECHO_REQUEST as u16,
-        )
-    } else {
-        (
-            IpProtocol::ICMP6,
-            etherparse::icmpv6::TYPE_ECHO_REQUEST as u16,
-        )
-    };
     Ok((
-        ConnectionKey {
-            local_ip,
-            remote_ip,
-            // HACK!  IMHO the pain of adding extra fields to this struct is worse
-            // than this work around, but let's discuss
-            local_l4_port: echo_type,
-            remote_l4_port: echo_hdr.id,
-            ip_proto,
-        },
+        ConnectionKey::make_icmp_echo_key(local_ip, remote_ip, echo_hdr.id),
         src_is_local,
     ))
 }

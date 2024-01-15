@@ -3,7 +3,7 @@ use std::{collections::HashMap, net::IpAddr};
 use common::rate_limit::SimpleRateLimiter;
 use tokio::sync::mpsc::Sender;
 
-use crate::{in_band_probe::ProbeMessage, utils::PerfMsgCheck};
+use crate::{prober::ProbeMessage, utils::PerfMsgCheck};
 
 const PROBE_DEST_EVERY_MILLIS: u64 = 15_000;
 const PROBE_FIRST_HOPS_EVERY_MILLIS: u64 = 2_000;
