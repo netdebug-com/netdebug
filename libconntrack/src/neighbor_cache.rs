@@ -1,6 +1,8 @@
 use byteorder::{BigEndian, ReadBytesExt};
+use log::warn;
 use std::io::{Cursor, Read};
 use std::net::IpAddr;
+use tokio::sync::mpsc::Sender;
 
 use common_wasm::evicting_hash_map::EvictingHashMap;
 use etherparse::EtherType;
@@ -15,9 +17,18 @@ use crate::owned_packet::OwnedParsedPacket;
  * mDNS and Bonjour craziness.
  */
 
+pub type NeighborCacheSender = Sender<(IpAddr, MacAddress)>;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum LookupMacByIpResult {
+    Found,
+    NotFound,
+}
+
 // NOTE: can't derive Clone/Debug/Default due to EvictingHashMap
 pub struct NeighborCache<'a> {
     pub ip2mac: EvictingHashMap<'a, IpAddr, MacAddress>,
+    pub pending_lookups: EvictingHashMap<'a, IpAddr, Vec<NeighborCacheSender>>,
 }
 
 impl<'a> NeighborCache<'a> {
@@ -26,6 +37,7 @@ impl<'a> NeighborCache<'a> {
             ip2mac: EvictingHashMap::new(max_elements, |_, _| {
                 // TODO: add a counter here
             }),
+            pending_lookups: EvictingHashMap::new(max_elements, |_, _| {}),
         }
     }
 
@@ -34,6 +46,34 @@ impl<'a> NeighborCache<'a> {
     /// returned value is immutable
     pub fn lookup_mac_by_ip(&mut self, ip: &IpAddr) -> Option<MacAddress> {
         self.ip2mac.get_mut(ip).map(|ip| *ip)
+    }
+
+    /// Try to lookup this IP: if it's there, send it on the tx queue.
+    /// If it's not, add it to the pending queue in case we learn it later
+    /// If we fail to look this up, we expect the caller to actually send a
+    /// neighbor lookup out
+    pub fn lookup_mac_by_ip_pending(
+        &mut self,
+        ip: &IpAddr,
+        tx: NeighborCacheSender,
+    ) -> LookupMacByIpResult {
+        if let Some(mac) = self.lookup_mac_by_ip(ip) {
+            if let Err(e) = tx.try_send((*ip, mac)) {
+                warn!(
+                    "Tried to send lookup_mac_by_ip_pending() back to caller but got: {}",
+                    e
+                );
+            }
+            LookupMacByIpResult::Found
+        } else {
+            // TODO: would be nice if EvictingHashMap supported the entry() API
+            if let Some(list) = self.pending_lookups.get_mut(ip) {
+                list.push(tx);
+            } else {
+                self.pending_lookups.insert(*ip, vec![tx]);
+            }
+            LookupMacByIpResult::NotFound
+        }
     }
 
     /**
@@ -65,11 +105,21 @@ impl<'a> NeighborCache<'a> {
     }
 
     /// if both IP and Mac are defined, add them to our mapping
-    fn learn(&mut self, ip: &Option<IpAddr>, mac: &Option<MacAddress>) {
+    pub(crate) fn learn(&mut self, ip: &Option<IpAddr>, mac: &Option<MacAddress>) {
         // TODO: should we record the time here?  Packet vs. Realtime param needed
         // add this now and improve later
         if let (Some(ip), Some(mac)) = (ip, mac) {
             self.ip2mac.insert(*ip, *mac);
+            if let Some(list) = self.pending_lookups.get_mut(ip) {
+                // updated anyone waiting for this ip --> mac mapping
+                for tx in list {
+                    if let Err(e) = tx.try_send((*ip, *mac)) {
+                        warn!("Tried to updated pending ip to mac tx but got:{}", e);
+                    }
+                }
+                // clear the list
+                self.pending_lookups.remove(ip);
+            }
         }
         // else do nothing
     }

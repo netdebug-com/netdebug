@@ -19,6 +19,7 @@ use libconntrack_wasm::{
 #[cfg(not(test))]
 use log::{debug, warn};
 
+use mac_address::MacAddress;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
 
@@ -29,6 +30,7 @@ use crate::{
     analyze::analyze,
     connection::{Connection, ConnectionUpdateListener, MAX_BURST_RATE_TIME_WINDOW_MILLIS},
     dns_tracker::DnsTrackerMessage,
+    neighbor_cache::{LookupMacByIpResult, NeighborCache, NeighborCacheSender},
     owned_packet::{ConnectionKeyError, OwnedParsedPacket},
     prober::ProbeMessage,
     prober_helper::ProberHelper,
@@ -126,6 +128,14 @@ pub enum ConnectionTrackerMsg {
         /// the connection key to delete the update listener
         key: ConnectionKey,
     },
+    /// Ask the neighbor cache if they've seen this IP
+    /// If not, try to look it up
+    LookupMacByIp {
+        /// the IpAddr we're trying to resolve
+        ip: IpAddr,
+        /// a tx queue to send the reply
+        tx: NeighborCacheSender,
+    },
 }
 
 /**
@@ -165,6 +175,51 @@ impl<'a> ConnectionTracker<'a> {
                 warn!(
                     "Failed to send data to all_evicted_connections :: err {}",
                     e
+                );
+            }
+        }
+    }
+
+    fn lookup_ip_by_mac(&mut self, target_ip: IpAddr, tx: Sender<(IpAddr, MacAddress)>) {
+        if self.neighbor_cache.lookup_mac_by_ip_pending(&target_ip, tx)
+            == LookupMacByIpResult::NotFound
+        {
+            // our lookup failed; let's source a Arp or Ndp lookup to the IP to force it
+            // first, figure out a source IP and mac; just look through our local_addrs
+            // and use the first one that's the same IP version as the target
+            let local_ip = self
+                .local_addrs
+                .iter()
+                .find(|a| a.is_ipv4() == target_ip.is_ipv4());
+            if let Some(local_ip) = local_ip {
+                /*
+                 * Even if the external network is completely hosed, we should be able to see Arp/Ndp
+                 * messages outgoing from our selves and thus have learned our own mac for the local_ip
+                 *
+                 * if this is a problem, just lookup manually with MacAddress:lookup_mac_by_ip(), but that's
+                 * more complicated.
+                 */
+                if let Some(local_mac) = self.neighbor_cache.lookup_mac_by_ip(local_ip) {
+                    if let Err(e) = self.prober_helper.tx().try_send(PerfMsgCheck::new(
+                        ProbeMessage::SendIpLookup {
+                            local_mac: local_mac.bytes(),
+                            local_ip: *local_ip,
+                            target_ip,
+                        },
+                    )) {
+                        warn!(
+                            "ConnectionTracker tried to send to the prober but got: {}",
+                            e
+                        );
+                    }
+                } else {
+                    warn!(
+                    "Tried to send a LookupIp message to the prober but couldn't find a mac for {}!?", local_ip
+                );
+                }
+            } else {
+                warn!(
+                    "Tried to send a LookupIp message to the prober but couldn't find a local_ip!?"
                 );
             }
         }
@@ -238,6 +293,8 @@ pub struct ConnectionTracker<'a> {
     /// Tracks packet that we ignored (couldn't extract connection key). Either didn't have
     /// L3 and/or L4 header or unhandled ICMP.
     no_conn_key_packets: StatHandle,
+    /// Track that packets with ethertype of Arp
+    arp_packets: StatHandle,
     /// Tracks ICMP packets (of type we handle) from which we failed to extract the inner
     /// packet's ConnectionKey
     icmp_extract_failed_packet: StatHandle,
@@ -259,6 +316,8 @@ pub struct ConnectionTracker<'a> {
     /// with the packet handling code and risk trying to install a listenner for a connection that doesn't
     /// exist yet.
     pub(crate) update_listeners: HashMap<ConnectionKey, HashMap<String, ConnectionUpdateListener>>,
+    /// Keep a cache of Ipv4 Arp and (TODO) IPv6 ICMP neighbor solicition/advertisment messages
+    neighbor_cache: NeighborCache<'a>,
 }
 impl<'a> ConnectionTracker<'a> {
     pub fn new(
@@ -310,6 +369,7 @@ impl<'a> ConnectionTracker<'a> {
                 [StatType::COUNT],
             ),
             no_conn_key_packets: stats.add_stat("no_conn_key", Units::Packets, [StatType::COUNT]),
+            arp_packets: stats.add_stat("arp_packets", Units::Packets, [StatType::COUNT]),
             icmp_extract_failed_packet: stats.add_stat(
                 "icmp_extract_failed",
                 Units::Packets,
@@ -332,6 +392,8 @@ impl<'a> ConnectionTracker<'a> {
                 [StatType::COUNT],
             ),
             update_listeners: HashMap::new(),
+            // just re-use/abuse the max_connections_per_tracker for our max neighbors to remember, seems ok
+            neighbor_cache: NeighborCache::new(max_connections_per_tracker),
         }
     }
 
@@ -440,6 +502,7 @@ impl<'a> ConnectionTracker<'a> {
             DelConnectionUpdateListener { key, desc } => {
                 self.del_connection_update_listener(desc, key)
             }
+            LookupMacByIp { ip, tx } => self.lookup_ip_by_mac(ip, tx),
         }
     }
 
@@ -540,6 +603,12 @@ impl<'a> ConnectionTracker<'a> {
             Err(ConnectionKeyError::IcmpInnerPacketError) => self.icmp_extract_failed_packet.bump(),
             Err(ConnectionKeyError::IgnoredPacket) => self.no_conn_key_packets.bump(),
             Err(ConnectionKeyError::NoLocalAddr) => self.not_local_packets.bump(),
+            Err(ConnectionKeyError::Arp) => {
+                self.arp_packets.bump();
+                if let Err(e) = self.neighbor_cache.process_arp_packet(packet) {
+                    warn!("Ignoring failed to parse Arp packet: {}", e);
+                }
+            }
         }
         // if we got here, the packet didn't have enough info to be called a 'connection'
         // just return and move on for now
@@ -1852,5 +1921,93 @@ pub mod test {
         }
         assert_eq!(connection_tracker.connections.len(), 1);
         // assert_eq!(connection_tracker.no_conn_key_packets.get_sum()!?, 0);
+    }
+
+    /**
+     * Make sure our neighbor lookup stuff works including:
+     * 1) quick replies when we have the info cached
+     * 2) handling pending replies when we do not
+     */
+    #[test]
+    fn test_neighbor_cache_lookup() {
+        // One ipv4 and one ipv6
+        let local_ipv4 = IpAddr::from_str("192.168.1.34").unwrap();
+        let local_ipv6 = IpAddr::from_str("1:2::333").unwrap();
+        let local_mac = MacAddress::from([1, 2, 3, 4, 5, 6]);
+        let local_addrs = HashSet::from([local_ipv4, local_ipv6]);
+        let (prober_tx, mut prober_rx) = channel(10);
+        let mut connection_tracker = mk_mock_connection_tracker(local_addrs);
+        connection_tracker
+            .neighbor_cache
+            .ip2mac
+            .insert(local_ipv4, local_mac);
+        connection_tracker
+            .neighbor_cache
+            .ip2mac
+            .insert(local_ipv6, local_mac);
+        // override the default mock prober_helper so we can capture those messages
+        connection_tracker.prober_helper = ProberHelper::new(prober_tx, true);
+
+        // wrap all of the functionality into a helper function to run twice: once for v4 and once for v6
+        fn check_lookup_for_ip(
+            target_ip: IpAddr,
+            target_mac: MacAddress,
+            connection_tracker: &mut ConnectionTracker<'_>,
+            prober_rx: &mut Receiver<PerfMsgCheck<ProbeMessage>>,
+            local_mac: MacAddress,
+            local_ip: IpAddr,
+        ) {
+            // first, lookup something that doesn't exist to verify we send a lookup for it
+            let (lookup_tx, mut lookup_rx) = channel(10);
+            connection_tracker.handle_one_msg(ConnectionTrackerMsg::LookupMacByIp {
+                ip: target_ip,
+                tx: lookup_tx,
+            });
+            let probe_msg = prober_rx.try_recv().unwrap().skip_perf_check();
+            use ProbeMessage::*;
+            match probe_msg {
+                SendIpLookup {
+                    local_mac: test_local_mac,
+                    local_ip: test_local_ip,
+                    target_ip: remote_ip,
+                } => {
+                    assert_eq!(test_local_mac, local_mac.bytes());
+                    assert_eq!(test_local_ip, local_ip);
+                    assert_eq!(remote_ip, target_ip);
+                }
+                _wut => panic!("Unexpected probe message {:?}", _wut),
+            }
+
+            // 2. Now 'learn' that IP to mac mapping so that we get our async notification
+            connection_tracker
+                .neighbor_cache
+                .learn(&Some(target_ip), &Some(target_mac));
+
+            // 3. Verify we got the reply
+            let (lookup_ip, lookup_mac) = lookup_rx.try_recv().unwrap();
+            assert_eq!(lookup_ip, target_ip);
+            assert_eq!(lookup_mac, target_mac);
+        }
+        // check v4
+        let target_ipv4 = IpAddr::from_str("192.168.1.1").unwrap();
+        let target_mac = MacAddress::from([20, 21, 22, 23, 24, 25]);
+        check_lookup_for_ip(
+            target_ipv4,
+            target_mac,
+            &mut connection_tracker,
+            &mut prober_rx,
+            local_mac,
+            local_ipv4,
+        );
+        // check v6; should work even though we don't yet parse v6 NDP
+        let target_ipv6 = IpAddr::from_str("de:ad:be:ef::").unwrap();
+        check_lookup_for_ip(
+            target_ipv6,
+            target_mac,
+            &mut connection_tracker,
+            &mut prober_rx,
+            local_mac,
+            local_ipv6,
+        );
     }
 }
