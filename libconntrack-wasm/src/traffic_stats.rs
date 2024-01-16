@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Display, time::Duration};
 
 use chrono::{DateTime, Utc};
 use common_wasm::{
-    stats_helper::SimpleStats,
+    stats_helper::{ExportedSimpleStats, SimpleStats},
     timeseries_stats::{BucketedTimeSeries, ExportedBuckets},
 };
 use serde::{Deserialize, Serialize};
@@ -118,7 +118,7 @@ pub struct TrafficStatsSummary {
     /// Lost bytes, as indicated by SACK blocks.
     pub lost_bytes: Option<u64>,
 
-    pub rtt_stats_ms: Option<SimpleStats>,
+    pub rtt_stats_ms: Option<ExportedSimpleStats>,
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
@@ -321,7 +321,7 @@ impl TrafficStats {
             last_min_pkt_rate: pkt_rate,
             last_min_byte_rate: byte_rate,
             lost_bytes: self.lost_bytes,
-            rtt_stats_ms: self.rtt_stats_ms.clone(),
+            rtt_stats_ms: self.rtt_stats_ms.clone().map(Into::into),
         }
     }
 
