@@ -7,6 +7,7 @@ use tokio::sync::mpsc::{channel, Sender};
 
 use crate::{owned_packet::OwnedParsedPacket, pcap::RawSocketWriter, utils::PerfMsgCheck};
 
+#[derive(Clone, Debug)]
 pub enum ProbeMessage {
     SendProbe {
         packet: Box<OwnedParsedPacket>,
@@ -20,6 +21,12 @@ pub enum ProbeMessage {
         remote_ip: IpAddr,
         id: u16,
         seq: u16,
+    },
+    /// Send an Arp or an IPv6 ICMP Neighbor solicitation message to lookup this address
+    SendIpLookup {
+        local_mac: [u8; 6],
+        local_ip: IpAddr,
+        target_ip: IpAddr,
     },
 }
 
@@ -61,6 +68,12 @@ pub fn prober_handle_one_message(raw_sock: &mut dyn RawSocketWriter, message: Pr
         } => icmp_ping(
             raw_sock, local_mac, local_ip, remote_mac, remote_ip, id, seq,
         ),
+        // leave as TODO until next diff
+        SendIpLookup {
+            local_mac: _,
+            local_ip: _,
+            target_ip: _,
+        } => todo!(),
     }
 }
 

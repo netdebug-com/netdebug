@@ -6,7 +6,8 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use etherparse::{
-    IcmpEchoHeader, Icmpv4Header, Icmpv6Header, IpHeader, TcpHeader, TransportHeader, UdpHeader,
+    EtherType, IcmpEchoHeader, Icmpv4Header, Icmpv6Header, IpHeader, TcpHeader, TransportHeader,
+    UdpHeader,
 };
 use libconntrack_wasm::{ConnectionKey, IpProtocol};
 use log::warn;
@@ -25,6 +26,8 @@ pub enum ConnectionKeyError {
     /// The packet was in ICMP message of a type we handle but we failed to parse/
     /// extract the inner packet.
     IcmpInnerPacketError,
+    /// This packet is an Arp, so no ConnectionKey but will want other parsing for it
+    Arp,
 }
 
 /**
@@ -248,8 +251,18 @@ impl OwnedParsedPacket {
                     return Err(ConnectionKeyError::NoLocalAddr);
                 }
             }
-            // if there's no IP layer, just return None
-            None => return Err(ConnectionKeyError::IgnoredPacket),
+            // if there's no IP layer, just return IgnoredPacket unless it's Arp
+            None => {
+                if self
+                    .link
+                    .as_ref()
+                    .is_some_and(|l| l.ether_type == EtherType::Arp as u16)
+                {
+                    return Err(ConnectionKeyError::Arp);
+                } else {
+                    return Err(ConnectionKeyError::IgnoredPacket);
+                }
+            }
         };
         use etherparse::TransportHeader::*;
         match &self.transport {
