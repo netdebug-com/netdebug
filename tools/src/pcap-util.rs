@@ -59,7 +59,10 @@ pub fn main() {
     let mut capture = pcap::Capture::from_file(Path::new(&args.pcap_file))
         .expect("Error trying to open pcap file");
 
-    let local_addr = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
+    let local_addr = HashSet::from([
+        IpAddr::from_str("192.168.1.238").unwrap(),
+        IpAddr::from_str("192.168.1.136").unwrap(),
+    ]);
     let stats_registry = ExportedStatRegistry::new("", Instant::now());
 
     let (prober_tx, mut prober_rx) = mpsc::channel(100);

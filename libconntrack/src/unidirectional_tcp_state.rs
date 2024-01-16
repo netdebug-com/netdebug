@@ -1,5 +1,6 @@
-use std::fmt::Display;
+use std::{collections::VecDeque, fmt::Display};
 
+use chrono::{DateTime, Utc};
 use derive_getters::Getters;
 use etherparse::{IpHeader, TcpHeader, TcpOptionElement};
 use libconntrack_wasm::ConnectionKey;
@@ -22,6 +23,14 @@ impl Display for ConnectionSide {
         std::fmt::Debug::fmt(self, f)
     }
 }
+
+const MAX_TIMESTAMP_HISTORY_LEN: usize = 64;
+/// TODO: do something more intelligent. This is the alpha used to compute
+/// the weighted RTT.
+/// Note, that RFC6298 suggests using 1/8 for alpha.
+/// RFC7323 (the one specifying timestamp option), Appendix G says alpha
+/// should be scaled down by number of expected samples per RTT.
+const RTT_DECAY_ALPHA: f64 = 0.1;
 
 /// The state for one side of a TCP connections. We use a `TcpWindow` instance to track the current
 /// window of allowed sequence numbers. Using `TcpWindow` we translate regular 32bit
@@ -54,12 +63,23 @@ pub struct UnidirectionalTcpState {
     /// indicates packet loss. Note, that this might not correspond to the number of lost segments
     /// since multiple lost segments could be indicated in a single SACK.
     loss_events: u64,
-
     /// The list of current holes as computed from received SACKs. I.e., any hole between the highest
     /// ACK number received and any data indicated by SACK blocks. This Vec is sorted and the ranges
     /// are overlap free. Furthermore, when we advance `recv_ack_no` we remove any holes that have
     /// been 'closed'.
     holes: Vec<SeqRange>,
+    /// A history of recent TCP timestamps observed in packets sent by this side. I.e.,
+    /// the `tsval` fields. When ACK's are received and processes, entries are dropped
+    /// from this history.
+    timestamp_history: VecDeque<TimestampObservation>,
+    /// A hack for now: The RTT estimate for segments sent by this side.
+    /// Note that we expect that the RTT for segments sent the Local side to
+    /// be the actual RTT through the network, while the measured RTT for segments
+    /// sent by the Remote side should be <<1ms (since it's just processing on the
+    /// local machine).
+    /// TODO: do something more intelligent, track variance, etc.  
+    /// Also, should probably aggregate per destination host??
+    rtt_estimate_ms: f64,
     side: ConnectionSide,
 }
 
@@ -94,6 +114,8 @@ impl UnidirectionalTcpState {
             lost_bytes: 0,
             loss_events: 0,
             holes: Vec::new(),
+            timestamp_history: VecDeque::with_capacity(MAX_TIMESTAMP_HISTORY_LEN),
+            rtt_estimate_ms: 0.0,
             side,
         }
     }
@@ -106,6 +128,7 @@ impl UnidirectionalTcpState {
             // RST segment should probably be ignored ....
             return;
         }
+
         let cur_pkt_seq = match self.tcp_window.seq64_and_update(tcp.sequence_number) {
             Some(seq) => seq,
             None => {
@@ -118,6 +141,31 @@ impl UnidirectionalTcpState {
             }
         };
         let payload_len = tcp_payload_len(packet, tcp) as u64;
+        if let Some((tsval, _tsecr)) = extract_tcp_timestamp(tcp) {
+            let observation = TimestampObservation {
+                pkt_time: packet.timestamp,
+                tsval,
+            };
+            if self.timestamp_history.is_empty() {
+                self.timestamp_history.push_back(observation);
+            } else if self.timestamp_history.len() < MAX_TIMESTAMP_HISTORY_LEN {
+                // Note, we choose to not add more timestamp history entries rather then evicting
+                // old ones. We expect to get an ACK at least for every other packet (and thus)
+                // timestamp. So we expect to still get tsecr's for at least half of the
+                // entries in the history. If we evict the oldest entries and we
+                // have more than MAX_TIMESTAMP_HISTORY_LEN packets in flight we might
+                // never be able to match a response up with an outgoing timestamp.
+                let prev = self.timestamp_history.back().unwrap();
+                if prev.tsval.lt(observation.tsval) {
+                    // If this timestamp is strictly larger then the previously
+                    // observed one, record it. Otherwise ignore.
+                    // Note, for many connections we see several packets with the
+                    // same tsval, since e.g., on MacOs the timestamp clock has 1ms
+                    // resolution.
+                    self.timestamp_history.push_back(observation);
+                }
+            }
+        }
         // None < Some(x) for every x, so this nicely does the right thing :-)
         self.sent_seq_no = self.sent_seq_no.max(Some(cur_pkt_seq + payload_len));
         if tcp.syn {
@@ -153,6 +201,7 @@ impl UnidirectionalTcpState {
     /// side has ACK'ed
     pub fn process_rx_ack(
         &mut self,
+        pkt_time: DateTime<Utc>,
         pkt_payload_empty: bool,
         tcp: &TcpHeader,
     ) -> ProcessRxAckReturn {
@@ -172,13 +221,53 @@ impl UnidirectionalTcpState {
                 };
             }
         };
-        let is_dup_ack = match self.recv_ack_no {
+        let (is_dup_ack, acks_new_data) = match self.recv_ack_no {
             // Is this ACK a duplicate ACK?
             Some(old_ack) => {
-                old_ack == cur_pkt_ack && pkt_payload_empty && !tcp.syn && !tcp.fin && !tcp.rst
+                let dup_ack =
+                    old_ack == cur_pkt_ack && pkt_payload_empty && !tcp.syn && !tcp.fin && !tcp.rst;
+                let acks_new_data = cur_pkt_ack > old_ack;
+                (dup_ack, acks_new_data)
             }
-            None => false,
+            None => (false, true),
         };
+        // Per RFC7323, Section 4.1, we can only use echoed timestamps if they are in packets
+        // that ACK new data.
+        if acks_new_data {
+            if let Some((_tsval, tsecr)) = extract_tcp_timestamp(tcp) {
+                let mut rtt = None;
+                while let Some(observation) = self.timestamp_history.front() {
+                    if observation.tsval.lt(tsecr) {
+                        self.timestamp_history.pop_front();
+                    } else if observation.tsval == tsecr {
+                        let dt = pkt_time - observation.pkt_time;
+                        if dt > chrono::Duration::zero() {
+                            rtt = Some(dt);
+                        }
+                        self.timestamp_history.pop_front();
+                        break;
+                    } else {
+                        // TODO: we remove a tsval from the history the first time we
+                        // see a matching ACK. However, in busy connections we are likely to
+                        // see several segments with the same timestamps. So we have a flight
+                        // of packets with the same tsval (and we'll get several tsecr's with
+                        // that value back). We could use this to compute latency variance inside
+                        // flight of packets.
+                        break;
+                    }
+                }
+                if let Some(rtt) = rtt {
+                    let rtt_ms = rtt.num_nanoseconds().unwrap() as f64 / 1e6;
+                    if self.rtt_estimate_ms == 0.0 {
+                        self.rtt_estimate_ms = rtt_ms;
+                    } else {
+                        self.rtt_estimate_ms = (1. - RTT_DECAY_ALPHA) * self.rtt_estimate_ms
+                            + RTT_DECAY_ALPHA * rtt_ms;
+                    }
+                }
+            }
+        }
+
         // None < Some(x) for every x, so this nicely does the right thing :-)
         self.recv_ack_no = self.recv_ack_no.max(Some(cur_pkt_ack));
         // TOOD: should we use the highest ACK number received so far or the ACK number from the current
@@ -199,6 +288,7 @@ impl UnidirectionalTcpState {
         self.holes.extend(holes);
         self.holes = sort_and_merge_ranges(std::mem::take(&mut self.holes));
         let new_bytes_in_holes = self.bytes_in_holes();
+
         let new_lost_bytes = new_bytes_in_holes - prev_bytes_in_holes;
         self.lost_bytes += new_lost_bytes;
         if new_lost_bytes > 0 {
@@ -212,8 +302,9 @@ impl UnidirectionalTcpState {
             );
         }
         // Note the order of operations. We remove filled holes first and only afterwards
-        // (in teh next call) will we `prev_bytes_in_holes`
+        // (in the next call) will we `prev_bytes_in_holes`
         remove_filled_holes(self.recv_ack_no.unwrap(), &mut self.holes);
+
         ProcessRxAckReturn {
             is_dup_ack,
             new_lost_bytes,
@@ -263,6 +354,16 @@ impl UnidirectionalTcpState {
     }
 }
 
+pub fn extract_tcp_timestamp(tcph: &TcpHeader) -> Option<(TcpTimestamp, TcpTimestamp)> {
+    tcph.options_iterator().find_map(|opt| {
+        if let Ok(TcpOptionElement::Timestamp(tsval, tsecr)) = opt {
+            Some((TcpTimestamp(tsval), TcpTimestamp(tsecr)))
+        } else {
+            None
+        }
+    })
+}
+
 pub fn tcp_payload_len(packet: &OwnedParsedPacket, tcp: &TcpHeader) -> u16 {
     // NOTE: we can't just use packet.payload.len() b/c we might have a partial capture
     match &packet.ip {
@@ -302,10 +403,43 @@ pub fn tcp_payload_len(packet: &OwnedParsedPacket, tcp: &TcpHeader) -> u16 {
     }
 }
 
+/// Represents a TCP timestampd and implements a less-than comparision
+/// that takes wrapping into account. We don't implement `Ord` because this
+/// comparision is not transitive.
+/// Note, we could a separate `TcpWindow` instance to translate timestamps
+/// into a 64-bit space like we do for sequence numbers, but I don't think that's
+/// necessary
+#[derive(Debug, Clone, Default, Copy, Eq, PartialEq, Hash)]
+pub struct TcpTimestamp(u32);
+
+impl TcpTimestamp {
+    /// return true if self if less than other
+    /// cf. https://datatracker.ietf.org/doc/html/rfc7323, Section 5.2
+    pub fn lt(&self, other: TcpTimestamp) -> bool {
+        let delta = other.0.wrapping_sub(self.0);
+        0 < delta && delta < (1 << 31)
+    }
+}
+
+impl Display for TcpTimestamp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.to_string())
+    }
+}
+
+/// Tracks observed TcpTimestamps (as seen in tsval) and the packet
+/// time when that TcpTimestamp was observed.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct TimestampObservation {
+    pkt_time: DateTime<Utc>,
+    tsval: TcpTimestamp,
+}
+
 #[cfg(test)]
 mod test {
-    use std::{net::IpAddr, str::FromStr};
+    use std::{collections::HashSet, net::IpAddr, str::FromStr};
 
+    use approx::assert_relative_eq;
     use common::test_utils::test_dir;
     use common_wasm::timeseries_stats::{CounterProvider, ExportedStatRegistry};
     use libconntrack_wasm::IpProtocol;
@@ -441,6 +575,7 @@ mod test {
         fn mkrange(left: TcpSeq64, right: TcpSeq64) -> SeqRange {
             SeqRange::try_from_seq64((left, right)).unwrap()
         }
+        let pkt_time = DateTime::<Utc>::UNIX_EPOCH; // any time will do
         let initial_ack = 2_000_000_000;
         let initial_ack64 = initial_ack as TcpSeq64;
         let mut state = UnidirectionalTcpState::new(
@@ -455,21 +590,21 @@ mod test {
 
         // check dup ack logic
         assert_eq!(
-            state.process_rx_ack(false, &tcph),
+            state.process_rx_ack(pkt_time, false, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
                 new_lost_bytes: 0
             }
         );
         assert_eq!(
-            state.process_rx_ack(true, &tcph),
+            state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: true,
                 new_lost_bytes: 0
             }
         );
         assert_eq!(
-            state.process_rx_ack(false, &tcph),
+            state.process_rx_ack(pkt_time, false, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
                 new_lost_bytes: 0
@@ -477,7 +612,7 @@ mod test {
         );
         tcph.fin = true;
         assert_eq!(
-            state.process_rx_ack(true, &tcph),
+            state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
                 new_lost_bytes: 0
@@ -492,7 +627,7 @@ mod test {
         .unwrap();
 
         assert_eq!(
-            state.process_rx_ack(true, &tcph),
+            state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: true,
                 new_lost_bytes: 30,
@@ -513,7 +648,7 @@ mod test {
         // ACK more data, partially fill hole
         tcph.acknowledgment_number = initial_ack + 5;
         assert_eq!(
-            state.process_rx_ack(true, &tcph),
+            state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
                 new_lost_bytes: 0
@@ -536,7 +671,7 @@ mod test {
         )])
         .unwrap();
         assert_eq!(
-            state.process_rx_ack(true, &tcph),
+            state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: true,
                 new_lost_bytes: 0
@@ -556,7 +691,7 @@ mod test {
         // ACK more data, completely fill first hole
         tcph.acknowledgment_number = initial_ack + 20;
         assert_eq!(
-            state.process_rx_ack(true, &tcph),
+            state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
                 new_lost_bytes: 0
@@ -576,7 +711,7 @@ mod test {
         )])
         .unwrap();
         assert_eq!(
-            state.process_rx_ack(true, &tcph),
+            state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: true,
                 new_lost_bytes: 0
@@ -595,7 +730,7 @@ mod test {
         // ACK more data, fill everything
         tcph.acknowledgment_number = initial_ack + 50;
         assert_eq!(
-            state.process_rx_ack(true, &tcph),
+            state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
                 new_lost_bytes: 0
@@ -611,6 +746,7 @@ mod test {
         fn mkrange(left: TcpSeq64, right: TcpSeq64) -> SeqRange {
             SeqRange::try_from_seq64((left, right)).unwrap()
         }
+        let pkt_time = DateTime::<Utc>::UNIX_EPOCH; // any time will do
         let initial_ack = 2_000_000_000;
         let initial_ack64 = initial_ack as TcpSeq64;
         let mut state = UnidirectionalTcpState::new(
@@ -624,7 +760,7 @@ mod test {
         tcph.acknowledgment_number = initial_ack;
 
         assert_eq!(
-            state.process_rx_ack(true, &tcph),
+            state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
                 new_lost_bytes: 0
@@ -638,7 +774,7 @@ mod test {
         .unwrap();
 
         assert_eq!(
-            state.process_rx_ack(true, &tcph),
+            state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: true,
                 new_lost_bytes: 30,
@@ -666,7 +802,7 @@ mod test {
         .unwrap();
         tcph.acknowledgment_number = initial_ack + 5;
         assert_eq!(
-            state.process_rx_ack(true, &tcph),
+            state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
                 // Only the hole 50--60 is newly lost.
@@ -695,7 +831,7 @@ mod test {
         )])
         .unwrap();
         assert_eq!(
-            state.process_rx_ack(true, &tcph),
+            state.process_rx_ack(pkt_time, true, &tcph),
             ProcessRxAckReturn {
                 is_dup_ack: false,
                 new_lost_bytes: 15,
@@ -741,5 +877,196 @@ mod test {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn test_tcp_timestamp_struct() {
+        assert!(TcpTimestamp(0xffff_ffff).lt(TcpTimestamp(1)));
+        assert!(!TcpTimestamp(0).lt(TcpTimestamp(0)));
+        assert!(!TcpTimestamp(1).lt(TcpTimestamp(1)));
+        assert!(!TcpTimestamp(0xffff_ffff).lt(TcpTimestamp(0xffff_ffff)));
+        assert!(TcpTimestamp(1).lt(TcpTimestamp(2)));
+
+        // values exactly 1<<32 apart are not comparable
+        assert!(!TcpTimestamp(0).lt(TcpTimestamp(0x8000_0000)));
+        assert!(!TcpTimestamp(0x8000_0000).lt(TcpTimestamp(0)));
+
+        assert!(TcpTimestamp(1).lt(TcpTimestamp(0x8000_0000)));
+        assert!(TcpTimestamp(2).lt(TcpTimestamp(0x8000_0000)));
+    }
+
+    pub fn mk_packet_with_ts(
+        outgoing: bool,
+        pkt_time: DateTime<Utc>,
+        ack_seq: u32,
+        tcp_ts: u32,
+    ) -> (Box<OwnedParsedPacket>, TcpHeader) {
+        let mut pkt_bytes: Vec<u8> = Vec::new();
+        let local_mac = [11, 22, 33, 44, 55, 66];
+        let remote_mac = [77, 88, 99, 10, 11, 12];
+        let local_ip: [u8; 4] = [1, 2, 3, 4];
+        let remote_ip: [u8; 4] = [5, 6, 7, 8];
+        let local_port = 42;
+        let remote_port = 80;
+        let payload: Vec<u8> = vec![0u8; if outgoing { 1 } else { 0 }];
+
+        if outgoing {
+            // Outgoing packet with a tsval we are interested in
+            etherparse::PacketBuilder::ethernet2(local_mac, remote_mac)
+                .ipv4(local_ip, remote_ip, 64)
+                .tcp(local_port, remote_port, 100_000 + ack_seq, 65535)
+                .ack(4242) // doesn't matter
+                .options(&[TcpOptionElement::Timestamp(tcp_ts, 42)]) // tsecr is irrelevent
+                .unwrap()
+                .write(&mut pkt_bytes, &payload)
+                .unwrap();
+        } else {
+            // incoming packet with a tsecr we care about.
+            etherparse::PacketBuilder::ethernet2(remote_mac, local_mac)
+                .ipv4(remote_ip, local_ip, 64)
+                .tcp(remote_port, local_port, 4242, 65535) // seqno doen't matter
+                .ack(100_000 + ack_seq)
+                .options(&[TcpOptionElement::Timestamp(42, tcp_ts)]) // tsval is irrelevant
+                .unwrap()
+                .write(&mut pkt_bytes, &payload)
+                .unwrap();
+        }
+        let pkt_headers = etherparse::PacketHeaders::from_ethernet_slice(&pkt_bytes).unwrap();
+        let tcph = pkt_headers.transport.clone().unwrap().tcp().unwrap();
+        let pkt = Box::new(OwnedParsedPacket::from_headers_and_ts(
+            pkt_headers,
+            pkt_time,
+            pkt_bytes.len() as u32,
+        ));
+        let conn_key = pkt
+            .to_connection_key(&HashSet::from([IpAddr::from_str("1.2.3.4").unwrap()]))
+            .unwrap()
+            .0;
+        assert_eq!(mk_mock_connection_key(), conn_key); // sanity check
+        (pkt, tcph)
+    }
+
+    #[test]
+    fn test_extract_tcp_timestamp() {
+        let (_pkt, tcp) = mk_packet_with_ts(true, Utc::now(), 1, 12345);
+        assert_eq!(
+            extract_tcp_timestamp(&tcp),
+            Some((TcpTimestamp(12345), TcpTimestamp(42)))
+        );
+        let (_pkt, tcp) = mk_packet_with_ts(false, Utc::now(), 1, 12345);
+        assert_eq!(
+            extract_tcp_timestamp(&tcp),
+            Some((TcpTimestamp(42), TcpTimestamp(12345)))
+        );
+        // Also make sure a packet w/o timestamp works
+        let mut tcp = tcp.clone();
+        tcp.set_options(&[]).unwrap();
+        assert_eq!(tcp.options_len(), 0);
+        assert_eq!(extract_tcp_timestamp(&tcp), None);
+    }
+
+    #[test]
+    pub fn test_tcp_timestamp_handling() {
+        let mk_ts_obs = |pkt_time: DateTime<Utc>, tsval: u32| TimestampObservation {
+            pkt_time,
+            tsval: TcpTimestamp(tsval),
+        };
+        let mk_dur_ms = chrono::Duration::milliseconds;
+        // picked a fixed time. This helps find cases where we use Utc::now()
+        // instead of the packet time. This timestamp is from 2024-01-11
+        let t0 = DateTime::<Utc>::from_timestamp(1705015239, 0).unwrap();
+        let mut state = UnidirectionalTcpState::new(
+            100_000,
+            ConnectionSide::Local,
+            mk_mock_connection_key(),
+            mk_stat_handles(),
+        );
+        let (pkt, tcp) = mk_packet_with_ts(true, t0, 0, 42_000);
+        state.process_pkt(&pkt, &tcp);
+        assert_eq!(state.timestamp_history, &[mk_ts_obs(t0, 42_000)]);
+
+        // same tsval again ==> don't store it.
+        let (pkt, tcp) = mk_packet_with_ts(true, t0 + mk_dur_ms(10), 1, 42_000);
+        state.process_pkt(&pkt, &tcp);
+        assert_eq!(state.timestamp_history, &[mk_ts_obs(t0, 42_000)]);
+
+        // new tsval ==> store it
+        let (pkt, tcp) = mk_packet_with_ts(true, t0 + mk_dur_ms(15), 2, 42_010);
+        state.process_pkt(&pkt, &tcp);
+        assert_eq!(
+            state.timestamp_history,
+            &[mk_ts_obs(t0, 42_000), mk_ts_obs(t0 + mk_dur_ms(15), 42_010)]
+        );
+
+        // send an old tsval again ==> don't store it.
+        let (pkt, tcp) = mk_packet_with_ts(true, t0 + mk_dur_ms(20), 1, 42_000);
+        state.process_pkt(&pkt, &tcp);
+        assert_eq!(
+            state.timestamp_history,
+            &[mk_ts_obs(t0, 42_000), mk_ts_obs(t0 + mk_dur_ms(15), 42_010)]
+        );
+
+        // Add another timestamp.
+        let (pkt, tcp) = mk_packet_with_ts(true, t0 + mk_dur_ms(25), 3, 42_100);
+        state.process_pkt(&pkt, &tcp);
+        assert_eq!(
+            state.timestamp_history,
+            &[
+                mk_ts_obs(t0, 42_000),
+                mk_ts_obs(t0 + mk_dur_ms(15), 42_010),
+                mk_ts_obs(t0 + mk_dur_ms(25), 42_100)
+            ]
+        );
+
+        assert_eq!(state.rtt_estimate_ms, 0.0);
+
+        // Add a response
+        let (pkt, tcp) = mk_packet_with_ts(false, t0 + mk_dur_ms(30), 1, 42_000);
+        state.process_rx_ack(pkt.timestamp, true, &tcp);
+        assert_eq!(state.rtt_estimate_ms, 30.0);
+        assert_eq!(state.timestamp_history.len(), 2);
+
+        // Add a response that does NOT ACK new data ==> noop
+        let (pkt, tcp) = mk_packet_with_ts(false, t0 + mk_dur_ms(55), 1, 42_100);
+        state.process_rx_ack(pkt.timestamp, true, &tcp);
+        assert_eq!(state.rtt_estimate_ms, 30.0);
+        assert_eq!(state.timestamp_history.len(), 2);
+
+        // ACK new data ==> new RTT sample
+        let (pkt, tcp) = mk_packet_with_ts(false, t0 + mk_dur_ms(67), 3, 42_100);
+        state.process_rx_ack(pkt.timestamp, true, &tcp);
+        assert_relative_eq!(state.rtt_estimate_ms, 30.0 * 0.9 + 42.0 * 0.1); // alpha = 0.1; 67.0 - 25 == 42
+
+        // all tsval less than the tsecr we just sent should have been evicted.
+        assert_eq!(state.timestamp_history.len(), 0);
+    }
+
+    #[test]
+    fn test_tcp_timestamp_history_len() {
+        let mk_dur_ms = chrono::Duration::milliseconds;
+        // picked a fixed time. This helps find cases where we use Utc::now()
+        // instead of the packet time. This timestamp is from 2024-01-11
+        let t0 = DateTime::<Utc>::from_timestamp(1705015239, 0).unwrap();
+        let mut state = UnidirectionalTcpState::new(
+            100_000,
+            ConnectionSide::Local,
+            mk_mock_connection_key(),
+            mk_stat_handles(),
+        );
+
+        for i in 0..MAX_TIMESTAMP_HISTORY_LEN as u32 {
+            let (pkt, tcp) = mk_packet_with_ts(true, t0 + mk_dur_ms(i as i64), i, 1000 + i);
+            state.process_pkt(&pkt, &tcp);
+            assert_eq!(state.timestamp_history.len(), i as usize + 1);
+        }
+        // New timestamps will not be added. Old ones will be preserved
+        let mut i = MAX_TIMESTAMP_HISTORY_LEN as u32;
+        let (pkt, tcp) = mk_packet_with_ts(true, t0 + mk_dur_ms(i as i64), i, 1000 + i);
+        state.process_pkt(&pkt, &tcp);
+        assert_eq!(state.timestamp_history.len(), MAX_TIMESTAMP_HISTORY_LEN);
+        i += 1;
+        let (pkt, tcp) = mk_packet_with_ts(true, t0 + mk_dur_ms(i as i64), i, 1000 + i);
+        state.process_pkt(&pkt, &tcp);
+        assert_eq!(state.timestamp_history.len(), MAX_TIMESTAMP_HISTORY_LEN);
     }
 }
