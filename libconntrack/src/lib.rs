@@ -2,6 +2,7 @@ pub mod analyze;
 pub mod connection;
 pub mod connection_tracker;
 pub mod dns_tracker;
+pub mod neighbor_cache;
 pub mod owned_packet;
 pub mod pcap;
 pub mod prober;

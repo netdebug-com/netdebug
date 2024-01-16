@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 
 bytes = "1.5.0"
+byteorder = "1.5.0"
 common = { path = "../common" }
 common-wasm = { path = "../common/wasm" }             # TODO move this dir to the top level?
 chrono = { version = "0.4.26", features = ["serde"] }
@@ -19,7 +20,7 @@ etherparse = { git = "https://github.com/robs-zeynet/etherparse", branch = "tcp_
 futures = "0.3.28"
 futures-util = "0.3.28"
 indexmap = { workspace = true, features = ["serde"] }
-itertools = "0.11.0"
+itertools = "0.12.0"
 libc = "0.2.146"
 libconntrack-wasm = { path = "../libconntrack-wasm" }
 log = "0.4.19"
@@ -32,6 +33,7 @@ rand = "0.8.5"
 serde = "1.0.188"
 serde_with = { version = "3.3.0", features = ["chrono_0_4"] }
 serde_json = "1.0.104"
+thiserror = "*"
 tokio = { version = "1.29.1", features = ["full"] }
 tokio-tungstenite = { version = "0.20.1", features = ["connect", "native-tls"] }
 url = "2.4.1"
