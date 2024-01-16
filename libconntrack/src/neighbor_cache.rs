@@ -1,14 +1,15 @@
-use byteorder::{BigEndian, ReadBytesExt};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use log::warn;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 use std::net::IpAddr;
 use tokio::sync::mpsc::Sender;
 
 use common_wasm::evicting_hash_map::EvictingHashMap;
-use etherparse::EtherType;
+use etherparse::{ether_type, EtherType};
 use mac_address::MacAddress;
 
 use crate::owned_packet::OwnedParsedPacket;
+use crate::system_tracker::BROADCAST_MAC_ADDR;
 
 /**
  * A cache of all of the information we've learned about our neighbors
@@ -135,6 +136,8 @@ pub enum ArpParseError {
     PacketTooShort { size: usize, min_size: usize },
     #[error("Can't parse as Arp: variable length inconistently short")]
     ShortRead(#[from] std::io::Error),
+    #[error("Can't make an Arp: use NDP instead of Arp for IPv6")]
+    NoIpv6,
 }
 
 /// full description of Arp at : https://en.wikipedia.org/wiki/Address_Resolution_Protocol
@@ -158,6 +161,7 @@ pub struct ArpPacket {
 }
 
 const ARP_MIN_SIZE: usize = 28; // for a normal ethernet + IPv4 packet
+const ARP_FIXED_SIZE: usize = 8; // just the part of the Arp packet that's fixed length
 impl ArpPacket {
     pub fn from_wire(buffer: &Vec<u8>) -> Result<ArpPacket, ArpParseError> {
         if buffer.len() < ARP_MIN_SIZE {
@@ -194,6 +198,63 @@ impl ArpPacket {
             target_hardware_address,
             target_protocol_address,
         })
+    }
+
+    /**
+     * Create an ethernet packet from this Arp without a VLAN tag
+     *
+     * Assume the src mac is the sender_hardware_address
+     * If the Operation is Request, then dst mac is broadcast else use target_hardware_address
+     *
+     * panic if called on a non-ethernet packet
+     */
+    pub fn to_ethernet_pkt(&self) -> Result<Vec<u8>, std::io::Error> {
+        assert_eq!(self.htype, ArpHardwareType::Ethernet);
+        let pkt_size = ARP_FIXED_SIZE + (self.hw_addr_len * 2 + self.proto_addr_len * 2) as usize;
+        let pkt = Vec::with_capacity(pkt_size);
+        let mut writer = Cursor::new(pkt);
+        // dst mac first
+        if self.operation == ArpOperation::Reply {
+            writer.write_all(&self.target_hardware_address)?;
+        } else {
+            writer.write_all(&BROADCAST_MAC_ADDR)?;
+        }
+        // src mac
+        writer.write_all(&self.sender_hardware_address)?;
+        writer.write_u16::<BigEndian>(ether_type::ARP)?;
+        // now the rest of the arp packet
+        writer.write_u16::<BigEndian>(self.htype.into())?;
+        writer.write_u16::<BigEndian>(self.ptype.into())?;
+        writer.write_u8(self.hw_addr_len)?;
+        writer.write_u8(self.proto_addr_len)?;
+        writer.write_u16::<BigEndian>(self.operation.into())?;
+        writer.write_all(&self.sender_hardware_address)?;
+        writer.write_all(&self.sender_protocol_address)?;
+        writer.write_all(&self.target_hardware_address)?;
+        writer.write_all(&self.target_protocol_address)?;
+
+        Ok(writer.into_inner())
+    }
+
+    pub fn new_request(
+        local_mac: [u8; 6],
+        local_ip: IpAddr,
+        target_ip: IpAddr,
+    ) -> Result<ArpPacket, ArpParseError> {
+        match (local_ip, target_ip) {
+            (IpAddr::V4(local_ip), IpAddr::V4(target_ip)) => Ok(ArpPacket {
+                htype: ArpHardwareType::Ethernet,
+                ptype: ArpProtocolType::IPv4,
+                hw_addr_len: 6,
+                proto_addr_len: 4,
+                operation: ArpOperation::Request,
+                sender_hardware_address: Vec::from(local_mac),
+                sender_protocol_address: Vec::from(local_ip.octets()),
+                target_hardware_address: vec![0; 6],
+                target_protocol_address: Vec::from(target_ip.octets()),
+            }),
+            _ => Err(ArpParseError::NoIpv6),
+        }
     }
 
     /// If the htype is Ethernet and the hlen is 6, return the sender's hardware address as a MacAddress
@@ -239,11 +300,21 @@ impl ArpPacket {
 }
 
 const ARP_HTYPE_ETHERNET: u16 = 1;
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u16)]
-#[derive(Clone, Debug, PartialEq)]
 pub enum ArpHardwareType {
     Ethernet = ARP_HTYPE_ETHERNET,
     Unknown(u16),
+}
+
+// seems like this shouldn't be necessary but the 'as u16' wasn't working
+impl From<ArpHardwareType> for u16 {
+    fn from(value: ArpHardwareType) -> Self {
+        match value {
+            ArpHardwareType::Ethernet => ARP_HTYPE_ETHERNET,
+            ArpHardwareType::Unknown(t) => t,
+        }
+    }
 }
 
 impl ArpHardwareType {
@@ -259,11 +330,20 @@ impl ArpHardwareType {
 
 /// shares the same namespace with ethertypes, but is ostensibly different
 const ARP_PROTOCOL_IPV4: u16 = etherparse::ether_type::IPV4;
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u16)]
 pub enum ArpProtocolType {
     IPv4 = ARP_PROTOCOL_IPV4,
     Unknown(u16),
+}
+
+impl From<ArpProtocolType> for u16 {
+    fn from(value: ArpProtocolType) -> Self {
+        match value {
+            ArpProtocolType::IPv4 => ARP_PROTOCOL_IPV4,
+            ArpProtocolType::Unknown(p) => p,
+        }
+    }
 }
 impl ArpProtocolType {
     /// Convert from host byte order to ArpProtocolType
@@ -278,12 +358,22 @@ impl ArpProtocolType {
 
 const ARP_OPERATION_REQUEST: u16 = 1;
 const ARP_OPERATION_REPLY: u16 = 2;
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u16)]
 pub enum ArpOperation {
     Request = ARP_OPERATION_REQUEST,
     Reply = ARP_OPERATION_REPLY,
     Unknown(u16),
+}
+
+impl From<ArpOperation> for u16 {
+    fn from(value: ArpOperation) -> Self {
+        match value {
+            ArpOperation::Request => ARP_OPERATION_REQUEST,
+            ArpOperation::Reply => ARP_OPERATION_REPLY,
+            ArpOperation::Unknown(o) => o,
+        }
+    }
 }
 
 impl ArpOperation {
@@ -355,6 +445,25 @@ mod test {
         assert_eq!(test_arp_reply.get_target_ip().unwrap(), target_ip);
         assert_eq!(test_arp_reply.get_target_mac(), Some(target_mac));
         assert_eq!(test_arp_reply.operation, ArpOperation::Reply);
+    }
+
+    /**
+     * Pull captured Arps from pcap, parse them to an Arp then write them back to the wire
+     * and make sure they match where they came from
+     *
+     * This test assumes that Arp parsing/reading works properly; if not both tests will fail
+     */
+    #[test]
+    fn test_arp_writing() {
+        let mut capture =
+            pcap::Capture::from_file(test_dir("libconntrack", "tests/arp_capture.pcap")).unwrap();
+
+        while let Ok(raw_pkt) = capture.next_packet() {
+            let parsed_pkt = OwnedParsedPacket::try_from_pcap(raw_pkt.clone()).unwrap();
+            let arp = ArpPacket::from_wire(&parsed_pkt.payload).unwrap();
+            let test_writen_packet = arp.to_ethernet_pkt().unwrap();
+            assert_eq!(test_writen_packet, raw_pkt.data);
+        }
     }
 
     #[test]

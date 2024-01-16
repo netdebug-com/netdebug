@@ -5,7 +5,10 @@ use etherparse::{PacketHeaders, TcpHeader, TransportHeader};
 use log::{debug, warn};
 use tokio::sync::mpsc::{channel, Sender};
 
-use crate::{owned_packet::OwnedParsedPacket, pcap::RawSocketWriter, utils::PerfMsgCheck};
+use crate::{
+    neighbor_cache::ArpPacket, owned_packet::OwnedParsedPacket, pcap::RawSocketWriter,
+    utils::PerfMsgCheck,
+};
 
 #[derive(Clone, Debug)]
 pub enum ProbeMessage {
@@ -70,10 +73,25 @@ pub fn prober_handle_one_message(raw_sock: &mut dyn RawSocketWriter, message: Pr
         ),
         // leave as TODO until next diff
         SendIpLookup {
-            local_mac: _,
-            local_ip: _,
-            target_ip: _,
-        } => todo!(),
+            local_mac,
+            local_ip,
+            target_ip,
+        } => send_arp(raw_sock, local_ip, local_mac, target_ip),
+    }
+}
+
+fn send_arp(
+    raw_sock: &mut dyn RawSocketWriter,
+    local_ip: IpAddr,
+    local_mac: [u8; 6],
+    target_ip: IpAddr,
+) {
+    // can't think of why this should ever fail, so panic
+    let arp_request = ArpPacket::new_request(local_mac, local_ip, target_ip)
+        .expect("valid IP/mac for Arp Request");
+    let pkt = arp_request.to_ethernet_pkt().unwrap();
+    if let Err(e) = raw_sock.sendpacket(&pkt) {
+        warn!("Failed to send out Arp request from Prober: {}", e);
     }
 }
 
@@ -199,7 +217,9 @@ pub mod test {
 
     use super::*;
     use etherparse::{IpHeader, PacketBuilder};
+    use mac_address::MacAddress;
 
+    use crate::neighbor_cache::ArpOperation;
     use crate::owned_packet::OwnedParsedPacket;
     use crate::pcap::MockRawSocketProber;
 
@@ -300,5 +320,23 @@ pub mod test {
         assert_eq!(last_pkt.payload.len(), PROBE_MAX_TTL as usize);
         assert_eq!(get_v4_ttl(&first_pkt), Some(5));
         assert_eq!(get_v4_ttl(&last_pkt), Some(32));
+    }
+
+    #[test]
+    fn test_send_arp_request() {
+        let mut mock_raw_sock = MockRawSocketProber::new();
+        let local_mac = [0, 1, 2, 3, 4, 5];
+        let local_ip = IpAddr::from_str("192.168.1.34").unwrap();
+        let target_ip = IpAddr::from_str("192.168.1.1").unwrap();
+        send_arp(&mut mock_raw_sock, local_ip, local_mac, target_ip);
+        // make sure we got 1 packet
+        assert_eq!(mock_raw_sock.captured.len(), 1);
+        let pkt =
+            OwnedParsedPacket::try_from_fake_time(mock_raw_sock.captured.pop().unwrap()).unwrap();
+        let arp = ArpPacket::from_wire(&pkt.payload).unwrap();
+        assert_eq!(arp.get_sender_ip().unwrap(), local_ip);
+        assert_eq!(arp.get_target_ip().unwrap(), target_ip);
+        assert_eq!(arp.get_sender_mac().unwrap(), MacAddress::from(local_mac));
+        assert_eq!(arp.operation, ArpOperation::Request);
     }
 }
