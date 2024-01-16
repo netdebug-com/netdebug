@@ -31,12 +31,25 @@ use crate::{
     prober::ProbeMessage,
     prober_helper::ProberHelper,
     utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timestamp_to_ms, PerfMsgCheck},
-    ConnectionSide, TcpSeq64, UnidirectionalTcpState,
+    ConnectionSide, ProcessRxAckReturn, TcpSeq64, UnidirectionalTcpState,
 };
 
 pub const MAX_BURST_RATE_TIME_WINDOW_MILLIS: u64 = 10;
 
-type LostBytesWrapper = u64;
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Default)]
+pub struct ConnUpdateReturn {
+    pub new_lost_bytes: u64,
+    pub rtt_sample: Option<chrono::Duration>,
+}
+
+impl From<ProcessRxAckReturn> for ConnUpdateReturn {
+    fn from(value: ProcessRxAckReturn) -> Self {
+        ConnUpdateReturn {
+            new_lost_bytes: value.new_lost_bytes,
+            rtt_sample: value.rtt_sample,
+        }
+    }
+}
 
 /**
  * Create a ConnectionKey from a remote socket addr and the global context
@@ -198,8 +211,8 @@ impl Connection {
         src_is_local: bool,
         dns_tx: &Option<mpsc::UnboundedSender<DnsTrackerMessage>>,
         mut pcap_to_wall_delay: StatHandleDuration,
-    ) -> LostBytesWrapper {
-        let mut new_lost_bytes = 0;
+    ) -> ConnUpdateReturn {
+        let mut retval = ConnUpdateReturn::default();
         self.last_packet_time = packet.timestamp;
         let pcap_wall_dt = (Utc::now() - packet.timestamp).abs();
         pcap_to_wall_delay.add_duration_value(pcap_wall_dt.to_std().unwrap());
@@ -207,10 +220,15 @@ impl Connection {
             .add_packet_with_time(src_is_local, packet.len as u64, packet.timestamp);
         match &packet.transport {
             Some(TransportHeader::Tcp(tcp)) => {
-                new_lost_bytes = self.update_tcp(src_is_local, &packet, tcp, prober_helper);
+                retval = self.update_tcp(src_is_local, &packet, tcp, prober_helper);
                 self.traffic_stats.add_new_lost_bytes(
                     !src_is_local, // The side that lost the bytes, is the opposite of the one sending ACKs
-                    new_lost_bytes,
+                    retval.new_lost_bytes,
+                    packet.timestamp,
+                );
+                self.traffic_stats.add_rtt_sample(
+                    !src_is_local, // The side that lost the bytes, is the opposite of the one sending ACKs
+                    retval.rtt_sample,
                     packet.timestamp,
                 );
             }
@@ -257,7 +275,7 @@ impl Connection {
                 );
             }
         }
-        new_lost_bytes
+        retval
     }
 
     /**
@@ -306,8 +324,8 @@ impl Connection {
         packet: &OwnedParsedPacket,
         tcp: &TcpHeader,
         prober_helper: &mut ProberHelper,
-    ) -> LostBytesWrapper {
-        let mut lost_bytes = 0;
+    ) -> ConnUpdateReturn {
+        let mut retval = ConnUpdateReturn::default();
         let (state_opt, side) = if src_is_local {
             (&mut self.local_tcp_state, ConnectionSide::Local)
         } else {
@@ -349,7 +367,7 @@ impl Connection {
             // TODO: do we need to use `tcp_paylod_len` instead of `payload.is_empty()`??
             let ack_ret_val =
                 other_state.process_rx_ack(packet.timestamp, packet.payload.is_empty(), tcp);
-            lost_bytes = ack_ret_val.new_lost_bytes;
+            retval = ack_ret_val.into();
 
             // Dup-ack handling for possible probe replies
             if ack_ret_val.is_dup_ack {
@@ -424,7 +442,7 @@ impl Connection {
                 }
             }
         }
-        lost_bytes
+        retval
     }
 
     /// For packets sent by the local side: do any processing for probes
@@ -932,6 +950,8 @@ pub mod test {
     use std::net::IpAddr;
     use std::str::FromStr;
 
+    use approx::assert_relative_eq;
+    use common::test_utils::test_dir;
     use common_wasm::timeseries_stats::ExportedStatRegistry;
 
     use super::*;
@@ -1149,7 +1169,11 @@ pub mod test {
             }
         }
 
-        fn update_conn(&mut self, conn: &mut Connection, pkt: Box<OwnedParsedPacket>) {
+        fn update_conn(
+            &mut self,
+            conn: &mut Connection,
+            pkt: Box<OwnedParsedPacket>,
+        ) -> ConnUpdateReturn {
             let (key, src_is_local) = pkt.to_connection_key(&self.local_addrs).unwrap();
             conn.update(
                 pkt,
@@ -1158,7 +1182,7 @@ pub mod test {
                 src_is_local,
                 &None,
                 self.pcap_to_wall_delay.clone(),
-            );
+            )
         }
     }
 
@@ -1244,5 +1268,84 @@ pub mod test {
         // One 242 byte packet per 0.5ms ==> 484KB/s
         assert_eq!(conn_meas.rx_stats.burst_byte_rate.unwrap(), 484e3);
         assert_eq!(conn_meas.rx_stats.burst_pkt_rate.unwrap(), 2000.);
+    }
+
+    #[test]
+    fn test_rtt_samples() {
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
+        let mut helper = Helper::new(local_addrs.clone());
+
+        let mut capture = pcap::Capture::from_file(test_dir(
+            "libconntrack",
+            "tests/normal-conn-syn-and-fin.pcap",
+        ))
+        .unwrap();
+        let mut conn = None;
+        let mut pkts_and_rtt = Vec::new();
+        while let Ok(pkt) = capture.next_packet() {
+            let parsed_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
+            let (key, src_is_local) = parsed_pkt.to_connection_key(&local_addrs).unwrap();
+            let conn = conn.get_or_insert_with(|| {
+                Connection::new(key.clone(), parsed_pkt.timestamp, mk_stat_handles())
+            });
+            let conn_update_return = helper.update_conn(conn, parsed_pkt.clone());
+            let rtt_ms = conn_update_return
+                .rtt_sample
+                .map(|rtt| rtt.num_nanoseconds().unwrap() as f64 / 1e6);
+            pkts_and_rtt.push((parsed_pkt, src_is_local, rtt_ms));
+        }
+
+        for (i, (parsed_pkt, src_is_local, rtt_ms)) in pkts_and_rtt.iter().enumerate() {
+            // useful for debugging
+            println!(
+                "{} {} {} ack {} {:?}",
+                i,
+                parsed_pkt.timestamp,
+                src_is_local,
+                parsed_pkt
+                    .transport
+                    .clone()
+                    .unwrap()
+                    .tcp()
+                    .unwrap()
+                    .acknowledgment_number,
+                rtt_ms
+            );
+        }
+        // Verified these by looking at the trace in wireshark
+        assert_eq!(pkts_and_rtt[0].2, None);
+        assert_relative_eq!(pkts_and_rtt[1].2.unwrap(), 54.018); // The network RTT
+        assert_relative_eq!(pkts_and_rtt[2].2.unwrap(), 0.357); // This the processing time on the machine
+        assert_eq!(pkts_and_rtt[3].2, None);
+        assert_relative_eq!(pkts_and_rtt[4].2.unwrap(), 53.552);
+        assert_eq!(pkts_and_rtt[5].2, None);
+        assert_relative_eq!(pkts_and_rtt[6].2.unwrap(), 58.158);
+        assert_eq!(pkts_and_rtt[7].2, None);
+        assert_relative_eq!(pkts_and_rtt[8].2.unwrap(), 0.364);
+        assert_eq!(pkts_and_rtt[9].2, None);
+        assert_relative_eq!(pkts_and_rtt[10].2.unwrap(), 57.543);
+
+        let m = conn
+            .unwrap()
+            .to_connection_measurements(pkts_and_rtt.last().unwrap().0.timestamp, None);
+        let tx_rtt_stat = m
+            .tx_stats
+            .rtt_stats_ms
+            .expect("tx_rtt_stat should be Some(...)");
+        assert_eq!(tx_rtt_stat.num_samples(), 4);
+        assert_relative_eq!(tx_rtt_stat.variance(), 5.60866, epsilon = 1e-5);
+        assert_relative_eq!(tx_rtt_stat.mean(), 55.81775, epsilon = 1e-5);
+        assert_relative_eq!(tx_rtt_stat.min(), 53.552, epsilon = 1e-5);
+        assert_relative_eq!(tx_rtt_stat.max(), 58.158, epsilon = 1e-5);
+
+        let rx_rtt_stat = m
+            .rx_stats
+            .rtt_stats_ms
+            .expect("rx_rtt_stat should be Some(...)");
+        assert_eq!(rx_rtt_stat.num_samples(), 2);
+        assert_relative_eq!(rx_rtt_stat.variance(), 2.45e-5, epsilon = 1e-7);
+        assert_relative_eq!(rx_rtt_stat.mean(), 0.3605, epsilon = 1e-5);
+        assert_relative_eq!(rx_rtt_stat.min(), 0.357, epsilon = 1e-5);
+        assert_relative_eq!(rx_rtt_stat.max(), 0.364, epsilon = 1e-5);
     }
 }

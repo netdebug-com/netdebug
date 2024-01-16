@@ -103,6 +103,21 @@ export type ProbeReportSummary = {
     "summary": Record<U8, (ProbeReportSummaryNode)[]>;
 };
 export type U64 = number;
+export type Usize = number;
+
+/**
+ * Compute the mean an variance of a series of samples using
+ * Welford's algorithm (which is an online algorithm that's numerically
+ * stable). See https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm
+ * Also tracks min and max observed values
+ */
+export type SimpleStats = {
+    "num_samples": Usize;
+    "mean": F64;
+    "m2": F64;
+    "min": F64;
+    "max": F64;
+};
 
 /**
  * Used for exported data (to UI, storage, etc.)
@@ -134,6 +149,7 @@ export type TrafficStatsSummary = {
      * Lost bytes, as indicated by SACK blocks.
      */
     "lost_bytes": (U64 | null);
+    "rtt_stats_ms": (SimpleStats | null);
 };
 export type ConnectionMeasurements = {
     "key": ConnectionKey;

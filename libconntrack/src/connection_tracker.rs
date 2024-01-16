@@ -481,7 +481,7 @@ impl<'a> ConnectionTracker<'a> {
                 }
                 let pkt_timestamp = packet.timestamp; // copy before we move packet into connection.update()
                 let pkt_len = packet.len as u64; // copy before we move packet into connection.update()
-                let new_lost_bytes = connection.update(
+                let conn_update_return = connection.update(
                     packet,
                     &mut self.prober_helper,
                     &key,
@@ -494,9 +494,14 @@ impl<'a> ConnectionTracker<'a> {
                         traffic_stats.add_packet_with_time(src_is_local, pkt_len, pkt_timestamp);
                         traffic_stats.add_new_lost_bytes(
                             !src_is_local, // The side that lost the bytes, is the opposite of the one sending ACKs
-                            new_lost_bytes,
+                            conn_update_return.new_lost_bytes,
                             pkt_timestamp,
                         );
+                        // NOTE, tracking RTT for per-application, per-dns-domain, and conn-tracker aggregat_traffic_stats doesn't
+                        // make sense (as there's no expectation that these RTTs should be similar). So we are not adding
+                        // them.
+
+                        // TODO: add aggregate_traffic_stats per destination IP
                     } else {
                         warn!(
                             "Group counters out of sync between connection {} and tracker: missing {:?}", 
@@ -855,6 +860,7 @@ pub mod test {
     use std::str::FromStr;
     use std::time::Instant;
 
+    use approx::assert_relative_eq;
     use chrono::Duration;
     use common::test_utils::test_dir;
     use common_wasm::{ProbeReportEntry, PROBE_MAX_TTL};
@@ -1642,6 +1648,87 @@ pub mod test {
         let (test_pid, test_app) = associated_apps.iter().next().unwrap();
         assert_eq!(*test_pid, my_pid);
         assert_eq!(*test_app, Some(my_app));
+    }
+
+    #[test]
+    fn test_tcp_rtt() {
+        fn handle_dns_msg(
+            dns_rx: &mut mpsc::UnboundedReceiver<DnsTrackerMessage>,
+            conn_tracker: &mut ConnectionTracker,
+        ) {
+            if let Ok(DnsTrackerMessage::Lookup { key, .. }) = dns_rx.try_recv() {
+                conn_tracker.handle_one_msg(ConnectionTrackerMsg::SetConnectionRemoteHostnameDns {
+                    keys: vec![key],
+                    remote_hostname: Some("somewhere.example.com".to_string()),
+                });
+            }
+        }
+
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
+        let mut conn_track = mk_mock_connection_tracker(local_addrs);
+        let mut capture = pcap::Capture::from_file(test_dir(
+            "libconntrack",
+            "tests/normal-conn-syn-and-fin.pcap",
+        ))
+        .unwrap();
+        let (dns_tx, mut dns_rx) = mpsc::unbounded_channel();
+        conn_track.set_dns_tracker(dns_tx);
+        while let Ok(pkt) = capture.next_packet() {
+            let parsed_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
+            conn_track.handle_one_msg(ConnectionTrackerMsg::Pkt(parsed_pkt));
+            handle_dns_msg(&mut dns_rx, &mut conn_track);
+        }
+        // Query conn_tracker for connection measurements
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        conn_track.handle_one_msg(ConnectionTrackerMsg::GetConnectionMeasurements {
+            tx,
+            time_mode: TimeMode::PacketTime,
+        });
+        let measurements = rx
+            .try_recv()
+            .clone()
+            .expect("No response when getting connection measurements");
+        let m = measurements
+            .first()
+            .expect("Expected one connection measurement");
+        let tx_rtt_stat = m
+            .tx_stats
+            .rtt_stats_ms
+            .clone()
+            .expect("tx_rtt_stat should be Some(...)");
+        // see connection::test::test_rtt_samples() for why we check these values
+        assert_eq!(tx_rtt_stat.num_samples(), 4);
+        assert_relative_eq!(tx_rtt_stat.mean(), 55.81775, epsilon = 1e-5);
+
+        // see connection::test::test_rtt_samples() for why we check these values
+        let rx_rtt_stat = m
+            .rx_stats
+            .rtt_stats_ms
+            .clone()
+            .expect("rx_rtt_stat should be Some(...)");
+        assert_eq!(rx_rtt_stat.num_samples(), 2);
+        assert_relative_eq!(rx_rtt_stat.mean(), 0.3605, epsilon = 1e-5);
+
+        // Get DNS aggregate
+        let (tx, mut rx) = mpsc::channel(1);
+        conn_track.handle_one_msg(ConnectionTrackerMsg::GetDnsTrafficCounters {
+            tx,
+            time_mode: TimeMode::PacketTime,
+        });
+        let agg_stat_entry = rx
+            .try_recv()
+            .expect("No response for GetDnsTrafficCounters");
+        assert_eq!(agg_stat_entry.len(), 1);
+        assert_eq!(
+            agg_stat_entry[0].kind,
+            AggregateStatKind::DnsDstDomain("example.com".to_owned())
+        );
+        // Make sure that we actually tracked something for this domain
+        assert!(agg_stat_entry[0].summary.tx.bytes > 0);
+        assert!(agg_stat_entry[0].summary.rx.bytes > 0);
+        // ... but we are not tracking RTT for dns domains
+        assert_eq!(agg_stat_entry[0].summary.tx.rtt_stats_ms, None);
+        assert_eq!(agg_stat_entry[0].summary.rx.rtt_stats_ms, None);
     }
 
     #[test]

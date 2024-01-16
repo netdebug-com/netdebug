@@ -1,7 +1,10 @@
 use std::{collections::HashMap, fmt::Display, time::Duration};
 
 use chrono::{DateTime, Utc};
-use common_wasm::timeseries_stats::{BucketedTimeSeries, ExportedBuckets};
+use common_wasm::{
+    stats_helper::SimpleStats,
+    timeseries_stats::{BucketedTimeSeries, ExportedBuckets},
+};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use typescript_type_def::TypeDef;
@@ -114,6 +117,8 @@ pub struct TrafficStatsSummary {
 
     /// Lost bytes, as indicated by SACK blocks.
     pub lost_bytes: Option<u64>,
+
+    pub rtt_stats_ms: Option<SimpleStats>,
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
@@ -126,13 +131,18 @@ impl Display for TrafficStatsSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} {}; Last Minute: {} {}; Burst: {} {}",
+            "{} {}; Last Minute: {} {}; Burst: {} {}; Loss: {}, RTT: {}",
             pretty_print_si_units(Some(self.bytes as f64), "B"),
             pretty_print_si_units(Some(self.pkts as f64), "Pkt"),
             pretty_print_si_units(self.last_min_byte_rate, "B/s"),
             pretty_print_si_units(self.last_min_pkt_rate, "Pkt/s"),
             pretty_print_si_units(self.burst_byte_rate, "B/s"),
             pretty_print_si_units(self.burst_pkt_rate, "Pkt/s"),
+            pretty_print_si_units(self.lost_bytes.map(|b| b as f64), "B"),
+            match &self.rtt_stats_ms {
+                Some(rtt) => rtt.to_string(),
+                None => "None".to_owned(),
+            }
         )?;
         Ok(())
     }
@@ -176,7 +186,7 @@ pub struct BidirBandwidthHistory {
 /// It keeps track of total number of bytes and packets, timestamp for first and last packet
 /// seen, the peak burst rate over the given `burst_time_window` time frame, and a history of
 /// the bandwidth over the last 5sec, 1min, 1hr.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TrafficStats {
     /// Total bytes
     bytes: u64,
@@ -193,6 +203,7 @@ pub struct TrafficStats {
     last_5_sec: BucketedTimeSeries<DateTime<Utc>>,
     last_min: BucketedTimeSeries<DateTime<Utc>>,
     last_hour: BucketedTimeSeries<DateTime<Utc>>,
+    rtt_stats_ms: Option<SimpleStats>,
 }
 
 impl TrafficStats {
@@ -221,6 +232,7 @@ impl TrafficStats {
                 120,
             ),
             last_hour: BucketedTimeSeries::new_with_create_time(now, Duration::from_secs(30), 120),
+            rtt_stats_ms: None,
         }
     }
 
@@ -279,6 +291,12 @@ impl TrafficStats {
         }
     }
 
+    pub fn add_rtt_sample(&mut self, rtt_sample: chrono::Duration) {
+        let rtt_stats_ms = self.rtt_stats_ms.get_or_insert_with(SimpleStats::new);
+        let rtt_millis = rtt_sample.num_nanoseconds().unwrap() as f64 / 1e6;
+        rtt_stats_ms.add_sample(rtt_millis);
+    }
+
     pub fn as_stats_summary(&mut self, now: DateTime<Utc>) -> TrafficStatsSummary {
         self.advance_time(now);
         let active_dur = self.last_time - self.first_time;
@@ -303,6 +321,7 @@ impl TrafficStats {
             last_min_pkt_rate: pkt_rate,
             last_min_byte_rate: byte_rate,
             lost_bytes: self.lost_bytes,
+            rtt_stats_ms: self.rtt_stats_ms.clone(),
         }
     }
 
@@ -334,7 +353,7 @@ impl TrafficStats {
 /// Keeps track of bi-directional TrafficStats.
 /// Each direction will only be instantiated once we see a packets for that
 /// direction
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BidirectionalStats {
     burst_time_window: Duration,
     pub rx: Option<TrafficStats>,
@@ -379,6 +398,21 @@ impl BidirectionalStats {
             self.tx_or_create(now).add_lost_bytes(lost_bytes);
         } else {
             self.rx_or_create(now).add_lost_bytes(lost_bytes);
+        }
+    }
+
+    pub fn add_rtt_sample(
+        &mut self,
+        is_tx: bool,
+        rtt: Option<chrono::Duration>,
+        now: DateTime<Utc>,
+    ) {
+        if let Some(rtt) = rtt {
+            if is_tx {
+                self.tx_or_create(now).add_rtt_sample(rtt);
+            } else {
+                self.rx_or_create(now).add_rtt_sample(rtt);
+            }
         }
     }
 
