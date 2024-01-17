@@ -1333,7 +1333,7 @@ pub mod test {
             .rtt_stats_ms
             .expect("tx_rtt_stat should be Some(...)");
         assert_eq!(tx_rtt_stat.num_samples(), 4);
-        assert_relative_eq!(tx_rtt_stat.variance(), 5.60866, epsilon = 1e-5);
+        assert_relative_eq!(tx_rtt_stat.variance().unwrap(), 5.60866, epsilon = 1e-5);
         assert_relative_eq!(tx_rtt_stat.mean(), 55.81775, epsilon = 1e-5);
         assert_relative_eq!(tx_rtt_stat.min(), 53.552, epsilon = 1e-5);
         assert_relative_eq!(tx_rtt_stat.max(), 58.158, epsilon = 1e-5);
@@ -1343,7 +1343,7 @@ pub mod test {
             .rtt_stats_ms
             .expect("rx_rtt_stat should be Some(...)");
         assert_eq!(rx_rtt_stat.num_samples(), 2);
-        assert_relative_eq!(rx_rtt_stat.variance(), 2.45e-5, epsilon = 1e-7);
+        assert_relative_eq!(rx_rtt_stat.variance().unwrap(), 2.45e-5, epsilon = 1e-7);
         assert_relative_eq!(rx_rtt_stat.mean(), 0.3605, epsilon = 1e-5);
         assert_relative_eq!(rx_rtt_stat.min(), 0.357, epsilon = 1e-5);
         assert_relative_eq!(rx_rtt_stat.max(), 0.364, epsilon = 1e-5);
