@@ -1,9 +1,10 @@
-import React, { useRef, useState } from "react";
+import React, { useRef } from "react";
 import { DnsTrackerEntry } from "../netdebug_types";
-import { dataGridDefaultSxProp } from "../utils";
-import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
+import { dataGridDefaultSxProp, desktop_api_url } from "../utils";
 import { Box } from "@mui/material";
 import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
+import { useLoaderData, useRevalidator } from "react-router";
+import { usePeriodicRefresh } from "../usePeriodicRefresh";
 
 function format_ips(ips: string[]) {
   if (ips.length <= 1) {
@@ -32,25 +33,29 @@ function format_ips(ips: string[]) {
 
 /*********************************************************** */
 
+export const dnsCacheLoader = async () => {
+  const res = await fetch(desktop_api_url("get_dns_cache"));
+  // FIXME: error handling.
+  return res.json().then((entries: object) => new Map(Object.entries(entries)));
+};
+
+const RELOAD_INTERVAL_MS = 500;
+const MAX_RELOAD_TIME = 1000;
+
 const Dns: React.FC = () => {
-  const [dnsEntries, setDnsEntries] = useState(
-    new Map<string, DnsTrackerEntry>(),
-  );
+  const dnsEntries = useLoaderData() as Map<string, DnsTrackerEntry>;
   const yellow_threshold = useRef(null);
   const red_threshold = useRef(null);
 
-  const setDnsEntriesWrapper = (entries: object) => {
-    setDnsEntries(new Map<string, DnsTrackerEntry>(Object.entries(entries)));
-  };
-
-  useWebSocketGuiToServer({
-    autoRefresh: true,
-    reqMsgType: { tag: "DumpDnsCache" },
-    respMsgType: "DumpDnsCache",
-    min_time_between_requests_ms: 500,
-    max_time_between_requests_ms: 1000,
-    responseCb: setDnsEntriesWrapper,
-  });
+  // lets us re-fetch the data.
+  const revalidator = useRevalidator();
+  usePeriodicRefresh(
+    true /* autoRefresh */,
+    revalidator,
+    RELOAD_INTERVAL_MS,
+    "DnsCache",
+    MAX_RELOAD_TIME,
+  );
 
   type DnsRowEntry = {
     hostname: string;

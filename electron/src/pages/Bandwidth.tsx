@@ -1,5 +1,4 @@
 import React, { useState } from "react";
-import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 import { ChartJsBandwidth, ChartJsPoint } from "../netdebug_types";
 import { Scatter } from "react-chartjs-2";
 import {
@@ -13,7 +12,9 @@ import {
   Title,
 } from "chart.js";
 import { SwitchHelper } from "../components/SwitchHelper";
-import { getSiScale, prettyPrintSiUnits } from "../utils";
+import { desktop_api_url, getSiScale, prettyPrintSiUnits } from "../utils";
+import { useLoaderData, useRevalidator } from "react-router";
+import { usePeriodicRefresh } from "../usePeriodicRefresh";
 
 ChartJS.register(
   PointElement,
@@ -138,17 +139,29 @@ function getChartOptions(bw: ChartJsBandwidth, scale: BwChartScale) {
   return opts;
 }
 
+export const bandwidthLoader = async () => {
+  const res = await fetch(desktop_api_url("get_aggregate_bandwidth"));
+  // TODO: error handling
+  return res.json();
+};
+
+const RELOAD_INTERVAL_MS = 200;
+const MAX_RELOAD_TIME = 1000;
+
 const Bandwidth: React.FC = () => {
-  const [bandwidthHist, setBandwidthHist] = useState<ChartJsBandwidth[]>([]);
+  const bandwidthHist = useLoaderData() as ChartJsBandwidth[];
   const [autoRefresh, setAutoRefresh] = useState(true);
-  useWebSocketGuiToServer({
-    autoRefresh: autoRefresh,
-    reqMsgType: { tag: "DumpAggregateCounters" },
-    respMsgType: "DumpAggregateCountersReply",
-    min_time_between_requests_ms: 200,
-    max_time_between_requests_ms: 1000,
-    responseCb: setBandwidthHist,
-  });
+
+  // lets us re-fetch the data.
+  const revalidator = useRevalidator();
+  usePeriodicRefresh(
+    autoRefresh,
+    revalidator,
+    RELOAD_INTERVAL_MS,
+    "Bandwidth",
+    MAX_RELOAD_TIME,
+  );
+
   // Default font size is tiny. Lets make the chart readable.
   ChartJS.defaults.font.size = 16;
 
