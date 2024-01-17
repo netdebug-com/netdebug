@@ -37,7 +37,7 @@ pub fn handle_conn_measurement(m: &ConnectionMeasurements) {
 }
 
 pub fn handle_dns_msg(
-    dns_rx: &mut mpsc::UnboundedReceiver<DnsTrackerMessage>,
+    dns_rx: &mut mpsc::Receiver<DnsTrackerMessage>,
     conn_tracker: &mut ConnectionTracker,
 ) {
     if let Ok(DnsTrackerMessage::Lookup { key, .. }) = dns_rx.try_recv() {
@@ -77,7 +77,7 @@ pub fn main() {
     );
     let (conn_measurements_tx, mut conn_measurements_rx) = mpsc::channel(100);
     conn_track.set_all_evicted_connections_listener(conn_measurements_tx);
-    let (dns_tx, mut dns_rx) = mpsc::unbounded_channel();
+    let (dns_tx, mut dns_rx) = mpsc::channel(4096);
     conn_track.set_dns_tracker(dns_tx);
 
     let mut pkts: u64 = 0;
@@ -95,7 +95,7 @@ pub fn main() {
         handle_dns_msg(&mut dns_rx, &mut conn_track);
     }
     // Query conn_tracker for all remaining connections
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx, mut rx) = mpsc::channel(10);
     conn_track.handle_one_msg(ConnectionTrackerMsg::GetConnectionMeasurements {
         tx,
         time_mode: TimeMode::PacketTime,

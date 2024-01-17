@@ -1,8 +1,11 @@
 import React, { useState } from "react";
 import { AggregateStatEntry, AggregateStatKind } from "../netdebug_types";
-import { dataGridDefaultSxProp, sortCmpWithNull } from "../utils";
+import {
+  dataGridDefaultSxProp,
+  desktop_api_url,
+  sortCmpWithNull,
+} from "../utils";
 import { SwitchHelper } from "../components/SwitchHelper";
-import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 import { Box } from "@mui/material";
 import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
 import {
@@ -10,6 +13,8 @@ import {
   getDefaultPercentageGridColDef,
   getDefaultRateGridColDef as getDefaultGridColDefWithUnits,
 } from "../common/flow_common";
+import { useLoaderData, useRevalidator } from "react-router";
+import { usePeriodicRefresh } from "../usePeriodicRefresh";
 
 function getDnsNameFromAggKind(kind: AggregateStatKind) {
   return kind.tag === "DnsDstDomain" ? kind.name : "";
@@ -96,28 +101,36 @@ const columns: GridColDef[] = [
   },
 ];
 
-const FlowsByDnsDomain: React.FC = () => {
-  const [statEntries, setStatEntries] = useState(
-    new Array<AggregateStatEntry>(),
-  );
-  const [autoRefresh, setAutoRefresh] = useState(true);
-
-  useWebSocketGuiToServer({
-    autoRefresh: autoRefresh,
-    reqMsgType: { tag: "DumpDnsAggregateCounters" },
-    respMsgType: "DumpDnsAggregateCountersReply",
-    min_time_between_requests_ms: 1000,
-    max_time_between_requests_ms: 2000,
-    responseCb: (entries: AggregateStatEntry[]) => {
+export const flowsByDnsDomainLoader = async () => {
+  const res = await fetch(desktop_api_url("get_dns_flows"));
+  // FIXME: error handling.
+  return res
+    .json()
+    .then((entries: AggregateStatEntry[]) =>
       entries.sort((a, b) =>
         sortCmpWithNull(
           b.summary.rx.last_min_byte_rate,
           a.summary.rx.last_min_byte_rate,
         ),
-      );
-      setStatEntries(entries);
-    },
-  });
+      ),
+    );
+};
+
+const RELOAD_INTERVAL_MS = 1000;
+const MAX_RELOAD_TIME = 2000;
+
+const FlowsByDnsDomain: React.FC = () => {
+  const statEntries = useLoaderData() as AggregateStatEntry[];
+  const [autoRefresh, setAutoRefresh] = useState(true);
+
+  const revalidator = useRevalidator();
+  usePeriodicRefresh(
+    autoRefresh,
+    revalidator,
+    RELOAD_INTERVAL_MS,
+    "FlowsByDnsDomain",
+    MAX_RELOAD_TIME,
+  );
 
   return (
     <>

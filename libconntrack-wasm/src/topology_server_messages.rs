@@ -125,7 +125,7 @@ impl CongestedLink {
  * A collection of information about congested linked.  
  */
 
-#[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TypeDef)]
 pub struct CongestionSummary {
     pub links: Vec<CongestedLink>,
     // TODO: add an Overall Congestion score based on number of paths that are congested and by how much

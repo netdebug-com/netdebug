@@ -1,17 +1,40 @@
 import React, { useState } from "react";
 import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
-import { formatValue, dataGridDefaultSxProp, reshapeCounter } from "../utils";
+import {
+  formatValue,
+  dataGridDefaultSxProp,
+  reshapeCounter,
+  desktop_api_url,
+} from "../utils";
 import { SwitchHelper } from "../components/SwitchHelper";
-import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 import { Box } from "@mui/material";
+import { useLoaderData, useRevalidator } from "react-router";
+import { usePeriodicRefresh } from "../usePeriodicRefresh";
+
+export const countersLoader = async () => {
+  const res = await fetch(desktop_api_url("get_counters"));
+  // FIXME: error handling.
+  return res
+    .json()
+    .then((counters: object) => new Map(Object.entries(counters)));
+};
+
+const RELOAD_INTERVAL_MS = 1000;
+const MAX_RELOAD_TIME = 2000;
 
 const Counters: React.FC = () => {
-  const [counters, setCounters] = useState(new Map<string, number>());
+  const counters = useLoaderData() as Map<string, number>;
   const [thousandsSep, setThousandsSep] = useState(true);
 
-  const setCountersWrapper = (counters: object) => {
-    setCounters(new Map(Object.entries(counters)));
-  };
+  // lets us re-fetch the data.
+  const revalidator = useRevalidator();
+  usePeriodicRefresh(
+    true /* autoRefresh */,
+    revalidator,
+    RELOAD_INTERVAL_MS,
+    "Counters",
+    MAX_RELOAD_TIME,
+  );
 
   const defaultGridColDef: {
     valueFormatter: GridColDef["valueFormatter"];
@@ -55,15 +78,6 @@ const Counters: React.FC = () => {
       ...defaultGridColDef,
     },
   ];
-
-  useWebSocketGuiToServer({
-    autoRefresh: false,
-    reqMsgType: { tag: "DumpStatCounters" },
-    respMsgType: "DumpStatCountersReply",
-    min_time_between_requests_ms: 1000,
-    max_time_between_requests_ms: 2000,
-    responseCb: setCountersWrapper,
-  });
 
   return (
     <>
