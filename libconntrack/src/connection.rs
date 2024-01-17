@@ -17,7 +17,7 @@ use libconntrack_wasm::{
 #[cfg(not(test))]
 use log::{debug, warn};
 use netstat2::ProtocolSocketInfo;
-use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::mpsc::Sender;
 
 #[cfg(test)]
 use std::{println as debug, println as warn}; // Workaround to use prinltn! for logs.
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     connection_tracker::ConnectionStatHandles,
-    dns_tracker::{DnsTrackerMessage, UDP_DNS_PORT},
+    dns_tracker::{DnsTrackerMessage, DnsTrackerSender, UDP_DNS_PORT},
     owned_packet::OwnedParsedPacket,
     prober::ProbeMessage,
     prober_helper::ProberHelper,
@@ -209,7 +209,7 @@ impl Connection {
         prober_helper: &mut ProberHelper,
         key: &ConnectionKey,
         src_is_local: bool,
-        dns_tx: &Option<mpsc::UnboundedSender<DnsTrackerMessage>>,
+        dns_tx: &Option<DnsTrackerSender>,
         mut pcap_to_wall_delay: StatHandleDuration,
     ) -> ConnUpdateReturn {
         let mut retval = ConnUpdateReturn::default();
@@ -880,7 +880,7 @@ impl Connection {
         key: &ConnectionKey,
         packet: &OwnedParsedPacket,
         udp: &UdpHeader,
-        dns_tx: &Option<mpsc::UnboundedSender<DnsTrackerMessage>>,
+        dns_tx: &Option<DnsTrackerSender>,
         src_is_local: bool,
     ) {
         if (src_is_local && udp.destination_port == UDP_DNS_PORT)
@@ -888,7 +888,7 @@ impl Connection {
         {
             // are we tracking DNS?
             if let Some(dns_tx) = dns_tx {
-                if let Err(e) = dns_tx.send(DnsTrackerMessage::NewEntry {
+                if let Err(e) = dns_tx.try_send(DnsTrackerMessage::NewEntry {
                     key: key.clone(),
                     data: packet.payload.clone(),
                     timestamp: packet.timestamp,
@@ -949,6 +949,7 @@ impl Connection {
 pub mod test {
     use std::net::IpAddr;
     use std::str::FromStr;
+    use tokio::sync::mpsc;
 
     use approx::assert_relative_eq;
     use common::test_utils::test_dir;

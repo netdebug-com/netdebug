@@ -3,6 +3,11 @@ use std::net::IpAddr;
 use chrono::{DateTime, Utc};
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration};
 use etherparse::IpHeader;
+use log::warn;
+use tokio::{
+    sync::mpsc::{Receiver, Sender},
+    time::timeout,
+};
 
 use crate::owned_packet::OwnedParsedPacket;
 
@@ -65,6 +70,63 @@ pub fn packet_is_tcp_rst(packet: &OwnedParsedPacket) -> bool {
         *rst
     } else {
         false
+    }
+}
+
+/// A helper function that implements our RPC-over-channels
+/// TODO: testme....
+pub async fn channel_rpc_perf<M, RESP>(
+    request_tx: Sender<PerfMsgCheck<M>>,
+    request_msg: M,
+    response_rx: &mut Receiver<RESP>,
+    log_msg: &str,
+    sla: Option<tokio::time::Duration>,
+) -> Result<RESP, ()> {
+    channel_rpc(
+        request_tx,
+        PerfMsgCheck::new(request_msg),
+        response_rx,
+        log_msg,
+        sla,
+    )
+    .await
+}
+
+/// A helper function that implements our RPC-over-channels
+/// TODO: testme....
+pub async fn channel_rpc<M, RESP>(
+    request_tx: Sender<M>,
+    request_msg: M,
+    response_rx: &mut Receiver<RESP>,
+    log_msg: &str,
+    sla: Option<tokio::time::Duration>,
+) -> Result<RESP, ()> {
+    use crate::perf_check;
+    let func_start = std::time::Instant::now();
+    if let Err(e) = request_tx.try_send(request_msg) {
+        warn!("Failed to send {} :: err {}", log_msg, e);
+        return Err(());
+    }
+    // TODO: maybe base the timeout on SLA. For now just use something so we get
+    // feedback and don't wait forever.
+    let max_wait_time = tokio::time::Duration::from_millis(15_000);
+    match timeout(max_wait_time, response_rx.recv()).await {
+        Ok(resp) => match resp {
+            Some(resp) => {
+                if let Some(sla) = sla {
+                    perf_check!(log_msg, func_start, sla);
+                }
+                Ok(resp)
+            }
+            None => {
+                warn!("Failed to receive {} response. Channel closed", log_msg);
+                Err(())
+            }
+        },
+        Err(_) => {
+            warn!("Timed out waiting to receive {} response.", log_msg);
+            Err(())
+        }
     }
 }
 
