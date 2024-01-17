@@ -317,7 +317,7 @@ pub struct ConnectionTracker<'a> {
     /// exist yet.
     pub(crate) update_listeners: HashMap<ConnectionKey, HashMap<String, ConnectionUpdateListener>>,
     /// Keep a cache of Ipv4 Arp and (TODO) IPv6 ICMP neighbor solicition/advertisment messages
-    neighbor_cache: NeighborCache<'a>,
+    pub(crate) neighbor_cache: NeighborCache<'a>,
 }
 impl<'a> ConnectionTracker<'a> {
     pub fn new(

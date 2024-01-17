@@ -11,7 +11,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fmt::Display,
     net::IpAddr,
-    num::ParseIntError,
+    num::{ParseIntError, Wrapping},
     str::FromStr,
 };
 
@@ -174,15 +174,18 @@ pub struct NetworkGatewayPingProbe {
     pub seqno: u16,
     /// DId we drop this probe?  Set to true if we got the next one in sequence
     pub dropped: bool,
+    /// What type of ping should we send?
+    pub ping_type: NetworkGatewayPingType,
 }
 
 impl NetworkGatewayPingProbe {
-    pub fn new(seqno: u16) -> NetworkGatewayPingProbe {
+    pub fn new(seqno: u16, ping_type: NetworkGatewayPingType) -> NetworkGatewayPingProbe {
         NetworkGatewayPingProbe {
             sent_time: None,
             recv_time: None,
             seqno,
             dropped: false,
+            ping_type,
         }
     }
     pub fn calc_rtt(&self) -> Option<Duration> {
@@ -193,17 +196,28 @@ impl NetworkGatewayPingProbe {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, TypeDef)]
+pub enum NetworkGatewayPingType {
+    IcmpEcho,
+    ArpOrNdp,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
 /// The state for when we ping the gateways local to our network interfaces
 pub struct NetworkGatewayPingState {
     /// The ConnectionKey that describes our ping's flow
     pub key: ConnectionKey,
-    /// When we send the next echo_request, what sequence number
-    pub next_seq: u16,
+    /// When we send the next echo_request, what sequence number?
+    /// NOTE: needs to be Wrapping<u16> as rust will panic on overflow
+    /// But Typescript doesn't understand Wrapping<> so just recast to u16 for TS
+    #[type_def(type_of = "u16")]
+    pub next_seq: Wrapping<u16>,
     /// State for the current outstanding probe; we only send one probe at a time
     pub current_probe: Option<NetworkGatewayPingProbe>,
     /// The local mac we put in the src field when we ping this gateway
     pub local_mac: [u8; 6],
+    /// The mac for the gateway that we put in the ether.dst field when we ping it
+    pub gateway_mac: Option<[u8; 6]>,
     /// An array of Probe sent and received information
     #[type_def(type_of = "Vec<NetworkGatewayPingProbe>")]
     pub historical_probes: VecDeque<NetworkGatewayPingProbe>,

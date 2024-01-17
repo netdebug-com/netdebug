@@ -367,8 +367,8 @@ impl MockRawSocketProber {
     }
 
     /**
-     * Take the messages that were queued to be sent, turn them into packes, and put them into the
-     * connection tracker as if pcap had received them.  Useful in testing.
+     * Take the messages that were queued to be sent, make the Prober calls to turn them into packets,
+     * and put them into the * connection tracker as if pcap had received them.  Useful in testing.
      */
     pub fn redirect_into_connection_tracker(
         &mut self,

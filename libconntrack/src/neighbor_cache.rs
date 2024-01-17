@@ -29,6 +29,9 @@ pub enum LookupMacByIpResult {
 // NOTE: can't derive Clone/Debug/Default due to EvictingHashMap
 pub struct NeighborCache<'a> {
     pub ip2mac: EvictingHashMap<'a, IpAddr, MacAddress>,
+    /// Keep a list of agents that want to get updates about each IP to Mac address binding
+    /// TODO: change value to HashMap with a identifier key to prevent duplicate additions
+    /// Would love to use HashSet() but tokio::sync::mpsc::Sender() doesn't implement Eq or PartialEq :-(
     pub pending_lookups: EvictingHashMap<'a, IpAddr, Vec<NeighborCacheSender>>,
 }
 

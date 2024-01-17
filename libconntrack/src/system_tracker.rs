@@ -2,35 +2,48 @@ use std::{
     collections::{HashMap, VecDeque},
     error::Error,
     net::IpAddr,
+    num::Wrapping,
     sync::Arc,
     time::Duration,
 };
 
+use crate::utils::PerfMsgCheck;
+
 use chrono::Utc;
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units};
+use etherparse::TransportHeader;
 use itertools::Itertools;
 use libconntrack_wasm::{
-    ConnectionKey, NetworkGatewayPingProbe, NetworkGatewayPingState, NetworkInterfaceState,
+    ConnectionKey, NetworkGatewayPingProbe, NetworkGatewayPingState, NetworkGatewayPingType,
+    NetworkInterfaceState,
 };
+#[cfg(not(test))]
 use log::{debug, warn};
+use mac_address::MacAddress;
 use pcap::{ConnectionStatus, IfFlags};
-use tokio::sync::{mpsc::Sender, RwLock};
+#[cfg(test)]
+use std::{println as debug, println as warn};
+use tokio::sync::{mpsc::channel, RwLock}; // Workaround to use prinltn! for logs.
 
 pub const BROADCAST_MAC_ADDR: [u8; 6] = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
 use crate::{
     connection::ConnectionUpdateListener,
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
+    neighbor_cache::NeighborCacheSender,
+    owned_packet::OwnedParsedPacket,
     pcap::lookup_egress_device,
-    prober::ProbeMessage,
-    send_or_log_async,
-    utils::{remote_ip_to_local, PerfMsgCheck},
+    prober::{ProbeMessage, ProberSender},
+    send_or_log_sync,
+    utils::remote_ip_to_local,
 };
 
 /**
  * The System Tracker tracks the state of the system, e.g., what is the current default Gateway, active network interface, cpu load, mem info etc.
  * It keeps historical information for comparisons over time.
  *
- * TODO: use the magic rust crate to get the gateway IP and ping it periodically
+ * It uses one task to periodically probe the network state and during that task send a ping to the gateway if we know the gateway's Mac Address,
+ *  and if we don't, then we request the info from the ConnectionTracker which will turn into an Arp/NDP lookup if we don't know the info
+ *
  * TODO: collect mem and cpu info, particularly to understand if the desktop process is using too much mem/cpu
  */
 
@@ -97,12 +110,21 @@ pub struct SystemTracker {
     /// The tx handle for listening to ConnectionTracker updates; it's None until the
     /// ```SystemTracker::ping_listener` task populates it
     ping_listener_tx: Option<ConnectionUpdateListener>,
+    /// The tx handler for resolving IP to Mac bindings from the ConnectionTracker
+    /// ```SystemTracker::ping_listener` task populates it
+    neighbor_listener_tx: Option<NeighborCacheSender>,
     /// The ID we put into all of our ping packets to mark it from us, just our $PID
     ping_id: u16,
+    /// A pointer to our prober task that manages rate limiting, etc.
+    prober_tx: ProberSender,
     /// counter for number of network device changes
     network_device_changes: StatHandle,
-    /// A pointer to our prober task that manages rate limiting, etc.
-    prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
+    /// counter for number of pings we get with a weird/delayed sequence number, shared across all gateways
+    out_of_sequence_ping: StatHandle,
+    /// counter for number of pings we get for an IP that's not a gateway we know, shared across all gateways
+    unknown_gateway_ping: StatHandle,
+    /// counter for number of duplicate pings, shared across all gateways
+    duplicate_ping: StatHandle,
 }
 
 impl SystemTracker {
@@ -111,7 +133,7 @@ impl SystemTracker {
         max_histories: usize,
         max_pings_per_gateway: usize,
         connection_tracker: ConnectionTrackerSender,
-        prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
+        prober_tx: ProberSender,
     ) -> SystemTracker {
         let current_network = SystemTracker::snapshot_current_network_state().await;
         SystemTracker::new_with_network_state(
@@ -129,7 +151,7 @@ impl SystemTracker {
         max_pings_per_gateway: usize,
         current_network: NetworkInterfaceState,
         connection_tracker: ConnectionTrackerSender,
-        prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
+        prober_tx: ProberSender,
     ) -> SystemTracker {
         SystemTracker {
             network_history: VecDeque::from([current_network]),
@@ -142,15 +164,29 @@ impl SystemTracker {
             max_pings_per_gateway,
             connection_tracker,
             ping_listener_tx: None,
+            neighbor_listener_tx: None,
             ping_id: std::process::id() as u16,
             prober_tx,
+            out_of_sequence_ping: stats_registry.add_stat(
+                "out_of_sequence_pings",
+                Units::None,
+                [StatType::COUNT],
+            ),
+            duplicate_ping: stats_registry.add_stat(
+                "duplicate_pings",
+                Units::None,
+                [StatType::COUNT],
+            ),
+            unknown_gateway_ping: stats_registry.add_stat(
+                "unknown_gateway_ping",
+                Units::None,
+                [StatType::COUNT],
+            ),
         }
     }
 
     #[cfg(test)]
     fn mk_mock(network_device: NetworkInterfaceState) -> SystemTracker {
-        use tokio::sync::mpsc::channel;
-
         // create throw-away connection tracker channel
         let (connection_tracker_tx, _rx) = channel(10);
         let (prober_tx, _rx) = channel(10);
@@ -191,6 +227,20 @@ impl SystemTracker {
         let changed = if self.current_network().has_state_changed(&interface_state) {
             self.current_network_mut().end_time = Some(Utc::now());
             let old_state = self.current_network().clone();
+            // for each old gateway, tell the connection tracker to stop listening to the ping updates
+            for (gateway, ping_state) in &old_state.gateways_ping {
+                send_or_log_sync!(
+                    self.connection_tracker,
+                    format!(
+                        "unsubscribe from connection updates for gateway {}",
+                        gateway
+                    ),
+                    ConnectionTrackerMsg::DelConnectionUpdateListener {
+                        desc: PING_LISTENER_DESC.to_string(),
+                        key: ping_state.key.clone(),
+                    }
+                );
+            }
             self.network_history.push_back(interface_state.clone());
             while self.network_history.len() >= self.max_histories {
                 self.network_history.pop_front();
@@ -200,7 +250,6 @@ impl SystemTracker {
                 "Network state change from '{}' to '{}'",
                 old_state, interface_state
             );
-            // TODO!  Unsub from old conntrack state
             true
         } else {
             debug!(
@@ -211,7 +260,7 @@ impl SystemTracker {
         };
         // whether the state has changed or not, launch pings for each of the gateways
         for gateway in &self.current_network().gateways.clone() {
-            self.send_next_ping(gateway).await;
+            self.send_next_ping(gateway);
         }
         changed
     }
@@ -243,7 +292,7 @@ impl SystemTracker {
         let system_tracker_clone = system_tracker.clone();
         // task #2
         tokio::spawn(async move {
-            SystemTracker::ping_listener(system_tracker_clone).await;
+            SystemTracker::ping_and_neighbor_listener(system_tracker_clone).await;
         });
         // task #1
         tokio::spawn(async move {
@@ -284,8 +333,168 @@ impl SystemTracker {
             .collect())
     }
 
-    async fn ping_listener(_system_tracker_clone: Arc<RwLock<SystemTracker>>) {
-        // todo!()
+    /// Persistent task that waits for various updates from the system and calls the relevant handlers
+    async fn ping_and_neighbor_listener(system_tracker: Arc<RwLock<SystemTracker>>) -> ! {
+        // create the tx/rx queues here so we can have them without locking the system tracker
+        let (ping_listener_tx, mut ping_listener_rx) = channel(256);
+        let (neighbor_listener_tx, mut neighbor_listener_rx) = channel(256);
+        {
+            // record them into the system_track so other parts can access
+            let mut lock = system_tracker.write().await;
+            lock.ping_listener_tx = Some(ping_listener_tx);
+            lock.neighbor_listener_tx = Some(neighbor_listener_tx);
+        }
+        loop {
+            tokio::select! {
+                Some((pkt, key)) = ping_listener_rx.recv() =>  {
+                    system_tracker.write().await.handle_ping_recv(pkt, key);
+                },
+                Some((ip, mac)) = neighbor_listener_rx.recv() => {
+                    system_tracker.write().await.handle_neighbor_update(ip, mac);
+                }
+            }
+        }
+    }
+
+    /// We got a ping (echo request or reply, v4 or v6) from the ConnectionTracker
+    /// Parse it and update the relevant state
+    /// NOTE: this function is typically called with a lock on the SystemTracker so
+    /// be careful what you do here
+    fn handle_ping_recv(&mut self, pkt: Box<OwnedParsedPacket>, key: ConnectionKey) {
+        // extract the relevant info
+        let (id, seq, is_reply) = match &pkt.transport {
+            Some(TransportHeader::Icmpv4(icmp4)) => {
+                use etherparse::Icmpv4Type::*;
+                match icmp4.icmp_type {
+                    EchoRequest(ping_hdr) => (ping_hdr.id, ping_hdr.seq, false),
+                    EchoReply(ping_hdr) => (ping_hdr.id, ping_hdr.seq, true),
+                    _ => {
+                        warn!("Ignoring weird non-echo request/reply pkt in handle_ping_recv() :: {:?}", pkt);
+                        return;
+                    }
+                }
+            }
+            Some(TransportHeader::Icmpv6(icmp6)) => {
+                use etherparse::Icmpv6Type::*;
+                match icmp6.icmp_type {
+                    EchoRequest(ping_hdr) => (ping_hdr.id, ping_hdr.seq, false),
+                    EchoReply(ping_hdr) => (ping_hdr.id, ping_hdr.seq, true),
+                    _ => {
+                        warn!("Ignoring weird non-echo request/reply pkt6 in handle_ping_recv() :: {:?}", pkt);
+                        return;
+                    }
+                }
+            }
+            _ => panic!(
+                "Called SystemTracker::handle_ping_recv() with a non-ICMP4/6 pkt: {:?}",
+                pkt
+            ),
+        };
+        assert_eq!(id, self.ping_id); // ConnectionTracker is broken if they sent us this with wrong ID
+        let gateway = key.remote_ip;
+        let max_pings_per_gateway = self.max_pings_per_gateway;
+        // now, lookup the ping state and update it
+        if let Some(state) = self
+            .network_history
+            .iter_mut()
+            .last()
+            .unwrap()
+            .gateways_ping
+            .get_mut(&gateway)
+        {
+            let probe_complete = if let Some(current_probe) = &mut state.current_probe {
+                if seq != current_probe.seqno {
+                    warn!(
+                        "Ignoring out-of-sequence ping for {} :: got seq {} != expected seq {}",
+                        key, seq, current_probe.seqno
+                    );
+                    self.out_of_sequence_ping.bump();
+                    return;
+                }
+                if is_reply {
+                    if current_probe.recv_time.is_some() {
+                        warn!("Duplicate ping reply for {} :: seq={}", key, seq);
+                        self.duplicate_ping.bump();
+                    }
+                    current_probe.recv_time = Some(pkt.timestamp);
+                } else {
+                    if current_probe.sent_time.is_some() {
+                        warn!("Duplicate ping request for {} :: seq={}", key, seq);
+                        self.duplicate_ping.bump();
+                    }
+                    current_probe.sent_time = Some(pkt.timestamp);
+                }
+                current_probe.sent_time.is_some() && current_probe.recv_time.is_some()
+            } else {
+                warn!(
+                    "Got a (duplicate?) ping when we weren't expecting it: key={} seq={}",
+                    key, seq
+                );
+                self.duplicate_ping.bump();
+                false
+            };
+            if probe_complete {
+                // pull this out of the 'current_probe' state and push it into the histoical probe state
+                // unwrap is ok b/c we only get here if it existed
+                let probe = state.current_probe.take().unwrap();
+                state.historical_probes.push_back(probe);
+                // keep a max number of historical pings
+                while state.historical_probes.len() > max_pings_per_gateway {
+                    state.historical_probes.pop_front();
+                }
+            }
+        } else {
+            warn!(
+                "Got ping for a gateway we're not tracking: {} - forgot to unsubscribe?",
+                gateway
+            );
+            self.unknown_gateway_ping.bump();
+        }
+    }
+
+    /// This is called from ping_and_neighbor_listener() task to
+    /// tell us when the Connection Manager is able to resolve the Mac address of our
+    /// target gateway
+    fn handle_neighbor_update(&mut self, gateway: IpAddr, mac: MacAddress) {
+        if let Some(state) = self
+            .network_history
+            .iter_mut()
+            .last()
+            .unwrap()
+            .gateways_ping
+            .get_mut(&gateway)
+        {
+            if state.gateway_mac.is_some() {
+                warn!(
+                    "Weird: got duplicate neighbor replies for gateway {} mac {}",
+                    gateway, mac
+                );
+                // TODO: decide if we need to bump a counter here
+            }
+            // TODO: figure out how to handle pro-active Mac-to-IP binding changes, e.g., to support
+            // any of the protocols listed https://en.wikipedia.org/wiki/First-hop_redundancy_protocol
+            state.gateway_mac = Some(mac.bytes());
+            if let Some(probe_state) = &state.current_probe {
+                // we sent a lookup to the connection tracker and this message means we either
+                // got a cached reply or sent an Arp/Ndp and got a reponse.
+                //
+                // From the API currently, we can't tell if it was cached or if we sent a request
+                // and got a response, so just count this probe as 'not dropped' without any specific
+                // timing information; don't add it to the history just because it's kinda garbage data
+                //
+                // TODO: figure out if we want to change the APIs and try to get real perf out of Arp/Ndp
+                if probe_state.ping_type == NetworkGatewayPingType::ArpOrNdp {
+                    state.next_seq = Wrapping(probe_state.seqno); // back up the seqno b/c it was unused
+                    state.current_probe = None; // mark the probe as received
+                }
+            }
+        } else {
+            warn!(
+                "Ignoring a neighbor update for an unknown (old?) gateway ip {} mac {}",
+                gateway, mac
+            );
+            // TODO: decide if we need to bump a counter here
+        }
     }
 
     /**
@@ -316,9 +525,9 @@ impl SystemTracker {
      * The System::ping_listener task will handle receiving the probe and reply; this is just
      * fire and forget
      */
-    async fn send_next_ping(&mut self, gateway: &IpAddr) {
+    fn send_next_ping(&mut self, gateway: &IpAddr) {
         if !self.current_network().gateways_ping.contains_key(gateway) {
-            self.make_new_ping_state(gateway).await;
+            self.make_new_ping_state(gateway);
         }
         // outfox the borrow checker
         let max_pings = self.max_pings_per_gateway;
@@ -337,42 +546,65 @@ impl SystemTracker {
                 state.historical_probes.pop_front();
             }
         }
-        let seqno = state.next_seq;
+        let seqno = state.next_seq.0;
         state.next_seq += 1;
-        state.current_probe = Some(NetworkGatewayPingProbe::new(seqno));
+        let ping_type = if state.gateway_mac.is_some() {
+            NetworkGatewayPingType::IcmpEcho
+        } else {
+            NetworkGatewayPingType::ArpOrNdp
+        };
+        state.current_probe = Some(NetworkGatewayPingProbe::new(seqno, ping_type));
         let local_mac = state.local_mac;
         let key = state.key.clone();
-        send_or_log_async!(
-            self.prober_tx,
-            "send ping",
-            ProbeMessage::SendPing {
-                local_mac,
-                local_ip: key.local_ip,
-                remote_mac: None, // TODO! Add ArpPing functionality to lookup remote mac
-                remote_ip: key.remote_ip,
-                id: self.ping_id,
-                seq: seqno
+        if let Some(gateway_mac) = state.gateway_mac {
+            send_or_log_sync!(
+                self.prober_tx,
+                "send ping",
+                ProbeMessage::SendPing {
+                    local_mac,
+                    local_ip: key.local_ip,
+                    remote_mac: Some(gateway_mac),
+                    remote_ip: key.remote_ip,
+                    id: self.ping_id,
+                    seq: seqno
+                }
+            );
+        } else {
+            // we don't know our gateway's mac yet - send a lookup message to the connection tracker
+            // which will either get an immediate response if it's cached or trigger an Arp/NDP lookup
+            // from the device
+            // this is a bit subtle, b/c we could think of this like an ArpPing instead of an ICMP ping
+            // this code will keep triggering everytime we go to ping until we resolve the Mac address
+            if let Some(neighbor_listener_tx) = &self.neighbor_listener_tx {
+                // TODO: add counter to track number of lookups
+                // TODO: add a listener key to prevent duplicate additions
+                send_or_log_sync!(
+                    self.connection_tracker,
+                    "lookup gateway mac",
+                    ConnectionTrackerMsg::LookupMacByIp {
+                        ip: *gateway,
+                        tx: neighbor_listener_tx.clone()
+                    }
+                );
             }
-        )
-        .await;
+        }
     }
 
-    async fn make_new_ping_state(&mut self, gateway: &IpAddr) {
+    /// Called for each new gateway to initialize the state needed to track pings
+    fn make_new_ping_state(&mut self, gateway: &IpAddr) {
         // need to populate first time state and subscribe to ConnectionTracker updates
-        let source_ip = remote_ip_to_local(*gateway).unwrap();
-        let key = ConnectionKey::make_icmp_echo_key(source_ip, *gateway, self.ping_id);
+        let key = self.make_gateway_ping_key(gateway);
         // subscribe to ping flow from ConnectionTracker, if it's defined
         if let Some(ping_listener) = &self.ping_listener_tx {
-            send_or_log_async!(
+            send_or_log_sync!(
                 self.connection_tracker.clone(),
-                "SystemTracker::send_next_ping",
+                "SystemTracker::make_new_ping_stat",
                 ConnectionTrackerMsg::AddConnectionUpdateListener {
                     desc: PING_LISTENER_DESC.to_string(),
                     tx: ping_listener.clone(),
                     key: key.clone(),
                 }
-            )
-            .await;
+            );
         }
         let local_mac = mac_address::get_mac_address_by_ip(&key.local_ip)
             .unwrap_or_else(|_| {
@@ -385,14 +617,29 @@ impl SystemTracker {
             .unwrap();
         let state = NetworkGatewayPingState {
             key,
-            next_seq: 0,
+            next_seq: Wrapping(0),
             current_probe: None,
             historical_probes: VecDeque::new(),
             local_mac: local_mac.bytes(),
+            gateway_mac: None, // this will get filled in by the ConnectionTracker
         };
         self.current_network_mut()
             .gateways_ping
             .insert(*gateway, state);
+    }
+
+    /**
+     * For a given gateway IP, figure out what the corresponding ConnectionKey would be
+     * based off of the local routing table ala remote_ip_to_local()
+     */
+    fn make_gateway_ping_key(&self, gateway: &IpAddr) -> ConnectionKey {
+        let source_ip = remote_ip_to_local(*gateway).unwrap();
+        ConnectionKey::make_icmp_echo_key(source_ip, *gateway, self.ping_id)
+    }
+
+    #[cfg(test)]
+    fn make_gateway_ping_key_testing(&self, gateway: &IpAddr, local_ip: &IpAddr) -> ConnectionKey {
+        ConnectionKey::make_icmp_echo_key(*local_ip, *gateway, self.ping_id)
     }
 }
 
@@ -405,7 +652,11 @@ mod test {
     use etherparse::{Icmpv4Type, TransportHeader};
     use tokio::sync::mpsc::channel;
 
-    use crate::{pcap::MockRawSocketProber, utils::etherparse_ipheaders2ipaddr};
+    use crate::{
+        pcap::MockRawSocketProber,
+        prober::{make_ping_icmp_echo_reply, make_ping_icmp_echo_request},
+        utils::etherparse_ipheaders2ipaddr,
+    };
 
     use super::*;
 
@@ -428,6 +679,7 @@ mod test {
         let intf2 =
             NetworkInterfaceState::mk_mock("mock dev2".to_string(), now + Duration::from_secs(2));
         assert!(system_tracker.handle_update_network_state(intf2).await);
+        assert_eq!(system_tracker.network_device_changes.get_sum(), 1);
     }
 
     /**
@@ -446,55 +698,109 @@ mod test {
     /****
      * Startup a Prober task and a SystemTracker and verify that we see outgoing pings and
      * that we get the right listener call backs
+     *
+     * This test is a bit of a beast, but there's a lot going on here
      */
     #[tokio::test]
-    async fn test_system_tracker_gateway_ping() {
+    async fn test_system_tracker_outgoing_gateway_ping() {
         let mut mock_writer = MockRawSocketProber::default();
         let gateway = IpAddr::from_str("192.168.1.1").unwrap();
+        let gateway_mac = [0, 1, 2, 3, 4, 5];
         // what IP would the test machine use to connect to this gateway?
         let local_ip = remote_ip_to_local(gateway).unwrap();
         let mut mock_connection_tracker =
             crate::connection_tracker::test::mk_mock_connection_tracker(HashSet::from([local_ip]));
+        // pre-cache the gateway's Mac in the neighbor_cache
+        mock_connection_tracker
+            .neighbor_cache
+            .ip2mac
+            .insert(gateway, MacAddress::from(gateway_mac));
         let mut mock_network_interface_state =
             NetworkInterfaceState::mk_mock("test".to_string(), Utc::now());
-        let (ping_listener_tx, mut ping_listener_rx) = channel(2);
+        let (ping_listener_tx, mut ping_listener_rx) = channel(10);
+        let (neighbor_listener_tx, mut neighbor_listener_rx) = channel(10);
         let mut system_tracker = SystemTracker::mk_mock(mock_network_interface_state.clone());
         system_tracker.connection_tracker = mock_connection_tracker.get_tx();
         system_tracker.prober_tx = mock_writer.tx.clone(); // put the mock prober into place
         system_tracker.ping_listener_tx = Some(ping_listener_tx); // put the ping listener into place
+        system_tracker.neighbor_listener_tx = Some(neighbor_listener_tx);
 
         // now make it appear like we found a new gateway
         mock_network_interface_state.gateways.push(gateway);
         // this should setup state for a ping including subscribing to the connection updates
+        // and sending a lookup_mac_by_ip message to the connection tracker
+        // it won't (yet) send the ping
         system_tracker
-            .handle_update_network_state(mock_network_interface_state)
+            .handle_update_network_state(mock_network_interface_state.clone())
             .await;
-        // verify the ping state
+        // let the conntrack process the queued subscription msg and lookup msg
+        mock_connection_tracker.flush_rx_loop().await;
+        // verify the ping state; clone it to avoid holding a &mut on SystemTracker
         let ping_state = system_tracker
-            .current_network()
+            .network_history
+            .iter_mut()
+            .last()
+            .unwrap()
             .gateways_ping
             .get(&gateway)
-            .unwrap();
+            .unwrap()
+            .clone();
         assert_ne!(ping_state.local_mac, BROADCAST_MAC_ADDR);
-        println!("Sent with local_mac {:X?}", ping_state.local_mac);
-        // verify the subscription
-        mock_connection_tracker.flush_rx_loop().await; // let the conntrack process the subscription msg
         assert!(mock_connection_tracker
             .update_listeners
             .get(&ping_state.key)
             .is_some());
+        println!("Sent with local_mac {:X?}", ping_state.local_mac);
         let current_probe = ping_state.current_probe.as_ref().unwrap();
         assert_eq!(current_probe.seqno, 0);
-        // this should queue a bunch of messages to the connection tracker
-        // to send an update to the ping listenner
+        // make sure we got a neighbor update from the connection tracker...
+        let (neighbor_update_ip, neighbor_update_mac) = neighbor_listener_rx.try_recv().unwrap();
+        // ... and process it
+        system_tracker.handle_neighbor_update(neighbor_update_ip, neighbor_update_mac);
+        // now verify that we cleaned up the ping state
+        // verify the ping state; clone it to avoid holding a &mut on SystemTracker
+        assert!(system_tracker
+            .network_history
+            .iter_mut()
+            .last()
+            .unwrap()
+            .gateways_ping
+            .get(&gateway)
+            .unwrap()
+            .current_probe
+            .is_none());
+        assert_ne!(ping_state.local_mac, BROADCAST_MAC_ADDR);
+        assert!(mock_connection_tracker
+            .update_listeners
+            .get(&ping_state.key)
+            .is_some());
+        println!("Sent with local_mac {:X?}", ping_state.local_mac);
+        let current_probe = ping_state.current_probe.as_ref().unwrap();
+        assert_eq!(current_probe.seqno, 0);
+
+        // now re-call the handle_update_network_state() call which now that we
+        // have a proper gateway_mac should actually send a ping!
+        system_tracker
+            .handle_update_network_state(mock_network_interface_state.clone())
+            .await;
+        // Take the SendPing message off the queue, turn it into bytes, and send
+        // those bytes as a message to the ConnectionTracker as if we had pcap received it
         mock_writer.redirect_into_connection_tracker(&mut mock_connection_tracker);
-        // did we get an update!? Is it a correctly formated ping?
+        // Let the ConnectionTracker process those messages and trigger the update notification
+        mock_connection_tracker.flush_rx_loop().await;
+        // did the ping_listener get a message!? Is it a correctly formated ping?
+        // NOTE: if we didn't pre-populate the gateway mac info, this would instead have generated an Arp lookup
         let (update_pkt, key) = ping_listener_rx.recv().await.unwrap();
+        println!("Got ping reply from ping_listener!");
         assert_eq!(ping_state.key, key);
         let (ping_src_ip, ping_dst_ip) = etherparse_ipheaders2ipaddr(&update_pkt.ip).unwrap();
         assert_eq!(ping_src_ip, local_ip);
         assert_eq!(ping_dst_ip, gateway);
-        assert_eq!(update_pkt.link.unwrap().source, ping_state.local_mac);
+        assert_eq!(
+            update_pkt.link.as_ref().unwrap().source,
+            ping_state.local_mac
+        );
+        assert_eq!(update_pkt.link.as_ref().unwrap().destination, gateway_mac);
         match update_pkt.transport {
             Some(TransportHeader::Icmpv4(hdr)) => match hdr.icmp_type {
                 Icmpv4Type::EchoRequest(echo_hdr) => {
@@ -505,5 +811,210 @@ mod test {
             },
             _wut => panic!("Got non-ICMP4 IP packet"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_ping_recv_state_machine_errors() {
+        // setup test state
+        let local_ip = IpAddr::from_str("192.168.1.34").unwrap();
+        let local_mac = [1, 2, 3, 4, 5, 6];
+        let gateway = IpAddr::from_str("192.168.1.1").unwrap();
+        let gateway_mac = [0, 1, 2, 3, 4, 5];
+        let mock_network_interface_state =
+            NetworkInterfaceState::mk_mock("test".to_string(), Utc::now());
+        let mut system_tracker = SystemTracker::mk_mock(mock_network_interface_state.clone());
+        let key = system_tracker.make_gateway_ping_key_testing(&gateway, &local_ip);
+        // manually hack in the state we want
+        system_tracker.current_network_mut().gateways_ping.insert(
+            gateway,
+            NetworkGatewayPingState {
+                key: key.clone(),
+                next_seq: Wrapping(0),
+                current_probe: None,
+                local_mac,
+                gateway_mac: Some(gateway_mac),
+                historical_probes: VecDeque::new(),
+            },
+        );
+
+        let now = Utc::now();
+        // first test, if we receive a ping when not expecting one, do we bump the duplicate_ping counter?
+        let ping = OwnedParsedPacket::try_from_timestamp(
+            make_ping_icmp_echo_request(
+                &local_ip,
+                &gateway,
+                local_mac,
+                gateway_mac,
+                system_tracker.ping_id,
+                0,
+            ),
+            now,
+        )
+        .unwrap();
+        assert_eq!(system_tracker.duplicate_ping.get_sum(), 0);
+        system_tracker.handle_ping_recv(ping, key.clone());
+        assert_eq!(system_tracker.duplicate_ping.get_sum(), 1);
+
+        // setup ping state
+        system_tracker.make_new_ping_state(&gateway);
+        // force send ping state in to prevent the actual ping from being sent (and simplify test)
+        system_tracker
+            .current_network_mut()
+            .gateways_ping
+            .get_mut(&gateway)
+            .unwrap()
+            .current_probe = Some(NetworkGatewayPingProbe {
+            sent_time: None,
+            recv_time: None,
+            seqno: 0,
+            dropped: false,
+            ping_type: NetworkGatewayPingType::IcmpEcho,
+        });
+
+        // second test, if we receive a ping with wrong seq, do we bump the duplicate_ping counter?
+        let ping = OwnedParsedPacket::try_from_timestamp(
+            make_ping_icmp_echo_request(
+                &local_ip,
+                &gateway,
+                local_mac,
+                gateway_mac,
+                system_tracker.ping_id,
+                12345, // expecting zero
+            ),
+            now,
+        )
+        .unwrap();
+        assert_eq!(system_tracker.out_of_sequence_ping.get_sum(), 0);
+        system_tracker.handle_ping_recv(ping, key.clone());
+        assert_eq!(system_tracker.out_of_sequence_ping.get_sum(), 1);
+
+        // third, check what happens if we get a ping for an unknown gateway
+        // rather than setting up everything for a new gateway, just remove this gateway's state
+        system_tracker
+            .current_network_mut()
+            .gateways_ping
+            .remove(&gateway);
+        let ping = OwnedParsedPacket::try_from_timestamp(
+            make_ping_icmp_echo_request(
+                &local_ip,
+                &gateway,
+                local_mac,
+                gateway_mac,
+                system_tracker.ping_id,
+                12345, // expecting zero
+            ),
+            now,
+        )
+        .unwrap();
+        assert_eq!(system_tracker.unknown_gateway_ping.get_sum(), 0);
+        system_tracker.handle_ping_recv(ping, key.clone());
+        assert_eq!(system_tracker.unknown_gateway_ping.get_sum(), 1);
+    }
+
+    #[test]
+    fn test_ping_recv_state_machine_working() {
+        // setup test state
+        let local_ip = IpAddr::from_str("192.168.1.34").unwrap();
+        let local_mac = [1, 2, 3, 4, 5, 6];
+        let gateway = IpAddr::from_str("192.168.1.1").unwrap();
+        let gateway_mac = [0, 1, 2, 3, 4, 5];
+        let mock_network_interface_state =
+            NetworkInterfaceState::mk_mock("test".to_string(), Utc::now());
+        let mut system_tracker = SystemTracker::mk_mock(mock_network_interface_state.clone());
+        let key = system_tracker.make_gateway_ping_key_testing(&gateway, &local_ip);
+        // manually hack in the state we want
+        system_tracker.current_network_mut().gateways_ping.insert(
+            gateway,
+            NetworkGatewayPingState {
+                key: key.clone(),
+                next_seq: Wrapping(0),
+                current_probe: Some(NetworkGatewayPingProbe {
+                    sent_time: None,
+                    recv_time: None,
+                    seqno: 0,
+                    dropped: false,
+                    ping_type: NetworkGatewayPingType::IcmpEcho,
+                }),
+                local_mac,
+                gateway_mac: Some(gateway_mac),
+                historical_probes: VecDeque::new(),
+            },
+        );
+
+        let now = Utc::now();
+        // send an echo request and make sure we record the time
+        let ping = OwnedParsedPacket::try_from_timestamp(
+            make_ping_icmp_echo_request(
+                &local_ip,
+                &gateway,
+                local_mac,
+                gateway_mac,
+                system_tracker.ping_id,
+                0,
+            ),
+            now,
+        )
+        .unwrap();
+        system_tracker.handle_ping_recv(ping, key.clone());
+        // did we correctly record the outgoing time?
+        assert_eq!(
+            system_tracker
+                .current_network()
+                .gateways_ping
+                .get(&gateway)
+                .unwrap()
+                .current_probe
+                .as_ref()
+                .unwrap()
+                .sent_time
+                .unwrap(),
+            now
+        );
+        let rtt = Duration::from_millis(100);
+        let reply_time = now + rtt;
+        let ping_reply = OwnedParsedPacket::try_from_timestamp(
+            make_ping_icmp_echo_reply(
+                &gateway, // swap src + dst relative to the request
+                &local_ip,
+                gateway_mac,
+                local_mac,
+                system_tracker.ping_id,
+                0,
+            ),
+            reply_time,
+        )
+        .unwrap();
+        assert!(system_tracker
+            .current_network()
+            .gateways_ping
+            .get(&gateway)
+            .unwrap()
+            .current_probe
+            .is_some());
+        assert_eq!(
+            system_tracker
+                .current_network()
+                .gateways_ping
+                .get(&gateway)
+                .unwrap()
+                .historical_probes
+                .len(),
+            0
+        );
+        system_tracker.handle_ping_recv(ping_reply, key.clone());
+        // first, make sure the state machine saw both and thus moved the probe from
+        // 'current' to 'historic'
+        let ping_state = system_tracker
+            .current_network()
+            .gateways_ping
+            .get(&gateway)
+            .unwrap()
+            .clone();
+        assert!(ping_state.current_probe.is_none());
+        assert_eq!(ping_state.historical_probes.len(), 1);
+        let probe = ping_state.historical_probes.iter().last().unwrap();
+        assert!(probe.sent_time.is_some());
+        assert!(probe.recv_time.is_some());
+        assert_eq!(probe.calc_rtt().unwrap().to_std().unwrap(), rtt);
     }
 }

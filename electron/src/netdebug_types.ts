@@ -337,6 +337,7 @@ export type CongestedLink = {
 export type CongestionSummary = {
     "links": (CongestedLink)[];
 };
+export type NetworkGatewayPingType = ("IcmpEcho" | "ArpOrNdp");
 export type NetworkGatewayPingProbe = {
 
     /**
@@ -358,6 +359,11 @@ export type NetworkGatewayPingProbe = {
      * DId we drop this probe?  Set to true if we got the next one in sequence
      */
     "dropped": boolean;
+
+    /**
+     * What type of ping should we send?
+     */
+    "ping_type": NetworkGatewayPingType;
 };
 
 /**
@@ -371,7 +377,9 @@ export type NetworkGatewayPingState = {
     "key": ConnectionKey;
 
     /**
-     * When we send the next echo_request, what sequence number
+     * When we send the next echo_request, what sequence number?
+     * NOTE: needs to be Wrapping<u16> as rust will panic on overflow
+     * But Typescript doesn't understand Wrapping<> so just recast to u16 for TS
      */
     "next_seq": U16;
 
@@ -384,6 +392,11 @@ export type NetworkGatewayPingState = {
      * The local mac we put in the src field when we ping this gateway
      */
     "local_mac": [U8, U8, U8, U8, U8, U8];
+
+    /**
+     * The mac for the gateway that we put in the ether.dst field when we ping it
+     */
+    "gateway_mac": ([U8, U8, U8, U8, U8, U8] | null);
 
     /**
      * An array of Probe sent and received information
