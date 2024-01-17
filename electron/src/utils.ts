@@ -4,6 +4,10 @@ import { MutableRefObject } from "react";
 import { SxProps } from "@mui/material";
 import { ConnectionKey, ConnectionMeasurements } from "./netdebug_types";
 
+export function desktop_api_url(path: string): string {
+  return "http://localhost:33435/api/" + path;
+}
+
 // depending on our SLAs
 export function periodic_with_sla(
   label: string,

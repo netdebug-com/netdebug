@@ -1,8 +1,12 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { ConnectionMeasurements } from "../netdebug_types";
-import { connIdString, dataGridDefaultSxProp, sortCmpWithNull } from "../utils";
+import {
+  connIdString,
+  dataGridDefaultSxProp,
+  desktop_api_url,
+  sortCmpWithNull,
+} from "../utils";
 import { SwitchHelper } from "../components/SwitchHelper";
-import { useWebSocketGuiToServer } from "../useWebSocketGuiToServer";
 import { Box } from "@mui/material";
 import {
   DataGrid,
@@ -17,6 +21,11 @@ import {
   getDefaultPercentageGridColDef,
   getDefaultRateGridColDef,
 } from "../common/flow_common";
+import { useLoaderData, useRevalidator } from "react-router";
+// TODO: In theory RevalidationState should have been re-exported by
+// by react-router. But apparently not.... Gotta love UI
+import { RevalidationState } from "@remix-run/router";
+import { useInterval } from "react-use";
 
 function formatAssociatedApps(
   params: GridValueFormatterParams<ConnectionMeasurements["associated_apps"]>,
@@ -128,30 +137,81 @@ const columns: GridColDef[] = [
   },
 ];
 
-const Flows: React.FC = () => {
-  const [flowEntries, setFlowEntries] = useState(
-    new Array<ConnectionMeasurements>(),
+export const flowsLoader = async () => {
+  const res = await fetch(desktop_api_url("get_flows"));
+  // FIXME: error handling.
+  return res.json().then((flows) =>
+    // DataGrid has an unsorted state as well, which will return the rows in the original
+    // order. So even though we set a default sort column, we still pre-sort here
+    // to make sure the unsorted order looks decent too.
+    flows.sort((a: ConnectionMeasurements, b: ConnectionMeasurements) =>
+      sortCmpWithNull(
+        b.rx_stats?.last_min_byte_rate,
+        a.rx_stats?.last_min_byte_rate,
+      ),
+    ),
   );
-  const [autoRefresh, setAutoRefresh] = useState(true);
+};
 
-  useWebSocketGuiToServer({
-    autoRefresh: autoRefresh,
-    reqMsgType: { tag: "DumpFlows" },
-    respMsgType: "DumpFlowsReply",
-    min_time_between_requests_ms: 1000,
-    max_time_between_requests_ms: 2000,
-    responseCb: (flows: ConnectionMeasurements[]) => {
-      // DataGrid can also be "unsorted" when not sort is applied to any columns. That looks ugly,
-      // so presort the rows into a reasonable default order
-      flows.sort((a, b) =>
-        sortCmpWithNull(
-          b.rx_stats?.last_min_byte_rate,
-          a.rx_stats?.last_min_byte_rate,
-        ),
-      );
-      setFlowEntries(flows);
+const RELOAD_INTERVAL_MS = 1000;
+const MAX_RELOAD_TIME = 2000;
+
+// Sigh. useRevalidator() return type is not a named type, so we
+// create and name one to keep this code neater
+type RevalidatorType = {
+  revalidate: () => void;
+  state: RevalidationState;
+};
+// Helper hook to periodically refresh/reload the data via the loader.
+function usePeriodicRefresh(
+  // If true, periodically refresh
+  autoRefresh: boolean,
+  // The validator to use for refreshes
+  revalidator: RevalidatorType,
+  // The interval in milliseconds on when to reload
+  interval_ms: number,
+  // A human readable description for log messages
+  description?: string,
+  // If set, the maximum time we want a reload to take. If it's longer than that,
+  // log an error (just to the console)
+  sla_max_time_ms?: number,
+) {
+  const lastRequestTime = useRef(null);
+  useInterval(
+    () => {
+      if (revalidator.state === "idle") {
+        // Only send a new request if the previous one has finished
+        lastRequestTime.current = performance.now();
+        revalidator.revalidate();
+      } else {
+        // We are still loading. Check if we have an SLA and if so, log a warning if
+        // it's violated.
+        if (
+          sla_max_time_ms &&
+          performance.now() - lastRequestTime.current > sla_max_time_ms
+        ) {
+          console.warn(
+            (description ? description + ": " : "") + "Reloading took too long",
+          );
+        }
+      }
     },
-  });
+    autoRefresh ? interval_ms : null,
+  );
+}
+
+const Flows: React.FC = () => {
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const flowEntries = useLoaderData() as ConnectionMeasurements[];
+  // lets us re-fetch the data.
+  const revalidator = useRevalidator();
+  usePeriodicRefresh(
+    autoRefresh,
+    revalidator,
+    RELOAD_INTERVAL_MS,
+    "Flows",
+    MAX_RELOAD_TIME,
+  );
 
   return (
     <>

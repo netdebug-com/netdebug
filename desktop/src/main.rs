@@ -1,5 +1,7 @@
 mod websocket;
 
+use axum::extract::State;
+use axum::{response, routing, Router};
 use chrono::Duration;
 use clap::Parser;
 use common_wasm::timeseries_stats::{
@@ -15,14 +17,21 @@ use libconntrack::{
     process_tracker::{ProcessTracker, ProcessTrackerSender},
     utils::PerfMsgCheck,
 };
+use libconntrack_wasm::ConnectionMeasurements;
 use log::info;
 use std::sync::Arc;
 use std::{collections::HashSet, error::Error, net::IpAddr};
 use tokio::sync::RwLock;
+use tower_http::cors::{self, AllowOrigin, CorsLayer};
 use warp::Filter;
-use websocket::websocket_handler;
+use websocket::{handle_gui_dumpflows, websocket_handler};
 
 use libconntrack::topology_client::TopologyServerConnection;
+
+// When running electron forge in dev mode, it (or rather the webpack
+// it uses) starts the HTTP dev-server on this URL/origin. We need to
+// set-up tower/axum to allow cross-origin requests from this origin
+const ELECTRON_DEV_SERVER_ORIGIN: &str = "http://localhost:3000";
 
 /// Struct to hold all of the various trackers
 /// We can clone this arbitrarily with no state/locking issues
@@ -34,6 +43,7 @@ pub struct Trackers {
     pub topology_client: Option<TopologyServerSender>,
     // implemented as a shared lock
     pub system_tracker: Option<Arc<RwLock<SystemTracker>>>,
+    pub counter_registries: Option<SharedExportedStatRegistries>,
 }
 
 impl Trackers {
@@ -182,6 +192,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     let listen_addr = ([127, 0, 0, 1], args.listen_port);
 
+    trackers.counter_registries = Some(counter_registries.registries());
+
+    let shared_state = Arc::new(trackers.clone());
+    tokio::spawn(async move {
+        info!("Starting Axum");
+        // Setup CORS to make sure that the electron in dev-mode can request
+        // resources.
+        let allowed_origins = vec![ELECTRON_DEV_SERVER_ORIGIN.parse().unwrap()];
+        let cors = CorsLayer::new()
+            .allow_methods(cors::Any)
+            .allow_origin(AllowOrigin::list(allowed_origins));
+        let app = Router::new()
+            .route("/counters/get_counters", routing::get(handle_get_counters))
+            .route("/api/get_flows", routing::get(handle_get_flows))
+            .layer(cors)
+            .with_state(shared_state);
+
+        // run our app with hyper
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", args.listen_port + 1))
+            .await
+            .unwrap();
+        axum::serve(listener, app).await.unwrap()
+    });
+    info!("Starting Warp");
     warp::serve(make_common_desktop_http_routes(
         trackers,
         counter_registries.registries(),
@@ -189,6 +223,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .run(listen_addr)
     .await;
     Ok(())
+}
+
+pub async fn handle_get_counters(State(trackers): State<Arc<Trackers>>) -> String {
+    // IndexMap iterates over entries in insertion order
+    let mut map = indexmap::IndexMap::<String, u64>::new();
+    trackers
+        .counter_registries
+        .clone()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .update_time();
+    trackers
+        .counter_registries
+        .clone()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .append_counters(&mut map);
+    serde_json::to_string_pretty(&map).unwrap()
+}
+
+pub async fn handle_get_flows(
+    State(trackers): State<Arc<Trackers>>,
+) -> response::Json<Vec<ConnectionMeasurements>> {
+    response::Json(handle_gui_dumpflows(&trackers.connection_tracker.clone().unwrap()).await)
 }
 
 pub fn make_counter_routes(
