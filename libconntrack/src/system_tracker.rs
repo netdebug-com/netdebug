@@ -197,7 +197,7 @@ impl SystemTracker {
             }
             self.network_device_changes.bump();
             warn!(
-                "Network state change from {:?} to {:?}",
+                "Network state change from '{}' to '{}'",
                 old_state, interface_state
             );
             // TODO!  Unsub from old conntrack state

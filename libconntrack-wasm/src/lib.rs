@@ -2,6 +2,7 @@ pub mod connection_key;
 pub mod connection_measurements;
 pub mod traffic_stats;
 
+use common_wasm::option_to_string;
 pub use connection_key::*;
 pub use connection_measurements::*;
 pub use traffic_stats::*;
@@ -233,6 +234,22 @@ pub struct NetworkInterfaceState {
     /// state to the interface state b/c if the interface state changes,
     /// all of the ping state needs to change too
     pub gateways_ping: HashMap<IpAddr, NetworkGatewayPingState>,
+}
+
+impl Display for NetworkInterfaceState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Iface {}, gateways: {:?}, IPs: {:?}, {}, {}, start: {}, end: {}",
+            option_to_string(&self.interface_name),
+            self.gateways,
+            self.interface_ips,
+            if self.has_link { "Link" } else { "No Link" },
+            if self.is_wireless { "Wifi" } else { "Wired" },
+            self.start_time,
+            option_to_string(&self.end_time),
+        )
+    }
 }
 
 impl NetworkInterfaceState {
