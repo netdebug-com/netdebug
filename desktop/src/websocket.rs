@@ -18,7 +18,9 @@ use libconntrack::{
     system_tracker::SystemTracker,
     utils::PerfMsgCheck,
 };
-use libconntrack_wasm::{bidir_bandwidth_to_chartjs, topology_server_messages::CongestionSummary};
+use libconntrack_wasm::{
+    bidir_bandwidth_to_chartjs, topology_server_messages::CongestionSummary, ConnectionMeasurements,
+};
 use log::{debug, info, warn};
 use tokio::sync::{
     mpsc::{self, channel, unbounded_channel, UnboundedSender},
@@ -124,7 +126,7 @@ async fn handle_gui_to_server_msg(
     match &msg {
         DumpFlows => {
             debug!("Got DumpFlows request");
-            handle_gui_dumpflows(tx, connection_tracker).await;
+            //handle_gui_dumpflows(tx, connection_tracker).await;
         }
         DumpDnsCache => handle_gui_dump_dns_cache(tx, connection_tracker, dns_tracker).await,
         DumpAggregateCounters => {
@@ -311,7 +313,7 @@ async fn handle_gui_dump_dns_cache(
     }
 }
 
-async fn handle_gui_dump_dns_flows(
+pub async fn handle_gui_dump_dns_flows(
     tx: &UnboundedSender<DesktopToGuiMessages>,
     connection_tracker: &ConnectionTrackerSender,
 ) {
@@ -346,10 +348,9 @@ async fn handle_gui_dump_dns_flows(
     }
 }
 
-async fn handle_gui_dumpflows(
-    tx: &UnboundedSender<DesktopToGuiMessages>,
+pub async fn handle_gui_dumpflows(
     connection_tracker: &ConnectionTrackerSender,
-) {
+) -> Vec<ConnectionMeasurements> {
     let func_start = Instant::now();
 
     // get the cache of current connections
@@ -361,21 +362,19 @@ async fn handle_gui_dumpflows(
     if let Err(e) = connection_tracker.try_send(PerfMsgCheck::new(request)) {
         warn!("Connection Tracker queue problem: {}", e);
     }
-    let measurements = match reply_rx.recv().await {
-        Some(keys) => keys,
+    match reply_rx.recv().await {
+        Some(m) => {
+            perf_check!(
+                "ConnTracker::get connection measurements",
+                func_start,
+                Duration::from_millis(200)
+            );
+            m
+        }
         None => {
             warn!("ConnectionTracker GetConnectionsKeys returned null!?");
             Vec::new() // just pretend it returned nothing as a hack
         }
-    };
-    perf_check!(
-        "ConnTracker::get connection measurements",
-        func_start,
-        Duration::from_millis(200)
-    );
-    // TODO: think about whether we can implement PerfMsgCheck over to the WASM/JS side of things
-    if let Err(e) = tx.send(DesktopToGuiMessages::DumpFlowsReply(measurements)) {
-        warn!("Sending to GUI trigged: {}", e);
     }
 }
 
