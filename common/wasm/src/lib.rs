@@ -3,6 +3,15 @@ use itertools::Itertools;
 use std::{collections::HashMap, fmt::Display, net::IpAddr};
 use typescript_type_def::TypeDef; // for .sorted()
 
+// Nicely convert an option to a string. If the Option is Some(x)
+// it will return x, if it's None it will just return "None".
+pub fn option_to_string<T: Display>(x: &Option<T>) -> String {
+    match x {
+        Some(x) => x.to_string(),
+        None => "None".to_owned(),
+    }
+}
+
 /**
  * Attention: everything in this library (including transitively) must
  * complile for both native rust as well as for WASM, so:
@@ -586,6 +595,17 @@ impl Display for ProbeReportSummary {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_option_to_string() {
+        assert_eq!(option_to_string(&Some(123)), "123");
+        assert_eq!(option_to_string::<i32>(&None), "None");
     }
 }
 
