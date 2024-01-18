@@ -52,11 +52,11 @@ const Devices: React.FC = () => {
       headerAlign: "left",
     },
     {
-      field: "vendor",
+      field: "vendor_oui",
       headerName: "Vendor",
       flex: 25,
-      align: "right",
-      headerAlign: "right",
+      align: "left",
+      headerAlign: "left",
     },
     {
       field: "learn_time",

@@ -26,6 +26,7 @@ libconntrack-wasm = { path = "../libconntrack-wasm" }
 linked-hash-map = { workspace = true }
 log = "0.4.19"
 mac_address = { workspace = true }
+mac_oui = { version = "0.4.8", features = ["with-db"] }
 netstat2 = "0.9.1"
 net-route = { git = "https://github.com/gregor-netdebug/net-route", branch = "main" }     # for getting default route
 # PublicSufficeList - but statically includes official list from https://publicsuffix.org/

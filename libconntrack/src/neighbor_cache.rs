@@ -45,15 +45,29 @@ pub struct NeighborCache<'a> {
     ///
     /// Would love to use HashSet() but tokio::sync::mpsc::Sender() doesn't implement Eq or PartialEq :-(
     pub pending_lookups: EvictingHashMap<'a, IpAddr, HashMap<String, NeighborCacheSender>>,
+    pub oui_db: Option<mac_oui::Oui>,
 }
 
 impl<'a> NeighborCache<'a> {
     pub fn new(max_elements: usize) -> NeighborCache<'a> {
+        // initialize the MAC Vendor OUI DB from the online URL
+        // NOTE: there is a "load from file" version we could move to if this proves unhappy
+        let oui_db = match mac_oui::Oui::default() {
+            Ok(oui) => Some(oui),
+            Err(e) => {
+                warn!(
+                    "Failed to initialize the remote OUI MAC Vendor DB - not filling them in:{}",
+                    e
+                );
+                None
+            }
+        };
         NeighborCache {
             ip2mac: EvictingHashMap::new(max_elements, |_, _| {
                 // TODO: add a counter here
             }),
             pending_lookups: EvictingHashMap::new(max_elements, |_, _| {}),
+            oui_db,
         }
     }
 
@@ -165,6 +179,33 @@ impl<'a> NeighborCache<'a> {
         // else do nothing
     }
 
+    pub fn lookup_mac_vendor(&self, mac: &MacAddress) -> Option<String> {
+        if let Some(oui_db) = &self.oui_db {
+            match oui_db.lookup_by_mac(mac.to_string().as_str()) {
+                // TODO: there's a lot more info here - think about if we want to include it
+                /* Entry{
+                    oui: "70:B3:D5",
+                    is_private: false,
+                    company_name: "Ieee Registration Authority",
+                    company_address: "445 Hoes Lane Piscataway NJ 08554 US",
+                    country_code: "US",
+                    assignment_block_size: "MA-L",
+                    date_created: "2014-01-12",
+                    date_updated: "2016-04-27",
+                } */
+                Ok(Some(info)) => Some(info.company_name.clone()),
+                // this means db lookup worked, but not in DB
+                Ok(None) => None,
+                Err(e) => {
+                    warn!("Failed to lookup MacAddress Vendor: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    }
+
     /// Write out a snapshot of our neighbor table when asked, probably for GUI
     pub(crate) fn export_neighbors(&self) -> Vec<libconntrack_wasm::ExportedNeighborState> {
         self.ip2mac
@@ -173,6 +214,7 @@ impl<'a> NeighborCache<'a> {
                 ip: *ip,
                 mac: neighbor_state.mac.to_string(),
                 learn_time: neighbor_state.learn_time,
+                vendor_oui: self.lookup_mac_vendor(&neighbor_state.mac),
             })
             .collect()
     }

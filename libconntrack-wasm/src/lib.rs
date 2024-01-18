@@ -309,6 +309,7 @@ pub struct ExportedNeighborState {
     pub mac: String,
     #[type_def(type_of = "String")]
     pub learn_time: DateTime<Utc>,
+    pub vendor_oui: Option<String>,
 }
 
 #[cfg(test)]
