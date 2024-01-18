@@ -841,7 +841,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "common-wasm",
- "itertools 0.12.0",
+ "itertools 0.11.0",
  "libconntrack-wasm",
  "serde",
  "serde_json",
