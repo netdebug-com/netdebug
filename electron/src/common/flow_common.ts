@@ -19,6 +19,28 @@ export function getDefaultRateGridColDef(unitSuffix: string): {
   };
 }
 
+export function getDefaultRttGridColDef(): {
+  valueFormatter: GridColDef["valueFormatter"];
+  align: GridColDef["align"];
+  flex: number;
+  headerAlign: GridColDef["align"];
+  sortComparator: GridColDef["sortComparator"];
+} {
+  return {
+    valueFormatter: (params) => {
+      if (params.value === null || params.value === undefined) {
+        return "-";
+      } else {
+        return params.value.toFixed(0) + " ms";
+      }
+    },
+    align: "right",
+    flex: FLEX_VALUE_FOR_NUMERIC_COLS,
+    headerAlign: "right",
+    sortComparator: sortCmpWithNull,
+  };
+}
+
 export function getDefaultPercentageGridColDef(): {
   valueFormatter: GridColDef["valueFormatter"];
   align: GridColDef["align"];

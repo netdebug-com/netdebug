@@ -20,6 +20,7 @@ import {
   calculateLossPercentage,
   getDefaultPercentageGridColDef,
   getDefaultRateGridColDef,
+  getDefaultRttGridColDef,
 } from "../common/flow_common";
 import { useLoaderData, useRevalidator } from "react-router";
 // TODO: In theory RevalidationState should have been re-exported by
@@ -128,6 +129,27 @@ const columns: GridColDef[] = [
     headerName: "Recv Loss",
     valueGetter: (params) => calculateLossPercentage(params.row.rx_stats),
     ...getDefaultPercentageGridColDef(),
+  },
+  // TODO: instead of have three different columsn for min/avg/max RTT, I'm wondering if
+  // we should instead use a single column and render it as `10ms / 14ms / 50ms` ??
+  // Three columns take up a LOT of space...
+  {
+    field: "min_rtt",
+    headerName: "min RTT",
+    valueGetter: (params) => params.row.tx_stats?.rtt_stats_ms?.min,
+    ...getDefaultRttGridColDef(),
+  },
+  {
+    field: "mean_rtt",
+    headerName: "avg RTT",
+    valueGetter: (params) => params.row.tx_stats?.rtt_stats_ms?.mean,
+    ...getDefaultRttGridColDef(),
+  },
+  {
+    field: "max_rtt",
+    headerName: "max RTT",
+    valueGetter: (params) => params.row.tx_stats?.rtt_stats_ms?.max,
+    ...getDefaultRttGridColDef(),
   },
   {
     field: "associated_apps",
