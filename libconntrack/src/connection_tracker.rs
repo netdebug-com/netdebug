@@ -188,6 +188,7 @@ impl<'a> ConnectionTracker<'a> {
         target_ip: IpAddr,
         tx: Sender<(IpAddr, MacAddress)>,
     ) {
+        // do we have the target Mac already cached?
         if self
             .neighbor_cache
             .lookup_mac_by_ip_pending(identifier, &target_ip, tx)
@@ -199,6 +200,7 @@ impl<'a> ConnectionTracker<'a> {
             let local_ip = self
                 .local_addrs
                 .iter()
+                // TODO: update this logic for IPv6 to try to match the target_ip's subnet
                 .find(|a| a.is_ipv4() == target_ip.is_ipv4());
             if let Some(local_ip) = local_ip {
                 /*
@@ -206,29 +208,46 @@ impl<'a> ConnectionTracker<'a> {
                  * messages outgoing from our selves and thus have learned our own mac for the local_ip
                  *
                  * if this is a problem, just lookup manually with MacAddress:lookup_mac_by_ip(), but that's
-                 * more complicated.
+                 * more expensive so prefer the cache
+                 *
+                 * NOTE: this is called in the 'hot' packet processing path so we need to at least consider
+                 * efficiency here
                  */
-                if let Some(local_mac) = self.neighbor_cache.lookup_mac_by_ip(local_ip) {
-                    if let Err(e) = self.prober_helper.tx().try_send(PerfMsgCheck::new(
-                        ProbeMessage::SendIpLookup {
-                            local_mac: local_mac.bytes(),
-                            local_ip: *local_ip,
-                            target_ip,
-                        },
-                    )) {
-                        warn!(
-                            "ConnectionTracker tried to send to the prober but got: {}",
-                            e
-                        );
-                    }
+                let local_mac = if let Some(local_mac) =
+                    self.neighbor_cache.lookup_mac_by_ip(local_ip)
+                {
+                    local_mac
                 } else {
-                    warn!(
-                    "Tried to send a LookupIp message to the prober but couldn't find a mac for {}!?", local_ip
+                    // lookup via system call(s)
+                    match mac_address::get_mac_address_by_ip(local_ip) {
+                        Ok(Some(mac)) => {
+                            // got it; cache it
+                            self.neighbor_cache.learn(&Some(*local_ip), &Some(mac));
+                            mac
+                        }
+                        Ok(None) => {
+                            warn!("Tried to lookup local mac for {} but didn't find it!?; Failed to send Arp/Ndp", local_ip);
+                            return;
+                        }
+                        Err(e) => {
+                            warn!("Tired to lookup local mac for {} but got error {}; Failed to send Arp/Ndp", local_ip, e);
+                            return;
+                        }
+                    }
+                };
+                send_or_log_sync!(
+                    self.prober_helper.tx(),
+                    "Send Arp/NDP to prober",
+                    ProbeMessage::SendIpLookup {
+                        local_mac: local_mac.bytes(),
+                        local_ip: *local_ip,
+                        target_ip,
+                    }
                 );
-                }
             } else {
                 warn!(
-                    "Tried to send a LookupIp message to the prober but couldn't find a local_ip!?"
+                    "Tried to send a LookupIp message to the prober but couldn't find a local_ip that matched target_ip: {} !?", 
+                    target_ip
                 );
             }
         }
