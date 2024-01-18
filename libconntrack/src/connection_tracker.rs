@@ -131,6 +131,8 @@ pub enum ConnectionTrackerMsg {
     /// Ask the neighbor cache if they've seen this IP
     /// If not, try to look it up
     LookupMacByIp {
+        /// A human-readable unique across the program identifier for who is doing the lookup
+        identifier: String,
         /// the IpAddr we're trying to resolve
         ip: IpAddr,
         /// a tx queue to send the reply
@@ -180,8 +182,15 @@ impl<'a> ConnectionTracker<'a> {
         }
     }
 
-    fn lookup_ip_by_mac(&mut self, target_ip: IpAddr, tx: Sender<(IpAddr, MacAddress)>) {
-        if self.neighbor_cache.lookup_mac_by_ip_pending(&target_ip, tx)
+    fn lookup_ip_by_mac(
+        &mut self,
+        identifier: String,
+        target_ip: IpAddr,
+        tx: Sender<(IpAddr, MacAddress)>,
+    ) {
+        if self
+            .neighbor_cache
+            .lookup_mac_by_ip_pending(identifier, &target_ip, tx)
             == LookupMacByIpResult::NotFound
         {
             // our lookup failed; let's source a Arp or Ndp lookup to the IP to force it
@@ -502,7 +511,7 @@ impl<'a> ConnectionTracker<'a> {
             DelConnectionUpdateListener { key, desc } => {
                 self.del_connection_update_listener(desc, key)
             }
-            LookupMacByIp { ip, tx } => self.lookup_ip_by_mac(ip, tx),
+            LookupMacByIp { ip, tx, identifier } => self.lookup_ip_by_mac(identifier, ip, tx),
         }
     }
 
@@ -1960,6 +1969,7 @@ pub mod test {
             // first, lookup something that doesn't exist to verify we send a lookup for it
             let (lookup_tx, mut lookup_rx) = channel(10);
             connection_tracker.handle_one_msg(ConnectionTrackerMsg::LookupMacByIp {
+                identifier: "test".to_string(),
                 ip: target_ip,
                 tx: lookup_tx,
             });

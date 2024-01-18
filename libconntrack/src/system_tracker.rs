@@ -577,11 +577,11 @@ impl SystemTracker {
             // this code will keep triggering everytime we go to ping until we resolve the Mac address
             if let Some(neighbor_listener_tx) = &self.neighbor_listener_tx {
                 // TODO: add counter to track number of lookups
-                // TODO: add a listener key to prevent duplicate additions
                 send_or_log_sync!(
                     self.connection_tracker,
                     "lookup gateway mac",
                     ConnectionTrackerMsg::LookupMacByIp {
+                        identifier: PING_LISTENER_DESC.to_string(),
                         ip: *gateway,
                         tx: neighbor_listener_tx.clone()
                     }
