@@ -11,7 +11,7 @@ use std::{println as debug, println as warn}; // Workaround to use prinltn! for 
 
 use std::{collections::HashMap, io::Error, net::IpAddr, str::FromStr};
 use tokio::{
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    sync::mpsc::{channel, Receiver, Sender, UnboundedSender},
     task::JoinHandle,
 };
 
@@ -25,8 +25,7 @@ use crate::{
 };
 use dns_parser::{self, QueryType};
 
-// TODO: update this to use Sender<PerfCheckMsg<DnsTrackerMessage>>
-pub type DnsTrackerSender = UnboundedSender<DnsTrackerMessage>;
+pub type DnsTrackerSender = Sender<DnsTrackerMessage>;
 
 pub const UDP_DNS_PORT: u16 = 53;
 pub struct DnsPendingEntry {
@@ -63,7 +62,7 @@ pub enum DnsTrackerMessage {
     DumpReverseMap {
         // NOTE: this only returns the current active entries
         // and ignores the recently expired entries
-        tx: UnboundedSender<HashMap<IpAddr, DnsTrackerEntry>>,
+        tx: Sender<HashMap<IpAddr, DnsTrackerEntry>>,
     },
     CacheForever {
         // used to make all of the local IPs show up as 'localhost'
@@ -141,14 +140,15 @@ impl<'a> DnsTracker<'a> {
     pub async fn spawn(
         expired_entries_capacity: usize,
         stats_registry: ExportedStatRegistry,
+        max_queue_size: usize,
     ) -> (DnsTrackerSender, JoinHandle<()>) {
         let mut dns_tracker = DnsTracker::new(expired_entries_capacity, stats_registry);
-        let (tx, rx) = unbounded_channel::<DnsTrackerMessage>();
+        let (tx, rx) = channel::<DnsTrackerMessage>(max_queue_size);
         let join = tokio::spawn(async move { dns_tracker.do_async_loop(rx).await });
         (tx, join)
     }
 
-    pub async fn do_async_loop(&mut self, mut rx: UnboundedReceiver<DnsTrackerMessage>) {
+    pub async fn do_async_loop(&mut self, mut rx: Receiver<DnsTrackerMessage>) {
         while let Some(msg) = rx.recv().await {
             use DnsTrackerMessage::*;
             match msg {
@@ -330,11 +330,11 @@ impl<'a> DnsTracker<'a> {
      * Send a copy of the reverse DNS map back to the caller.
      *
      */
-    fn dump_reverse_map(&mut self, tx: UnboundedSender<HashMap<IpAddr, DnsTrackerEntry>>) {
+    fn dump_reverse_map(&mut self, tx: Sender<HashMap<IpAddr, DnsTrackerEntry>>) {
         // Good time to expire the cache to stop propagating stale data
         self.expire_cache();
         let reverse_map = self.reverse_map.clone();
-        if let Err(e) = tx.send(reverse_map) {
+        if let Err(e) = tx.try_send(reverse_map) {
             warn!("Problem sending the reverse_map DNS dump: {}", e);
         }
     }
@@ -888,14 +888,14 @@ mod test {
             io::{BufRead, BufReader},
         };
         use tokio::sync::mpsc;
-        let (dns_tx, _) = DnsTracker::spawn(100, mk_stats_registry()).await;
+        let (dns_tx, _) = DnsTracker::spawn(100, mk_stats_registry(), 4096).await;
         let local_addrs =
             HashSet::from([IpAddr::from_str("2600:1700:5b20:4e10:adc4:bd8f:d640:2d48").unwrap()]);
         let mut connection_tracker =
             crate::connection_tracker::test::mk_mock_connection_tracker(local_addrs);
         connection_tracker.set_dns_tracker(dns_tx.clone());
         dns_tx
-            .send(DnsTrackerMessage::CacheForever {
+            .try_send(DnsTrackerMessage::CacheForever {
                 ip: IpAddr::from_str("192.168.1.103").unwrap(),
                 hostname: "localhost".to_string(),
             })
@@ -923,7 +923,7 @@ mod test {
         // make sure we can look up everything
         let (cache_tx, mut cache_rx) = mpsc::unbounded_channel();
         dns_tx
-            .send(DnsTrackerMessage::LookupBatch {
+            .try_send(DnsTrackerMessage::LookupBatch {
                 addrs: addrs.clone(),
                 tx: cache_tx,
                 use_expired: true,

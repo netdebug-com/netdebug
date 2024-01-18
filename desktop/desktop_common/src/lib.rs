@@ -37,6 +37,12 @@ pub enum DesktopToGuiMessages {
     },
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TypeDef)]
+pub struct CongestedLinksReply {
+    pub congestion_summary: CongestionSummary,
+    pub connection_measurements: Vec<ConnectionMeasurements>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TypeDef)]
 #[serde(tag = "tag")]
 pub enum GuiToDesktopMessages {

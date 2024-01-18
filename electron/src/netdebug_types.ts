@@ -492,3 +492,7 @@ export type GuiToDesktopMessages = ({
 } | {
     "tag": "CongestedLinksRequest";
 });
+export type CongestedLinksReply = {
+    "congestion_summary": CongestionSummary;
+    "connection_measurements": (ConnectionMeasurements)[];
+};

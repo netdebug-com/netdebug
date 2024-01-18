@@ -2,11 +2,15 @@
 use std::env;
 use std::path::Path;
 
-use desktop_common::{DesktopToGuiMessages, GuiToDesktopMessages};
+use desktop_common::{CongestedLinksReply, DesktopToGuiMessages, GuiToDesktopMessages};
 
 use typescript_type_def::{write_definition_file, DefinitionFileOptions};
 
-type ExportedTypes = (DesktopToGuiMessages, GuiToDesktopMessages);
+type ExportedTypes = (
+    DesktopToGuiMessages,
+    GuiToDesktopMessages,
+    CongestedLinksReply,
+);
 
 const TYPESCRIPT_OUT_FILE: &str = "../electron/src/netdebug_types.ts";
 

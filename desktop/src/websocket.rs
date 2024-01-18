@@ -13,17 +13,15 @@ use futures_util::{
 };
 use libconntrack::{
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender, TimeMode},
-    dns_tracker::DnsTrackerMessage,
+    dns_tracker::{DnsTrackerMessage, DnsTrackerSender},
     perf_check, send_or_log_async, send_or_log_sync,
     system_tracker::SystemTracker,
     utils::PerfMsgCheck,
 };
-use libconntrack_wasm::{
-    bidir_bandwidth_to_chartjs, topology_server_messages::CongestionSummary, ConnectionMeasurements,
-};
+use libconntrack_wasm::{bidir_bandwidth_to_chartjs, topology_server_messages::CongestionSummary};
 use log::{debug, info, warn};
 use tokio::sync::{
-    mpsc::{self, channel, unbounded_channel, UnboundedSender},
+    mpsc::{self, channel, UnboundedSender},
     RwLock,
 };
 use warp::ws::{self, Message, WebSocket};
@@ -116,7 +114,7 @@ async fn handle_gui_to_server_msg(
     msg: GuiToDesktopMessages,
     tx: &UnboundedSender<DesktopToGuiMessages>,
     connection_tracker: &ConnectionTrackerSender,
-    dns_tracker: &UnboundedSender<DnsTrackerMessage>,
+    dns_tracker: &DnsTrackerSender,
     topology_client: &TopologyServerSender,
     system_tracker: &Arc<RwLock<SystemTracker>>,
     counter_registries: &SharedExportedStatRegistries,
@@ -169,7 +167,7 @@ async fn handle_congested_links_request(
     connection_tracker: &ConnectionTrackerSender,
 ) {
     // 1. request connection measurements from conntracker
-    let (reply_tx, mut reply_rx) = unbounded_channel();
+    let (reply_tx, mut reply_rx) = channel(10);
     send_or_log_async!(
         connection_tracker,
         "handle_congested_links_request() - conntracker",
@@ -262,7 +260,7 @@ async fn handle_dump_aggregate_connection_tracker_counters(
     connection_tracker: &ConnectionTrackerSender,
 ) {
     let start = std::time::Instant::now();
-    let (reply_tx, mut reply_rx) = mpsc::unbounded_channel();
+    let (reply_tx, mut reply_rx) = mpsc::channel(10);
     if let Err(e) = connection_tracker.try_send(PerfMsgCheck::new(
         ConnectionTrackerMsg::GetTrafficCounters {
             tx: reply_tx,
@@ -297,17 +295,18 @@ async fn handle_dump_aggregate_connection_tracker_counters(
 async fn handle_gui_dump_dns_cache(
     tx: &UnboundedSender<DesktopToGuiMessages>,
     _connection_tracker: &ConnectionTrackerSender,
-    dns_tracker: &UnboundedSender<DnsTrackerMessage>,
+    dns_tracker: &DnsTrackerSender,
 ) {
-    let (dns_tx, mut dns_rx) = tokio::sync::mpsc::unbounded_channel();
-    let cache = if let Err(e) = dns_tracker.send(DnsTrackerMessage::DumpReverseMap { tx: dns_tx }) {
-        warn!("Failed to send message to dns_tracker: {}", e);
-        HashMap::new() // just send back an empty map so the gui isn't confused
-                       // TODO: find a way to better signal errors back to the GUI?
-                       // TODO: do we need transcation IDs?
-    } else {
-        dns_rx.recv().await.expect("valid dns_cache")
-    };
+    let (dns_tx, mut dns_rx) = tokio::sync::mpsc::channel(10);
+    let cache =
+        if let Err(e) = dns_tracker.try_send(DnsTrackerMessage::DumpReverseMap { tx: dns_tx }) {
+            warn!("Failed to send message to dns_tracker: {}", e);
+            HashMap::new() // just send back an empty map so the gui isn't confused
+                           // TODO: find a way to better signal errors back to the GUI?
+                           // TODO: do we need transcation IDs?
+        } else {
+            dns_rx.recv().await.expect("valid dns_cache")
+        };
     if let Err(e) = tx.send(DesktopToGuiMessages::DumpDnsCache(cache)) {
         warn!("Failed to send the DNS cache back to the GUI!?: {}", e);
     }
@@ -345,36 +344,6 @@ pub async fn handle_gui_dump_dns_flows(
         stat_entries,
     )) {
         warn!("Sending to GUI trigged: {}", e);
-    }
-}
-
-pub async fn handle_gui_dumpflows(
-    connection_tracker: &ConnectionTrackerSender,
-) -> Vec<ConnectionMeasurements> {
-    let func_start = Instant::now();
-
-    // get the cache of current connections
-    let (reply_tx, mut reply_rx) = tokio::sync::mpsc::unbounded_channel();
-    let request = ConnectionTrackerMsg::GetConnectionMeasurements {
-        tx: reply_tx,
-        time_mode: TimeMode::Wallclock,
-    };
-    if let Err(e) = connection_tracker.try_send(PerfMsgCheck::new(request)) {
-        warn!("Connection Tracker queue problem: {}", e);
-    }
-    match reply_rx.recv().await {
-        Some(m) => {
-            perf_check!(
-                "ConnTracker::get connection measurements",
-                func_start,
-                Duration::from_millis(200)
-            );
-            m
-        }
-        None => {
-            warn!("ConnectionTracker GetConnectionsKeys returned null!?");
-            Vec::new() // just pretend it returned nothing as a hack
-        }
     }
 }
 
