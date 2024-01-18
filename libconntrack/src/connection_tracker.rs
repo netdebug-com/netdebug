@@ -322,7 +322,7 @@ pub struct ConnectionTracker<'a> {
     /// The key is some sort of human read-able descriptor of what the caller is doing, e.g.,
     /// "Default Gw Ping Tracker" => tx
     /// NOTE: we put this here instead of in each connection so that the caller doesn't have to race
-    /// with the packet handling code and risk trying to install a listenner for a connection that doesn't
+    /// with the packet handling code and risk trying to install a listener for a connection that doesn't
     /// exist yet.
     pub(crate) update_listeners: HashMap<ConnectionKey, HashMap<String, ConnectionUpdateListener>>,
     /// Keep a cache of Ipv4 Arp and (TODO) IPv6 ICMP neighbor solicition/advertisment messages
@@ -544,8 +544,8 @@ impl<'a> ConnectionTracker<'a> {
                     }
                 };
                 // NOTE: adding a listener to a connection is expensive as we copy every packet; use sparingly!
-                if let Some(listenners_map) = self.update_listeners.get(&key) {
-                    for (desc, tx) in listenners_map {
+                if let Some(listeners_map) = self.update_listeners.get(&key) {
+                    for (desc, tx) in listeners_map {
                         if let Err(e) = tx.try_send((packet.clone(), key.clone())) {
                             warn!("Update ConnectionListener {} failed: {}", desc, e);
                         }
@@ -916,8 +916,8 @@ impl<'a> ConnectionTracker<'a> {
      * desc and ConnectionKey as when adding
      */
     fn del_connection_update_listener(&mut self, desc: String, key: ConnectionKey) {
-        if let Some(listenners_map) = self.update_listeners.get_mut(&key) {
-            if listenners_map.remove(&desc).is_none() {
+        if let Some(listeners_map) = self.update_listeners.get_mut(&key) {
+            if listeners_map.remove(&desc).is_none() {
                 warn!(
                     "Tried to add a ConnectionUpdateListener ({}) for {} but desc not found",
                     desc, key
