@@ -15,6 +15,7 @@ import { SwitchHelper } from "../components/SwitchHelper";
 import { desktop_api_url, getSiScale, prettyPrintSiUnits } from "../utils";
 import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../usePeriodicRefresh";
+import { fetchAndCheckResult } from "../common/data_loading";
 
 ChartJS.register(
   PointElement,
@@ -140,8 +141,9 @@ function getChartOptions(bw: ChartJsBandwidth, scale: BwChartScale) {
 }
 
 export const bandwidthLoader = async () => {
-  const res = await fetch(desktop_api_url("get_aggregate_bandwidth"));
-  // TODO: error handling
+  const res = await fetchAndCheckResult(
+    desktop_api_url("get_aggregate_bandwidth"),
+  );
   return res.json();
 };
 

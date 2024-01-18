@@ -15,6 +15,7 @@ import {
 } from "../common/flow_common";
 import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../usePeriodicRefresh";
+import { fetchAndCheckResult } from "../common/data_loading";
 
 function getDnsNameFromAggKind(kind: AggregateStatKind) {
   return kind.tag === "DnsDstDomain" ? kind.name : "";
@@ -102,8 +103,7 @@ const columns: GridColDef[] = [
 ];
 
 export const flowsByDnsDomainLoader = async () => {
-  const res = await fetch(desktop_api_url("get_dns_flows"));
-  // FIXME: error handling.
+  const res = await fetchAndCheckResult(desktop_api_url("get_dns_flows"));
   return res
     .json()
     .then((entries: AggregateStatEntry[]) =>
