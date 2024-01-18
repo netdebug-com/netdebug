@@ -337,6 +337,10 @@ export type CongestedLink = {
 export type CongestionSummary = {
     "links": (CongestedLink)[];
 };
+export type CongestedLinksReply = {
+    "congestion_summary": CongestionSummary;
+    "connection_measurements": (ConnectionMeasurements)[];
+};
 export type NetworkGatewayPingType = ("IcmpEcho" | "ArpOrNdp");
 export type NetworkGatewayPingProbe = {
 
@@ -453,55 +457,3 @@ export type NetworkInterfaceState = {
      */
     "gateways_ping": Record<string, NetworkGatewayPingState>;
 };
-export type DesktopToGuiMessages = ({
-    "tag": "VersionCheck";
-    "data": string;
-} | {
-    "tag": "DumpFlowsReply";
-    "data": (ConnectionMeasurements)[];
-} | {
-    "tag": "DumpDnsCache";
-    "data": Record<string, DnsTrackerEntry>;
-} | {
-    "tag": "DumpAggregateCountersReply";
-    "data": (ChartJsBandwidth)[];
-} | {
-    "tag": "DumpStatCountersReply";
-    "data": Record<string, U64>;
-} | {
-    "tag": "DumpDnsAggregateCountersReply";
-    "data": (AggregateStatEntry)[];
-} | {
-    "tag": "WhatsMyIpReply";
-    "data": {
-        "ip": string;
-    };
-} | {
-    "tag": "CongestedLinksReply";
-    "data": {
-        "congestion_summary": CongestionSummary;
-        "connection_measurements": (ConnectionMeasurements)[];
-    };
-} | {
-    "tag": "DumpSystemNetworkHistoryReply";
-    "data": {
-        "network_interface_history": (NetworkInterfaceState)[];
-    };
-});
-export type GuiToDesktopMessages = ({
-    "tag": "DumpFlows";
-} | {
-    "tag": "DumpDnsCache";
-} | {
-    "tag": "DumpAggregateCounters";
-} | {
-    "tag": "DumpStatCounters";
-} | {
-    "tag": "DumpDnsAggregateCounters";
-} | {
-    "tag": "DumpSystemNetworkHistory";
-} | {
-    "tag": "WhatsMyIp";
-} | {
-    "tag": "CongestedLinksRequest";
-});

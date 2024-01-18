@@ -1,8 +1,7 @@
-import React, { ReactNode, useEffect, useRef, useState } from "react";
-import useWebSocket from "react-use-websocket";
-import { WS_URL } from "../App";
+import React, { ReactNode } from "react";
 import {
   CongestedLink,
+  CongestedLinksReply,
   CongestionLatencyPair,
   ConnectionKey,
   ConnectionMeasurements,
@@ -15,11 +14,13 @@ import TableRow from "@mui/material/TableRow";
 import TableCell from "@mui/material/TableCell";
 import {
   calcStyleByThreshold,
+  desktop_api_url,
   headerStyle,
   headerStyleWithWidth,
   prettyPrintSiUnits,
 } from "../utils";
 import { FlowSummary } from "../components/FlowSummary";
+import { useLoaderData } from "react-router";
 
 function toFlowKey(key: ConnectionKey): string {
   return (
@@ -66,47 +67,25 @@ interface CongestionInfo {
   connectionMeasurements: Map<string, ConnectionMeasurements>;
 }
 
-const RouterDelays: React.FC = () => {
-  const [congestionInfo, setCongestionInfo] = useState<CongestionInfo | null>(
-    null,
-  );
-  const last_send = useRef(null);
-  useEffect(() => {
-    sendRequest();
-  }, []);
-
-  const { sendMessage } = useWebSocket(WS_URL, {
-    onOpen: () => {
-      console.debug("WebSocket connection established.");
-    },
-    onMessage: (msg) => {
-      const parsed = JSON.parse(msg.data);
-      if (parsed.tag == "CongestedLinksReply") {
-        const congestionInfo: CongestionInfo = {
-          congestionSummary: parsed.data.congestion_summary.links,
-          connectionMeasurements: new Map(
-            parsed.data.connection_measurements.map(
-              (m: ConnectionMeasurements) => [toFlowKey(m.key), m],
-            ),
-          ),
-        };
-        setCongestionInfo(congestionInfo);
-      }
-    },
-    onClose: () => {
-      console.debug("Closing websocket");
-    },
+export const routerDelayLoader = async () => {
+  const res = await fetch(desktop_api_url("get_congested_links"));
+  // FIXME: error handling.
+  return res.json().then((congested_links: CongestedLinksReply) => {
+    const congestion_info: CongestionInfo = {
+      congestionSummary: congested_links.congestion_summary.links,
+      connectionMeasurements: new Map(
+        congested_links.connection_measurements.map((m) => [
+          toFlowKey(m.key),
+          m,
+        ]),
+      ),
+    };
+    return congestion_info;
   });
+};
 
-  const sendRequest = () => {
-    console.debug("Sending InferCongestion request");
-    sendMessage(
-      JSON.stringify({
-        tag: "CongestedLinksRequest",
-      }),
-    );
-    last_send.current = window.performance.now();
-  };
+const RouterDelays: React.FC = () => {
+  const congestionInfo = useLoaderData() as CongestionInfo;
 
   /**
    *

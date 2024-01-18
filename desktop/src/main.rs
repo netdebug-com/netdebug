@@ -1,5 +1,3 @@
-mod websocket;
-
 use axum::extract::State;
 use axum::{response, routing, Router};
 use chrono::Duration;
@@ -7,9 +5,12 @@ use clap::Parser;
 use common_wasm::timeseries_stats::{
     CounterProvider, CounterProviderWithTimeUpdate, SharedExportedStatRegistries, SuperRegistry,
 };
+use desktop_common::{get_git_hash_version, CongestedLinksReply};
+use libconntrack::connection_tracker::TimeMode;
 use libconntrack::dns_tracker::DnsTrackerSender;
 use libconntrack::system_tracker::SystemTracker;
-use libconntrack::topology_client::{self, TopologyServerSender};
+use libconntrack::topology_client::{TopologyServerMessage, TopologyServerSender};
+use libconntrack::utils::{channel_rpc, channel_rpc_perf};
 use libconntrack::{
     connection_tracker::{ConnectionTracker, ConnectionTrackerMsg, ConnectionTrackerSender},
     dns_tracker::{DnsTracker, DnsTrackerMessage},
@@ -17,14 +18,19 @@ use libconntrack::{
     process_tracker::{ProcessTracker, ProcessTrackerSender},
     utils::PerfMsgCheck,
 };
-use libconntrack_wasm::ConnectionMeasurements;
+use libconntrack_wasm::{
+    bidir_bandwidth_to_chartjs, AggregateStatEntry, ChartJsBandwidth, ConnectionMeasurements,
+    DnsTrackerEntry, NetworkInterfaceState,
+};
 use log::info;
+use std::collections::HashMap;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::{collections::HashSet, error::Error, net::IpAddr};
+use tokio::sync::mpsc::channel;
 use tokio::sync::RwLock;
 use tower_http::cors::{self, AllowOrigin, CorsLayer};
-use warp::Filter;
-use websocket::{handle_gui_dumpflows, websocket_handler};
+use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 
 use libconntrack::topology_client::TopologyServerConnection;
 
@@ -137,6 +143,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (dns_tx, _) = DnsTracker::spawn(
         /* expiring cache capacity */ 4096,
         counter_registries.new_registry("dns_tracker"),
+        /* max msg queue entries */
+        4096,
     )
     .await;
     trackers.dns_tracker = Some(dns_tx.clone());
@@ -144,7 +152,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let process_tx_clone = process_tx.clone();
     for ip in local_addrs.clone() {
         dns_tx
-            .send(DnsTrackerMessage::CacheForever {
+            .try_send(DnsTrackerMessage::CacheForever {
                 ip,
                 hostname: "localhost".to_string(),
             })
@@ -186,126 +194,228 @@ async fn main() -> Result<(), Box<dyn Error>> {
         connection_tracker.rx_loop().await;
     });
 
-    info!(
-        "Running desktop version: {}",
-        desktop_common::get_git_hash_version()
-    );
-    let listen_addr = ([127, 0, 0, 1], args.listen_port);
+    info!("Running desktop version: {}", get_git_hash_version());
+    let listen_addr = ("127.0.0.1", args.listen_port);
 
     trackers.counter_registries = Some(counter_registries.registries());
 
     let shared_state = Arc::new(trackers.clone());
-    tokio::spawn(async move {
-        info!("Starting Axum");
-        // Setup CORS to make sure that the electron in dev-mode can request
-        // resources.
-        let allowed_origins = vec![ELECTRON_DEV_SERVER_ORIGIN.parse().unwrap()];
-        let cors = CorsLayer::new()
-            .allow_methods(cors::Any)
-            .allow_origin(AllowOrigin::list(allowed_origins));
-        let app = Router::new()
-            .route("/counters/get_counters", routing::get(handle_get_counters))
-            .route("/api/get_flows", routing::get(handle_get_flows))
-            .layer(cors)
-            .with_state(shared_state);
+    info!("Starting Axum");
+    // Setup CORS to make sure that the electron in dev-mode can request
+    // resources.
+    let allowed_origins = vec![ELECTRON_DEV_SERVER_ORIGIN.parse().unwrap()];
+    let cors = CorsLayer::new()
+        .allow_methods(cors::Any)
+        .allow_origin(AllowOrigin::list(allowed_origins));
+    // Basic Request logging
+    let trace_layer = TraceLayer::new_for_http()
+        .make_span_with(DefaultMakeSpan::new().level(tracing::Level::DEBUG));
+    let app = Router::new()
+        .route("/api/get_counters", routing::get(handle_get_counters))
+        .route("/api/get_flows", routing::get(handle_get_flows))
+        .route("/api/get_dns_cache", routing::get(handle_get_dns_cache))
+        .route(
+            "/api/get_aggregate_bandwidth",
+            routing::get(handle_get_aggregate_bandwidth),
+        )
+        .route("/api/get_dns_flows", routing::get(handle_get_dns_flows))
+        .route("/api/get_my_ip", routing::get(handle_get_my_ip))
+        .route(
+            "/api/get_congested_links",
+            routing::get(handle_get_congested_links),
+        )
+        .route(
+            "/api/get_system_network_history",
+            routing::get(handle_get_system_network_history),
+        )
+        .layer(cors)
+        .layer(trace_layer)
+        .with_state(shared_state);
 
-        // run our app with hyper
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", args.listen_port + 1))
-            .await
-            .unwrap();
-        axum::serve(listener, app).await.unwrap()
-    });
-    info!("Starting Warp");
-    warp::serve(make_common_desktop_http_routes(
-        trackers,
-        counter_registries.registries(),
-    ))
-    .run(listen_addr)
-    .await;
+    // run our app with hyper
+    let listener = tokio::net::TcpListener::bind(listen_addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
     Ok(())
 }
 
-pub async fn handle_get_counters(State(trackers): State<Arc<Trackers>>) -> String {
+async fn handle_get_counters(State(trackers): State<Arc<Trackers>>) -> String {
     // IndexMap iterates over entries in insertion order
     let mut map = indexmap::IndexMap::<String, u64>::new();
-    trackers
-        .counter_registries
-        .clone()
-        .unwrap()
-        .lock()
-        .unwrap()
-        .update_time();
-    trackers
-        .counter_registries
-        .clone()
-        .unwrap()
-        .lock()
-        .unwrap()
-        .append_counters(&mut map);
+    {
+        let locked_registries = trackers
+            .counter_registries
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap();
+        locked_registries.update_time();
+        locked_registries.append_counters(&mut map);
+    }
     serde_json::to_string_pretty(&map).unwrap()
 }
 
-pub async fn handle_get_flows(
+// TODO: for all teh handle_FOO handlers. Instead of returning empty on an error, we should
+// actually propagate an proper error back to the UI.
+// TODO: our usagae of SLA logging is inconsistent. Some have SLAs, some don't for now, I'm
+// simply copying what we used for websocket
+
+async fn handle_get_flows(
     State(trackers): State<Arc<Trackers>>,
 ) -> response::Json<Vec<ConnectionMeasurements>> {
-    response::Json(handle_gui_dumpflows(&trackers.connection_tracker.clone().unwrap()).await)
+    let (tx, mut rx) = channel(1);
+    let req = ConnectionTrackerMsg::GetConnectionMeasurements {
+        tx,
+        time_mode: TimeMode::Wallclock,
+    };
+    response::Json(
+        channel_rpc_perf(
+            trackers.connection_tracker.clone().unwrap(),
+            req,
+            &mut rx,
+            "connection_tracker/GetConnectionMeasurements",
+            Some(tokio::time::Duration::from_millis(200)),
+        )
+        .await
+        .unwrap_or_default(),
+    )
 }
 
-pub fn make_counter_routes(
-    registries: SharedExportedStatRegistries,
-) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-    warp::path!("counters" / "get_counters").map(move || {
-        // IndexMap iterates over entries in insertion order
-        let mut map = indexmap::IndexMap::<String, u64>::new();
-        registries.lock().unwrap().update_time();
-        registries.lock().unwrap().append_counters(&mut map);
-        serde_json::to_string_pretty(&map).unwrap()
+async fn handle_get_dns_cache(
+    State(trackers): State<Arc<Trackers>>,
+) -> response::Json<HashMap<IpAddr, DnsTrackerEntry>> {
+    let (tx, mut rx) = channel(1);
+    let req = DnsTrackerMessage::DumpReverseMap { tx };
+    response::Json(
+        channel_rpc(
+            trackers.dns_tracker.clone().unwrap(),
+            req,
+            &mut rx,
+            "dns_tracker/DumpReverseMap",
+            None,
+        )
+        .await
+        .unwrap_or_default(),
+    )
+}
+
+async fn handle_get_aggregate_bandwidth(
+    State(trackers): State<Arc<Trackers>>,
+) -> response::Json<Vec<ChartJsBandwidth>> {
+    let (tx, mut rx) = channel(1);
+    let req = ConnectionTrackerMsg::GetTrafficCounters {
+        tx,
+        time_mode: TimeMode::Wallclock,
+    };
+    response::Json(
+        channel_rpc_perf(
+            trackers.connection_tracker.clone().unwrap(),
+            req,
+            &mut rx,
+            "connection_tracker/GetTrafficCounter",
+            Some(tokio::time::Duration::from_millis(50)),
+        )
+        .await
+        .map(bidir_bandwidth_to_chartjs)
+        .unwrap_or_default(),
+    )
+}
+
+async fn handle_get_dns_flows(
+    State(trackers): State<Arc<Trackers>>,
+) -> response::Json<Vec<AggregateStatEntry>> {
+    let (tx, mut rx) = channel(1);
+    let req = ConnectionTrackerMsg::GetDnsTrafficCounters {
+        tx,
+        time_mode: TimeMode::Wallclock,
+    };
+    response::Json(
+        channel_rpc_perf(
+            trackers.connection_tracker.clone().unwrap(),
+            req,
+            &mut rx,
+            "connection_tracker/GetDnsTrafficCounters",
+            Some(tokio::time::Duration::from_millis(100)),
+        )
+        .await
+        .unwrap_or_default(),
+    )
+}
+
+async fn handle_get_my_ip(State(trackers): State<Arc<Trackers>>) -> response::Json<IpAddr> {
+    // TODO: should return a list of IPs or a pair of v4/v6.
+    let (tx, mut rx) = channel(1);
+    let req = TopologyServerMessage::GetMyIpAndUserAgent { reply_tx: tx };
+    response::Json(
+        channel_rpc_perf(
+            trackers.topology_client.clone().unwrap(),
+            req,
+            &mut rx,
+            "topology_server/GetMyIp",
+            None,
+        )
+        .await
+        .map(|perf_msg| {
+            let (ip, _) = perf_msg.perf_check_get("handle_get_my_ip");
+            ip
+        })
+        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+    )
+}
+
+async fn handle_get_congested_links(
+    State(trackers): State<Arc<Trackers>>,
+) -> response::Json<CongestedLinksReply> {
+    // 1. request connection measurements from conntracker
+    let (tx, mut rx) = channel(1);
+    let req = ConnectionTrackerMsg::GetConnectionMeasurements {
+        tx,
+        time_mode: TimeMode::Wallclock,
+    };
+    let conn_measurements = match channel_rpc_perf(
+        trackers.connection_tracker.clone().unwrap(),
+        req,
+        &mut rx,
+        "congested links -- connection_tracker/GetConnectionMeasurements",
+        None,
+    )
+    .await
+    {
+        Ok(m) => m,
+        Err(_) => return response::Json(CongestedLinksReply::default()),
+    };
+
+    // 2. send the measurements to the topology server for analysis
+    let (tx, mut rx) = channel(1);
+    let req = TopologyServerMessage::InferCongestion {
+        connection_measurements: conn_measurements.clone(),
+        reply_tx: tx,
+    };
+    let congestion_summary = channel_rpc_perf(
+        trackers.topology_client.clone().unwrap(),
+        req,
+        &mut rx,
+        "congested links -- topology_server/InferCongestion",
+        None,
+    )
+    .await
+    .map(|perf_msg| perf_msg.perf_check_get("handle_congested_links"))
+    .unwrap_or_default();
+    response::Json(CongestedLinksReply {
+        congestion_summary,
+        connection_measurements: conn_measurements,
     })
 }
 
-/***** A bunch of copied/funged code from libwebserver - think about how to refactor */
-
-pub fn make_common_desktop_http_routes(
-    trackers: Trackers,
-    counter_registries: SharedExportedStatRegistries,
-) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-    let ws =
-        make_desktop_ws_route(trackers, counter_registries.clone()).with(warp::log("websocket"));
-    let counter_path =
-        make_counter_routes(counter_registries).with(warp::log("counters/get_counters"));
-
-    ws.or(counter_path)
-}
-
-// this function just wraps the connection tracker to make sure the types are understood
-fn with_trackers(
-    trackers: Trackers,
-) -> impl warp::Filter<Extract = (Trackers,), Error = std::convert::Infallible> + Clone {
-    let trackers = trackers.clone();
-    warp::any().map(move || trackers.clone())
-}
-
-fn with_counter_registries(
-    counter_registries: SharedExportedStatRegistries,
-) -> impl warp::Filter<Extract = (SharedExportedStatRegistries,), Error = std::convert::Infallible> + Clone
-{
-    warp::any().map(move || counter_registries.clone())
-}
-
-fn make_desktop_ws_route(
-    trackers: Trackers,
-    counter_registries: SharedExportedStatRegistries,
-) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-    warp::path("ws")
-        .and(with_trackers(trackers))
-        .and(with_counter_registries(counter_registries))
-        .and(warp::ws())
-        .and_then(websocket_desktop)
-}
-pub async fn websocket_desktop(
-    trackers: Trackers,
-    counter_registries: SharedExportedStatRegistries,
-    ws: warp::ws::Ws,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    Ok(ws.on_upgrade(move |websocket| websocket_handler(trackers, counter_registries, websocket)))
+async fn handle_get_system_network_history(
+    State(trackers): State<Arc<Trackers>>,
+) -> response::Json<Vec<NetworkInterfaceState>> {
+    response::Json(
+        trackers
+            .system_tracker
+            .clone()
+            .unwrap()
+            .read()
+            .await
+            .get_network_interface_histories(),
+    )
 }

@@ -2,11 +2,9 @@
 use std::env;
 use std::path::Path;
 
-use desktop_common::{DesktopToGuiMessages, GuiToDesktopMessages};
+use desktop_common::GuiApiTypes;
 
 use typescript_type_def::{write_definition_file, DefinitionFileOptions};
-
-type ExportedTypes = (DesktopToGuiMessages, GuiToDesktopMessages);
 
 const TYPESCRIPT_OUT_FILE: &str = "../electron/src/netdebug_types.ts";
 
@@ -31,7 +29,7 @@ fn generate_typescript_types() {
         root_namespace: None,
         ..Default::default()
     };
-    write_definition_file::<_, ExportedTypes>(&mut outfile, options).unwrap();
+    write_definition_file::<_, GuiApiTypes>(&mut outfile, options).unwrap();
 }
 fn main() {
     #[cfg(windows)]

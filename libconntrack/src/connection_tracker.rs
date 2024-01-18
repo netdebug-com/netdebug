@@ -21,7 +21,7 @@ use log::{debug, warn};
 
 use mac_address::MacAddress;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 #[cfg(test)]
 use std::{println as debug, println as warn}; // Workaround to use prinltn! for logs.
@@ -29,7 +29,7 @@ use std::{println as debug, println as warn}; // Workaround to use prinltn! for 
 use crate::{
     analyze::analyze,
     connection::{Connection, ConnectionUpdateListener, MAX_BURST_RATE_TIME_WINDOW_MILLIS},
-    dns_tracker::DnsTrackerMessage,
+    dns_tracker::{DnsTrackerMessage, DnsTrackerSender},
     neighbor_cache::{LookupMacByIpResult, NeighborCache, NeighborCacheSender},
     owned_packet::{ConnectionKeyError, OwnedParsedPacket},
     prober::ProbeMessage,
@@ -95,7 +95,7 @@ pub enum ConnectionTrackerMsg {
         tx: mpsc::Sender<Vec<ConnectionKey>>,
     },
     GetConnectionMeasurements {
-        tx: mpsc::UnboundedSender<Vec<ConnectionMeasurements>>,
+        tx: mpsc::Sender<Vec<ConnectionMeasurements>>,
         time_mode: TimeMode,
     },
     SetConnectionRemoteHostnameDns {
@@ -107,7 +107,7 @@ pub enum ConnectionTrackerMsg {
         application: Option<ProcessTrackerEntry>, // will be None if lookup fails, which we need for stats
     },
     GetTrafficCounters {
-        tx: mpsc::UnboundedSender<BidirBandwidthHistory>,
+        tx: mpsc::Sender<BidirBandwidthHistory>,
         time_mode: TimeMode,
     },
     GetDnsTrafficCounters {
@@ -288,7 +288,7 @@ pub struct ConnectionTracker<'a> {
     topology_client: Option<TopologyServerSender>,
     // If set, all evicted connections are send here. Mostly used for debugging/testing
     all_evicted_connections_listener: Option<Sender<Box<ConnectionMeasurements>>>,
-    dns_tx: Option<tokio::sync::mpsc::UnboundedSender<DnsTrackerMessage>>,
+    dns_tx: Option<DnsTrackerSender>,
     process_tx: Option<ProcessTrackerSender>,
     tx: ConnectionTrackerSender, // so we can tell others how to send msgs to us
     rx: ConnectionTrackerReceiver, // to read messages sent to us
@@ -410,7 +410,7 @@ impl<'a> ConnectionTracker<'a> {
         self.topology_client = topology_client;
     }
 
-    pub fn set_dns_tracker(&mut self, dns_tx: mpsc::UnboundedSender<DnsTrackerMessage>) {
+    pub fn set_dns_tracker(&mut self, dns_tx: DnsTrackerSender) {
         self.dns_tx = Some(dns_tx);
     }
 
@@ -586,7 +586,7 @@ impl<'a> ConnectionTracker<'a> {
                     // only new connections that we don't immediately tear down need DNS lookups
                     if let Some(dns_tx) = self.dns_tx.as_mut() {
                         // ask the DNS tracker to async message us the remote DNS name
-                        if let Err(e) = dns_tx.send(DnsTrackerMessage::Lookup {
+                        if let Err(e) = dns_tx.try_send(DnsTrackerMessage::Lookup {
                             ip: key.remote_ip,
                             key: key.clone(),
                             tx: self.tx.clone(),
@@ -729,7 +729,7 @@ impl<'a> ConnectionTracker<'a> {
 
     fn handle_get_connection_measurements(
         &mut self,
-        tx: tokio::sync::mpsc::UnboundedSender<Vec<ConnectionMeasurements>>,
+        tx: tokio::sync::mpsc::Sender<Vec<ConnectionMeasurements>>,
         time_mode: TimeMode,
     ) {
         let now = self.get_current_timestamp(time_mode);
@@ -738,7 +738,7 @@ impl<'a> ConnectionTracker<'a> {
             .iter_mut()
             .map(|(_key, c)| c.to_connection_measurements(now, None))
             .collect::<Vec<ConnectionMeasurements>>();
-        if let Err(e) = tx.send(connections) {
+        if let Err(e) = tx.try_send(connections) {
             warn!(
                 "Tried to send the connections back to caller, but failed: {}",
                 e
@@ -791,7 +791,7 @@ impl<'a> ConnectionTracker<'a> {
 
     fn get_conntrack_traffic_counters(
         &self,
-        tx: UnboundedSender<BidirBandwidthHistory>,
+        tx: Sender<BidirBandwidthHistory>,
         time_mode: TimeMode,
     ) {
         let mut traffic_stats = self
@@ -801,9 +801,9 @@ impl<'a> ConnectionTracker<'a> {
             .clone();
         // force send and recv counters to be up to date with now and time sync'd
         traffic_stats.advance_time(self.get_current_timestamp(time_mode));
-        if let Err(e) =
-            tx.send(traffic_stats.as_bidir_bandwidth_history(self.get_current_timestamp(time_mode)))
-        {
+        if let Err(e) = tx.try_send(
+            traffic_stats.as_bidir_bandwidth_history(self.get_current_timestamp(time_mode)),
+        ) {
             warn!(
                 "Tried to send traffic_counters back to caller but got {}",
                 e
@@ -1431,7 +1431,7 @@ pub mod test {
             },
         );
         // launch the dns_tracker in a task
-        let (dns_tx, dns_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (dns_tx, dns_rx) = tokio::sync::mpsc::channel(100);
         connection_tracker.set_dns_tracker(dns_tx);
         tokio::spawn(async move {
             dns_tracker.do_async_loop(dns_rx).await;
@@ -1449,7 +1449,7 @@ pub mod test {
         // there is some possibility for a race condition here as the message to the DnsTracker and back takes
         // some time; sleep for now but... sigh... 100 ms is more than enough
         tokio::time::sleep(Duration::milliseconds(100).to_std().unwrap()).await;
-        let (connections_tx, mut connections_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (connections_tx, mut connections_rx) = tokio::sync::mpsc::channel(10);
         conn_track_tx
             .try_send(PerfMsgCheck::new(
                 ConnectionTrackerMsg::GetConnectionMeasurements {
@@ -1708,7 +1708,7 @@ pub mod test {
         // now verify that the ConnectionTracker correctly updated the state
         // use the tx/rx interface instead of the internals to ensure no race condition
         // because this message will be behind the SetApplication message
-        let (conns_tx, mut conns_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (conns_tx, mut conns_rx) = tokio::sync::mpsc::channel(10);
         conntrack_tx
             .send(PerfMsgCheck::new(
                 ConnectionTrackerMsg::GetConnectionMeasurements {
@@ -1731,7 +1731,7 @@ pub mod test {
     #[test]
     fn test_tcp_rtt() {
         fn handle_dns_msg(
-            dns_rx: &mut mpsc::UnboundedReceiver<DnsTrackerMessage>,
+            dns_rx: &mut mpsc::Receiver<DnsTrackerMessage>,
             conn_tracker: &mut ConnectionTracker,
         ) {
             if let Ok(DnsTrackerMessage::Lookup { key, .. }) = dns_rx.try_recv() {
@@ -1749,7 +1749,7 @@ pub mod test {
             "tests/normal-conn-syn-and-fin.pcap",
         ))
         .unwrap();
-        let (dns_tx, mut dns_rx) = mpsc::unbounded_channel();
+        let (dns_tx, mut dns_rx) = mpsc::channel(10);
         conn_track.set_dns_tracker(dns_tx);
         while let Ok(pkt) = capture.next_packet() {
             let parsed_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
@@ -1757,7 +1757,7 @@ pub mod test {
             handle_dns_msg(&mut dns_rx, &mut conn_track);
         }
         // Query conn_tracker for connection measurements
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(10);
         conn_track.handle_one_msg(ConnectionTrackerMsg::GetConnectionMeasurements {
             tx,
             time_mode: TimeMode::PacketTime,
@@ -1812,7 +1812,7 @@ pub mod test {
     #[test]
     fn test_tcp_with_tx_loss_trace() {
         fn handle_dns_msg(
-            dns_rx: &mut mpsc::UnboundedReceiver<DnsTrackerMessage>,
+            dns_rx: &mut mpsc::Receiver<DnsTrackerMessage>,
             conn_tracker: &mut ConnectionTracker,
         ) {
             if let Ok(DnsTrackerMessage::Lookup { key, .. }) = dns_rx.try_recv() {
@@ -1830,7 +1830,7 @@ pub mod test {
                 .unwrap();
         let (all_conn_meas_tx, mut all_conn_meas_rx) = mpsc::channel(100);
         conn_track.set_all_evicted_connections_listener(all_conn_meas_tx);
-        let (dns_tx, mut dns_rx) = mpsc::unbounded_channel();
+        let (dns_tx, mut dns_rx) = mpsc::channel(10);
         conn_track.set_dns_tracker(dns_tx);
 
         let mut tx_bytes = 0;
@@ -1856,7 +1856,7 @@ pub mod test {
             }
         }
         // Query conn_tracker for all remaining connections -- there should be one
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(10);
         conn_track.handle_one_msg(ConnectionTrackerMsg::GetConnectionMeasurements {
             tx,
             time_mode: TimeMode::PacketTime,
