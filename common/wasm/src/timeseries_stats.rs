@@ -929,6 +929,14 @@ impl StatHandle {
     pub fn bump(&self) {
         self.add_value_with_time(1, Instant::now());
     }
+
+    /// Helper function to simplify testing b/c Rob can never remember what Gregor does to test these
+    pub fn get_sum(&mut self) -> u64 {
+        self.registry.stats.lock().unwrap()[self.idx]
+            .data
+            .all_time
+            .sum
+    }
 }
 
 /// A thread-safe representation of an ExportedStat to track time durations

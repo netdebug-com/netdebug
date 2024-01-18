@@ -10,6 +10,8 @@ use crate::{
     utils::PerfMsgCheck,
 };
 
+pub type ProberSender = Sender<PerfMsgCheck<ProbeMessage>>;
+
 #[derive(Clone, Debug)]
 pub enum ProbeMessage {
     SendProbe {
@@ -95,20 +97,17 @@ fn send_arp(
     }
 }
 
-fn icmp_ping(
-    raw_sock: &mut dyn RawSocketWriter,
+pub fn make_ping_icmp_echo_request(
+    local_ip: &IpAddr,
+    remote_ip: &IpAddr,
     local_mac: [u8; 6],
-    local_ip: IpAddr,
-    remote_mac: Option<[u8; 6]>,
-    remote_ip: IpAddr,
+    remote_mac: [u8; 6],
     id: u16,
     seq: u16,
-) {
-    // If we don't know the remote_mac address, fall back to broadcast
-    let remote_mac = remote_mac.unwrap_or([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+) -> Vec<u8> {
     let payload = [0u8; 128];
     let builder = etherparse::PacketBuilder::ethernet2(local_mac, remote_mac);
-    let buf = match (local_ip, remote_ip) {
+    match (local_ip, remote_ip) {
         (IpAddr::V4(local_ip4), IpAddr::V4(remote_ip4)) => {
             let builder = builder
                 .ipv4(local_ip4.octets(), remote_ip4.octets(), 64)
@@ -131,7 +130,58 @@ fn icmp_ping(
             "Tried to mix a v4 and v6 local and remote ip - no can do!: {} vs. {}",
             local_ip, remote_ip
         ),
-    };
+    }
+}
+
+/// Create an EchoReply; could probably share more code with [`make_ping_icmp_echo_request`] but meh
+pub fn make_ping_icmp_echo_reply(
+    local_ip: &IpAddr,
+    remote_ip: &IpAddr,
+    local_mac: [u8; 6],
+    remote_mac: [u8; 6],
+    id: u16,
+    seq: u16,
+) -> Vec<u8> {
+    let payload = [0u8; 128];
+    let builder = etherparse::PacketBuilder::ethernet2(local_mac, remote_mac);
+    match (local_ip, remote_ip) {
+        (IpAddr::V4(local_ip4), IpAddr::V4(remote_ip4)) => {
+            let builder = builder
+                .ipv4(local_ip4.octets(), remote_ip4.octets(), 64)
+                .icmpv4_echo_reply(id, seq);
+            // NOTE: this looks like duplicate code with the ipv6 case, but the types are different
+            let mut buf = Vec::with_capacity(builder.size(payload.len()));
+            builder.write(&mut buf, &payload).unwrap();
+            buf
+        }
+        (IpAddr::V6(local_ip6), IpAddr::V6(remote_ip6)) => {
+            let builder = builder
+                .ipv6(local_ip6.octets(), remote_ip6.octets(), 64)
+                .icmpv6_echo_reply(id, seq);
+            // NOTE: this looks like duplicate code with the ipv6 case, but the types are different
+            let mut buf = Vec::with_capacity(builder.size(payload.len()));
+            builder.write(&mut buf, &payload).unwrap();
+            buf
+        }
+        _ => panic!(
+            "Tried to mix a v4 and v6 local and remote ip - no can do!: {} vs. {}",
+            local_ip, remote_ip
+        ),
+    }
+}
+
+fn icmp_ping(
+    raw_sock: &mut dyn RawSocketWriter,
+    local_mac: [u8; 6],
+    local_ip: IpAddr,
+    remote_mac: Option<[u8; 6]>,
+    remote_ip: IpAddr,
+    id: u16,
+    seq: u16,
+) {
+    // If we don't know the remote_mac address, fall back to broadcast
+    let remote_mac = remote_mac.unwrap_or([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+    let buf = make_ping_icmp_echo_request(&local_ip, &remote_ip, local_mac, remote_mac, id, seq);
     if let Err(e) = raw_sock.sendpacket(&buf) {
         warn!("Error sending ping in icmp_ping: {}", e);
     }
