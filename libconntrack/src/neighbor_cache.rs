@@ -1,5 +1,6 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use log::warn;
+use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 use std::net::IpAddr;
 use tokio::sync::mpsc::Sender;
@@ -30,9 +31,11 @@ pub enum LookupMacByIpResult {
 pub struct NeighborCache<'a> {
     pub ip2mac: EvictingHashMap<'a, IpAddr, MacAddress>,
     /// Keep a list of agents that want to get updates about each IP to Mac address binding
-    /// TODO: change value to HashMap with a identifier key to prevent duplicate additions
+    /// The 'String' is a human-readible identifier for who is listening; needs to be unique across
+    /// the program ]
+    ///
     /// Would love to use HashSet() but tokio::sync::mpsc::Sender() doesn't implement Eq or PartialEq :-(
-    pub pending_lookups: EvictingHashMap<'a, IpAddr, Vec<NeighborCacheSender>>,
+    pub pending_lookups: EvictingHashMap<'a, IpAddr, HashMap<String, NeighborCacheSender>>,
 }
 
 impl<'a> NeighborCache<'a> {
@@ -58,6 +61,7 @@ impl<'a> NeighborCache<'a> {
     /// neighbor lookup out
     pub fn lookup_mac_by_ip_pending(
         &mut self,
+        identifier: String,
         ip: &IpAddr,
         tx: NeighborCacheSender,
     ) -> LookupMacByIpResult {
@@ -71,10 +75,11 @@ impl<'a> NeighborCache<'a> {
             LookupMacByIpResult::Found
         } else {
             // TODO: would be nice if EvictingHashMap supported the entry() API
-            if let Some(list) = self.pending_lookups.get_mut(ip) {
-                list.push(tx);
+            if let Some(map) = self.pending_lookups.get_mut(ip) {
+                map.insert(identifier, tx);
             } else {
-                self.pending_lookups.insert(*ip, vec![tx]);
+                self.pending_lookups
+                    .insert(*ip, HashMap::from([(identifier, tx)]));
             }
             LookupMacByIpResult::NotFound
         }
@@ -116,9 +121,12 @@ impl<'a> NeighborCache<'a> {
             self.ip2mac.insert(*ip, *mac);
             if let Some(list) = self.pending_lookups.get_mut(ip) {
                 // updated anyone waiting for this ip --> mac mapping
-                for tx in list {
+                for (identifier, tx) in list {
                     if let Err(e) = tx.try_send((*ip, *mac)) {
-                        warn!("Tried to updated pending ip to mac tx but got:{}", e);
+                        warn!(
+                            "Tried to updated pending ip to mac for {}'s tx but got:{}",
+                            identifier, e
+                        );
                     }
                 }
                 // clear the list
