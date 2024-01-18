@@ -20,7 +20,7 @@ use libconntrack::{
 };
 use libconntrack_wasm::{
     bidir_bandwidth_to_chartjs, AggregateStatEntry, ChartJsBandwidth, ConnectionMeasurements,
-    DnsTrackerEntry, NetworkInterfaceState,
+    DnsTrackerEntry, ExportedNeighborState, NetworkInterfaceState,
 };
 use log::info;
 use std::collections::HashMap;
@@ -230,6 +230,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "/api/get_system_network_history",
             routing::get(handle_get_system_network_history),
         )
+        .route("/api/get_devices", routing::get(handle_get_devices))
         .layer(cors)
         .layer(trace_layer)
         .with_state(shared_state);
@@ -403,6 +404,24 @@ async fn handle_get_my_ip(State(trackers): State<Arc<Trackers>>) -> response::Js
             ip
         })
         .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+    )
+}
+
+async fn handle_get_devices(
+    State(trackers): State<Arc<Trackers>>,
+) -> response::Json<Vec<ExportedNeighborState>> {
+    let (tx, mut rx) = channel(1);
+    let req = ConnectionTrackerMsg::GetCachedNeighbors { tx };
+    response::Json(
+        channel_rpc_perf(
+            trackers.connection_tracker.clone().unwrap(),
+            req,
+            &mut rx,
+            "ConnectionTracker/GetNeighborState",
+            None,
+        )
+        .await
+        .unwrap_or_default(),
     )
 }
 

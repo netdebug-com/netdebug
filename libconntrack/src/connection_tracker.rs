@@ -15,6 +15,7 @@ use itertools::Itertools;
 use libconntrack_wasm::{
     bidir_bandwidth_to_chartjs, traffic_stats::BidirectionalStats, AggregateStatEntry,
     AggregateStatKind, BidirBandwidthHistory, ConnectionKey, ConnectionMeasurements,
+    ExportedNeighborState,
 };
 use linked_hash_map::LinkedHashMap;
 #[cfg(not(test))]
@@ -151,6 +152,9 @@ pub enum ConnectionTrackerMsg {
         /// a tx queue to send the reply
         tx: NeighborCacheSender,
     },
+    GetCachedNeighbors {
+        tx: Sender<Vec<ExportedNeighborState>>,
+    },
 }
 
 /**
@@ -201,6 +205,10 @@ impl<'a> ConnectionTracker<'a> {
         target_ip: IpAddr,
         tx: Sender<(IpAddr, MacAddress)>,
     ) {
+        if target_ip.is_ipv6() {
+            warn!("Don't have NDP neighbor lookup support yet!");
+            return;
+        }
         // do we have the target Mac already cached?
         if self
             .neighbor_cache
@@ -235,7 +243,8 @@ impl<'a> ConnectionTracker<'a> {
                     match mac_address::get_mac_address_by_ip(local_ip) {
                         Ok(Some(mac)) => {
                             // got it; cache it
-                            self.neighbor_cache.learn(&Some(*local_ip), &Some(mac));
+                            self.neighbor_cache
+                                .learn(&Some(*local_ip), &Some(mac), Utc::now());
                             mac
                         }
                         Ok(None) => {
@@ -243,7 +252,7 @@ impl<'a> ConnectionTracker<'a> {
                             return;
                         }
                         Err(e) => {
-                            warn!("Tired to lookup local mac for {} but got error {}; Failed to send Arp/Ndp", local_ip, e);
+                            warn!("Tried to lookup local mac for {} but got error {}; Failed to send Arp/Ndp", local_ip, e);
                             return;
                         }
                     }
@@ -263,6 +272,15 @@ impl<'a> ConnectionTracker<'a> {
                     target_ip
                 );
             }
+        }
+    }
+
+    fn get_cached_neighbors(&self, tx: Sender<Vec<ExportedNeighborState>>) {
+        if let Err(e) = tx.try_send(self.neighbor_cache.export_neighbors()) {
+            warn!(
+                "Tried to return get_cached_neighbors() info to caller, but got {}",
+                e
+            );
         }
     }
 }
@@ -565,6 +583,7 @@ impl<'a> ConnectionTracker<'a> {
                 self.del_connection_update_listener(desc, key)
             }
             LookupMacByIp { ip, tx, identifier } => self.lookup_ip_by_mac(identifier, ip, tx),
+            GetCachedNeighbors { tx } => self.get_cached_neighbors(tx),
         }
     }
 
@@ -1089,6 +1108,7 @@ pub mod test {
     use super::*;
 
     use crate::dns_tracker::DnsTracker;
+    use crate::neighbor_cache::NeighborState;
     use crate::owned_packet::OwnedParsedPacket;
     use crate::pcap::MockRawSocketProber;
 
@@ -2230,14 +2250,21 @@ pub mod test {
         let local_addrs = HashSet::from([local_ipv4, local_ipv6]);
         let (prober_tx, mut prober_rx) = channel(10);
         let mut connection_tracker = mk_mock_connection_tracker(local_addrs);
-        connection_tracker
-            .neighbor_cache
-            .ip2mac
-            .insert(local_ipv4, local_mac);
-        connection_tracker
-            .neighbor_cache
-            .ip2mac
-            .insert(local_ipv6, local_mac);
+        let now = Utc::now();
+        connection_tracker.neighbor_cache.ip2mac.insert(
+            local_ipv4,
+            NeighborState {
+                mac: local_mac,
+                learn_time: now,
+            },
+        );
+        connection_tracker.neighbor_cache.ip2mac.insert(
+            local_ipv6,
+            NeighborState {
+                mac: local_mac,
+                learn_time: now,
+            },
+        );
         // override the default mock prober_helper so we can capture those messages
         connection_tracker.prober_helper = ProberHelper::new(prober_tx, true);
 
@@ -2273,9 +2300,11 @@ pub mod test {
             }
 
             // 2. Now 'learn' that IP to mac mapping so that we get our async notification
-            connection_tracker
-                .neighbor_cache
-                .learn(&Some(target_ip), &Some(target_mac));
+            connection_tracker.neighbor_cache.learn(
+                &Some(target_ip),
+                &Some(target_mac),
+                Utc::now(),
+            );
 
             // 3. Verify we got the reply
             let (lookup_ip, lookup_mac) = lookup_rx.try_recv().unwrap();

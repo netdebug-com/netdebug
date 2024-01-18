@@ -7,6 +7,7 @@ const TAB_NAV_INFO = [
   { label: "Home", to: "/", exactMatch: true },
   { label: "Bandwidth", to: "/bandwidth" },
   { label: "DNS", to: "/dns" },
+  { label: "Devices", to: "/devices" },
   { label: "Flows", to: "/flows" },
   { label: "Ping", to: "/rtt_latency" },
   { label: "Router Delays", to: "/router_delays" },

@@ -1,6 +1,6 @@
 use libconntrack_wasm::{
     topology_server_messages::CongestionSummary, AggregateStatEntry, ChartJsBandwidth,
-    ConnectionMeasurements, DnsTrackerEntry, NetworkInterfaceState,
+    ConnectionMeasurements, DnsTrackerEntry, ExportedNeighborState, NetworkInterfaceState,
 };
 /**
  * Anything in this file must compile for both native rust/x86 AND WASM
@@ -28,4 +28,5 @@ pub type GuiApiTypes = (
     AggregateStatEntry,
     CongestedLinksReply,
     NetworkInterfaceState,
+    ExportedNeighborState,
 );
