@@ -5,7 +5,7 @@ import { SxProps } from "@mui/material";
 import { ConnectionKey, ConnectionMeasurements } from "./netdebug_types";
 
 export function desktop_api_url(path: string): string {
-  return "http://localhost:33435/api/" + path;
+  return "http://localhost:33434/api/" + path;
 }
 
 // depending on our SLAs

@@ -20,8 +20,6 @@ import RootLayout from "./layouts/RootLayout";
 import FlowsLayout from "./layouts/FlowsLayout";
 import RouterDelays, { routerDelayLoader } from "./pages/RouteDelays";
 
-const WS_URL = "ws://localhost:33434/ws";
-
 const router = createHashRouter(
   createRoutesFromElements(
     <Route path="/" element={<RootLayout />}>
@@ -55,5 +53,4 @@ function App() {
   return <RouterProvider router={router} />;
 }
 
-export { WS_URL };
 export default App;
