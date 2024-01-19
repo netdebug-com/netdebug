@@ -230,6 +230,9 @@ export type AggregateStatKind = ({
     "tag": "Application";
     "name": string;
 } | {
+    "tag": "HostIp";
+    "name": string;
+} | {
     "tag": "ConnectionTracker";
 });
 export type BidirTrafficStatsSummary = {
@@ -238,6 +241,12 @@ export type BidirTrafficStatsSummary = {
 };
 export type AggregateStatEntry = {
     "kind": AggregateStatKind;
+
+    /**
+     * Additional information. We hack it by storing the hostname in the
+     * the comment field for AggregateStatKind::Host
+     */
+    "comment"?: (string | null);
     "bandwidth": (ChartJsBandwidth)[];
     "summary": BidirTrafficStatsSummary;
     "connections": (ConnectionMeasurements)[];
