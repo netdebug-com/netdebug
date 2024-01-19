@@ -114,6 +114,10 @@ pub enum ConnectionTrackerMsg {
         tx: mpsc::Sender<Vec<AggregateStatEntry>>,
         time_mode: TimeMode,
     },
+    GetAppTrafficCounters {
+        tx: mpsc::Sender<Vec<AggregateStatEntry>>,
+        time_mode: TimeMode,
+    },
     AddConnectionUpdateListener {
         /// a description of what the listener is doing; must be unique across listeners
         desc: String,
@@ -524,6 +528,13 @@ impl<'a> ConnectionTracker<'a> {
                     time_mode,
                 );
             }
+            GetAppTrafficCounters { tx, time_mode } => {
+                self.get_aggregate_traffic_counters(
+                    |kind| matches!(kind, AggregateStatKind::Application { .. }),
+                    tx,
+                    time_mode,
+                );
+            }
             AddConnectionUpdateListener { tx, key, desc } => {
                 self.add_connection_update_listener(tx, key, desc)
             }
@@ -778,11 +789,10 @@ impl<'a> ConnectionTracker<'a> {
                         Ok(domain) => {
                             // add this group and make sure the connection tracker is tracking it
                             let group = AggregateStatKind::DnsDstDomain(domain);
-                            connection.aggregate_groups.insert(group.clone());
-                            self.aggregate_traffic_stats.entry(group).or_insert(
-                                BidirectionalStats::new(std::time::Duration::from_millis(
-                                    MAX_BURST_RATE_TIME_WINDOW_MILLIS,
-                                )),
+                            add_aggregate_group(
+                                &mut self.aggregate_traffic_stats,
+                                group,
+                                connection,
                             );
                         }
                         Err(e) => warn!("Unparsible DNS name: {} :: {}", &remote_hostname, e),
@@ -837,6 +847,19 @@ impl<'a> ConnectionTracker<'a> {
     ) {
         if let Some(application) = application {
             if let Some(connection) = self.connections.get_mut(&key) {
+                for (pid, name) in &application.associated_apps {
+                    let app_key = match name {
+                        Some(name) => name.clone(),
+                        None => format!("({})", pid),
+                    };
+                    // TODO: we should find a good canocial way to generate
+                    // app / process names.
+                    // TODO: this means we can have more than one app per connection
+                    // so we might double count some bytes.... Probably fine but
+                    // something to be aware
+                    let group = AggregateStatKind::Application(app_key);
+                    add_aggregate_group(&mut self.aggregate_traffic_stats, group, connection);
+                }
                 connection.associated_apps = Some(application.associated_apps);
             } else {
                 warn!(
@@ -949,6 +972,25 @@ impl<'a> ConnectionTracker<'a> {
             );
         }
     }
+}
+
+/// Helper function. Indeally, this would be a member function of ConnectionTracker
+/// and take a `&mut self` instead of aggregate stats. But that doesn't work because
+/// in the context where we need to call it, the connection_tracker is already mutually
+/// borrowed.
+fn add_aggregate_group(
+    aggregate_stats: &mut HashMap<AggregateStatKind, BidirectionalStats>,
+    group: AggregateStatKind,
+    connection: &mut Connection,
+) {
+    // this is a HashSet, so a plain insert() if fine even if a name
+    // already exists
+    connection.aggregate_groups.insert(group.clone());
+    aggregate_stats
+        .entry(group)
+        .or_insert(BidirectionalStats::new(std::time::Duration::from_millis(
+            MAX_BURST_RATE_TIME_WINDOW_MILLIS,
+        )));
 }
 
 #[cfg(test)]
@@ -1698,12 +1740,8 @@ pub mod test {
         let local_syn = OwnedParsedPacket::try_from_fake_time(TEST_1_LOCAL_SYN.to_vec()).unwrap();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.37").unwrap()]);
         connection_tracker.local_addrs = local_addrs; // new packet has a different local ip; hack it in
-        connection_tracker.add(local_syn);
-        // spawn the connection tracker to the background so it can start processing msgs
+        connection_tracker.add(local_syn.clone());
         let conntrack_tx = connection_tracker.get_tx();
-        tokio::spawn(async move {
-            connection_tracker.rx_loop().await;
-        });
         let msg = process_rx.try_recv().unwrap().skip_perf_check();
         let my_app = "MyApp".to_string();
         let my_pid = 12345;
@@ -1724,6 +1762,9 @@ pub mod test {
             }
             _wtf => panic!("Got unknown message: {:?}", _wtf),
         }
+        let conntrack_msg = connection_tracker.rx.try_recv().unwrap().skip_perf_check();
+        connection_tracker.handle_one_msg(conntrack_msg);
+
         // now verify that the ConnectionTracker correctly updated the state
         // use the tx/rx interface instead of the internals to ensure no race condition
         // because this message will be behind the SetApplication message
@@ -1737,7 +1778,10 @@ pub mod test {
             ))
             .await
             .unwrap();
-        let mut connections = conns_rx.recv().await.unwrap();
+
+        let conntrack_msg = connection_tracker.rx.try_recv().unwrap().skip_perf_check();
+        connection_tracker.handle_one_msg(conntrack_msg);
+        let mut connections = conns_rx.try_recv().unwrap();
         assert_eq!(connections.len(), 1);
         let connection = connections.pop().unwrap();
         let associated_apps = connection.associated_apps.unwrap();
@@ -1745,6 +1789,24 @@ pub mod test {
         let (test_pid, test_app) = associated_apps.iter().next().unwrap();
         assert_eq!(*test_pid, my_pid);
         assert_eq!(*test_app, Some(my_app));
+
+        // Send another packet and then get Aggregate per app stats
+        let (agg_counter_tx, mut agg_counter_rx) = mpsc::channel(1);
+        connection_tracker.add(local_syn);
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::GetAppTrafficCounters {
+            tx: agg_counter_tx,
+            time_mode: TimeMode::PacketTime,
+        });
+        //take_and_process_message(&mut connection_tracker);
+        let agg_app_counters = agg_counter_rx.try_recv().unwrap();
+        assert_eq!(agg_app_counters.len(), 1);
+        assert_eq!(
+            agg_app_counters[0].kind,
+            AggregateStatKind::Application("MyApp".to_owned())
+        );
+        // Only one packet, because the aggregate only starts counting after
+        // it has received the response from process_tracker
+        assert_eq!(agg_app_counters[0].summary.tx.pkts, 1);
     }
 
     #[test]
