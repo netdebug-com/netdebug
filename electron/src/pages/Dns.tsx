@@ -5,6 +5,7 @@ import { Box } from "@mui/material";
 import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
 import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../usePeriodicRefresh";
+import { fetchAndCheckResult } from "../common/data_loading";
 
 function format_ips(ips: string[]) {
   if (ips.length <= 1) {
@@ -34,8 +35,7 @@ function format_ips(ips: string[]) {
 /*********************************************************** */
 
 export const dnsCacheLoader = async () => {
-  const res = await fetch(desktop_api_url("get_dns_cache"));
-  // FIXME: error handling.
+  const res = await fetchAndCheckResult(desktop_api_url("get_dns_cache"));
   return res.json().then((entries: object) => new Map(Object.entries(entries)));
 };
 

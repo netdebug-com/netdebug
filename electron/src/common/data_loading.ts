@@ -54,3 +54,14 @@ export function forTesting_loadDataWithDelay<T>(
 ) {
   setTimeout(() => loadData(url, cb), 1000);
 }
+
+// Do a `fetch()` call, but check the returned response and throw an error if
+// the response code is not ok. Simplifies error handling
+export async function fetchAndCheckResult(url: string): Promise<Response> {
+  return fetch(url).then((res) => {
+    if (!res.ok) {
+      throw new Error(`Failed to fetch data: ${res.status} ${res.statusText}`);
+    }
+    return res;
+  });
+}

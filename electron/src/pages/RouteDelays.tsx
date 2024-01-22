@@ -21,6 +21,7 @@ import {
 } from "../utils";
 import { FlowSummary } from "../components/FlowSummary";
 import { useLoaderData } from "react-router";
+import { fetchAndCheckResult } from "../common/data_loading";
 
 function toFlowKey(key: ConnectionKey): string {
   return (
@@ -68,8 +69,7 @@ interface CongestionInfo {
 }
 
 export const routerDelayLoader = async () => {
-  const res = await fetch(desktop_api_url("get_congested_links"));
-  // FIXME: error handling.
+  const res = await fetchAndCheckResult(desktop_api_url("get_congested_links"));
   return res.json().then((congested_links: CongestedLinksReply) => {
     const congestion_info: CongestionInfo = {
       congestionSummary: congested_links.congestion_summary.links,

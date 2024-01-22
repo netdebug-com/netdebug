@@ -10,10 +10,10 @@ import { SwitchHelper } from "../components/SwitchHelper";
 import { Box } from "@mui/material";
 import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../usePeriodicRefresh";
+import { fetchAndCheckResult } from "../common/data_loading";
 
 export const countersLoader = async () => {
-  const res = await fetch(desktop_api_url("get_counters"));
-  // FIXME: error handling.
+  const res = await fetchAndCheckResult(desktop_api_url("get_counters"));
   return res
     .json()
     .then((counters: object) => new Map(Object.entries(counters)));

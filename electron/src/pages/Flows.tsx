@@ -24,6 +24,7 @@ import {
 } from "../common/flow_common";
 import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../usePeriodicRefresh";
+import { fetchAndCheckResult } from "../common/data_loading";
 
 function formatAssociatedApps(
   params: GridValueFormatterParams<ConnectionMeasurements["associated_apps"]>,
@@ -157,7 +158,7 @@ const columns: GridColDef[] = [
 ];
 
 export const flowsLoader = async () => {
-  const res = await fetch(desktop_api_url("get_flows"));
+  const res = await fetchAndCheckResult(desktop_api_url("get_flows"));
   // FIXME: error handling.
   return res.json().then((flows) =>
     // DataGrid has an unsorted state as well, which will return the rows in the original
