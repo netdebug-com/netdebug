@@ -11,6 +11,9 @@ import Bandwidth, { bandwidthLoader } from "./pages/Bandwidth";
 import Dns, { dnsCacheLoader } from "./pages/Dns";
 import Counters, { countersLoader } from "./pages/Counters";
 import Flows, { flowsLoader } from "./pages/Flows";
+import FlowsByApplication, {
+  flowsByApplicationLoader,
+} from "./pages/FlowsByApplication";
 import FlowsByDnsDomain, {
   flowsByDnsDomainLoader,
 } from "./pages/FlowsByDnsDomain";
@@ -46,7 +49,8 @@ const router = createHashRouter(
         />
         <Route
           path="by_app"
-          element={<h1>By App</h1>}
+          element={<FlowsByApplication />}
+          loader={flowsByApplicationLoader}
           errorElement={<DefaultErrorElement />}
         />
       </Route>
