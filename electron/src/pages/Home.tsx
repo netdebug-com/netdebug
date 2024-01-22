@@ -2,16 +2,13 @@ import { desktop_api_url } from "../utils";
 import { useInterval } from "react-use";
 import { useEffect, useState } from "react";
 import { DataLoadingState, loadData as loadData } from "../common/data_loading";
+import { ErrorMessage } from "../components/ErrorMessage";
 
 function renderStringData(state: DataLoadingState<string>) {
   return (
     <>
       {state.isPending && "Loading ..."}
-      {state.error && (
-        <div style={{ color: "red", fontWeight: "bold" }}>
-          ERROR: {state.error}
-        </div>
-      )}
+      {state.error && <ErrorMessage msg={"ERROR: " + state.error} />}
       {state.data && state.data}
     </>
   );

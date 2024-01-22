@@ -11,6 +11,7 @@ import {
 } from "../common/flow_common";
 import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../usePeriodicRefresh";
+import { ErrorMessage } from "./ErrorMessage";
 
 function getNameFromAggKind(kind: AggregateStatKind): string {
   switch (kind.tag) {
@@ -137,7 +138,9 @@ const AggregatedFlows: React.FC<AggregatedFlowsProps> = (props) => {
 
   return (
     <>
-      {anyInvalidKind && <div>Error. Wrong AggregateStateKind</div>}
+      {anyInvalidKind && (
+        <ErrorMessage msg={"ERROR: Invalid AggregateStatKinds passed"} />
+      )}
       {!anyInvalidKind && (
         <div>
           <SwitchHelper
