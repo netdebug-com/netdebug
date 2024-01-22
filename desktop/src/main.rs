@@ -219,6 +219,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             routing::get(handle_get_aggregate_bandwidth),
         )
         .route("/api/get_dns_flows", routing::get(handle_get_dns_flows))
+        .route("/api/get_app_flows", routing::get(handle_get_app_flows))
         .route("/api/get_my_ip", routing::get(handle_get_my_ip))
         .route(
             "/api/get_congested_links",
@@ -334,6 +335,27 @@ async fn handle_get_dns_flows(
             req,
             &mut rx,
             "connection_tracker/GetDnsTrafficCounters",
+            Some(tokio::time::Duration::from_millis(100)),
+        )
+        .await
+        .unwrap_or_default(),
+    )
+}
+
+async fn handle_get_app_flows(
+    State(trackers): State<Arc<Trackers>>,
+) -> response::Json<Vec<AggregateStatEntry>> {
+    let (tx, mut rx) = channel(1);
+    let req = ConnectionTrackerMsg::GetAppTrafficCounters {
+        tx,
+        time_mode: TimeMode::Wallclock,
+    };
+    response::Json(
+        channel_rpc_perf(
+            trackers.connection_tracker.clone().unwrap(),
+            req,
+            &mut rx,
+            "connection_tracker/GetAppTrafficCounters",
             Some(tokio::time::Duration::from_millis(100)),
         )
         .await
