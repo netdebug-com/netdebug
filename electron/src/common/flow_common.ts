@@ -1,6 +1,6 @@
 import { GridColDef } from "@mui/x-data-grid";
 import { prettyPrintSiUnits, sortCmpWithNull } from "../utils";
-import { TrafficStatsSummary } from "../netdebug_types";
+import { AggregateStatEntry, TrafficStatsSummary } from "../netdebug_types";
 
 const FLEX_VALUE_FOR_NUMERIC_COLS = 15;
 export function getDefaultRateGridColDef(unitSuffix: string): {
@@ -70,4 +70,13 @@ export function calculateLossPercentage(
   }
   const percentage = (100 * stats.lost_bytes) / stats.bytes;
   return percentage;
+}
+
+export function aggregateStatEntryDefaultSortFn(entries: AggregateStatEntry[]) {
+  return entries.sort((a, b) =>
+    sortCmpWithNull(
+      b.summary.rx.last_min_byte_rate,
+      a.summary.rx.last_min_byte_rate,
+    ),
+  );
 }
