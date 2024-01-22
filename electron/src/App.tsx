@@ -6,7 +6,7 @@ import {
 } from "react-router-dom";
 
 // import sub-pages
-import Home, { myIpLoader } from "./pages/Home";
+import Home from "./pages/Home";
 import Bandwidth, { bandwidthLoader } from "./pages/Bandwidth";
 import Dns, { dnsCacheLoader } from "./pages/Dns";
 import Counters, { countersLoader } from "./pages/Counters";
@@ -23,7 +23,7 @@ import RouterDelays, { routerDelayLoader } from "./pages/RouteDelays";
 const router = createHashRouter(
   createRoutesFromElements(
     <Route path="/" element={<RootLayout />}>
-      <Route index element={<Home />} loader={myIpLoader} />,
+      <Route index element={<Home />} />,
       <Route
         path="bandwidth"
         element={<Bandwidth />}
