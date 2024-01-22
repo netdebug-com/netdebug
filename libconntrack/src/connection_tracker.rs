@@ -3,7 +3,7 @@ use std::{
     net::IpAddr,
 };
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use common_wasm::{
     analysis_messages::AnalysisInsights,
     evicting_hash_map::EvictingHashMap,
@@ -16,6 +16,7 @@ use libconntrack_wasm::{
     bidir_bandwidth_to_chartjs, traffic_stats::BidirectionalStats, AggregateStatEntry,
     AggregateStatKind, BidirBandwidthHistory, ConnectionKey, ConnectionMeasurements,
 };
+use linked_hash_map::LinkedHashMap;
 #[cfg(not(test))]
 use log::{debug, warn};
 
@@ -46,6 +47,10 @@ const MAX_ENTRIES_TO_EVICT: usize = 10;
 /// If a connection has not seen any packets in this many milliseconds, the connection is
 /// evicted. This is done regardless of the connection is open or closed.
 const TIME_WAIT_MS: i64 = 60_000;
+/// If an aggregated stat has not seen any packet in this many milliseconds, evict it.
+/// This should be greather than TIME_WAIT_MS. That way we ensure that only stats are
+/// evicted that don't have any connections
+const AGGREGATE_STAT_TIME_WAIT_MS: i64 = 300_000;
 
 pub type ConnectionTrackerSender = Sender<PerfMsgCheck<ConnectionTrackerMsg>>;
 pub type ConnectionTrackerReceiver = Receiver<PerfMsgCheck<ConnectionTrackerMsg>>;
@@ -320,7 +325,8 @@ pub struct ConnectionTracker<'a> {
     tx: ConnectionTrackerSender, // so we can tell others how to send msgs to us
     rx: ConnectionTrackerReceiver, // to read messages sent to us
     // used to track traffic grouped by, e.g., DNS destination
-    aggregate_traffic_stats: HashMap<AggregateStatKind, BidirectionalStats>,
+    aggregate_traffic_stats: LinkedHashMap<AggregateStatKind, BidirectionalStats>,
+    aggregate_traffic_stats_time_wait: Duration,
     stat_handles: ConnectionStatHandles,
     // TODO: merge the following StatHandles into the `stat_handle` field.
     /// Trackes number of successfully parsed packets. I.e., packets from
@@ -392,12 +398,18 @@ impl<'a> ConnectionTracker<'a> {
             tx,
             rx,
             // we always have at least the top-level ConnectionTracker traffic counters
-            aggregate_traffic_stats: HashMap::from([(
-                AggregateStatKind::ConnectionTracker,
-                BidirectionalStats::new(std::time::Duration::from_millis(
-                    MAX_BURST_RATE_TIME_WINDOW_MILLIS,
-                )),
-            )]),
+            aggregate_traffic_stats: {
+                let mut map = LinkedHashMap::new();
+                map.insert(
+                    AggregateStatKind::ConnectionTracker,
+                    BidirectionalStats::new(
+                        std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS),
+                        DateTime::<Utc>::UNIX_EPOCH,
+                    ),
+                );
+                map
+            },
+            aggregate_traffic_stats_time_wait: Duration::milliseconds(AGGREGATE_STAT_TIME_WAIT_MS),
             stat_handles: ConnectionStatHandles::new(&stats),
             sucessfully_parsed_packets: stats.add_stat(
                 "succesfully_parsed",
@@ -567,7 +579,7 @@ impl<'a> ConnectionTracker<'a> {
         //  But in a test, the first after-gap packet might be from the same connection and then if we evict
         // after handling the packet we would not evict that connection. Leading to test behavior that's
         // different from what one would normally see.
-        self.evict_connections(packet.timestamp);
+        self.evict_connections_and_aggregate_stats(packet.timestamp);
         match packet.to_connection_key(&self.local_addrs) {
             Ok((key, src_is_local)) => {
                 self.sucessfully_parsed_packets.bump();
@@ -603,7 +615,7 @@ impl<'a> ConnectionTracker<'a> {
                     self.pcap_to_wall_delay.clone(),
                 );
                 for group in connection.aggregate_groups() {
-                    if let Some(traffic_stats) = self.aggregate_traffic_stats.get_mut(group) {
+                    if let Some(traffic_stats) = self.aggregate_traffic_stats.get_refresh(group) {
                         traffic_stats.add_packet_with_time(src_is_local, pkt_len, pkt_timestamp);
                         traffic_stats.add_new_lost_bytes(
                             !src_is_local, // The side that lost the bytes, is the opposite of the one sending ACKs
@@ -669,7 +681,9 @@ impl<'a> ConnectionTracker<'a> {
     /// or b) check the connections that haven't seen any updates the longest, and evict all that
     /// have been in-active for more than `TIME_WAIT_SECONDS`. Evict at most `MAX_ENTRIES_TO_EVICT` in
     /// this case
-    fn evict_connections(&mut self, now: DateTime<Utc>) {
+    ///
+    /// Evict aggregate stats
+    fn evict_connections_and_aggregate_stats(&mut self, now: DateTime<Utc>) {
         // Size based eviction
         while self.connections.len() > self.max_connections {
             let (key, mut conn) = self.connections.pop_front().unwrap();
@@ -696,6 +710,29 @@ impl<'a> ConnectionTracker<'a> {
                 break;
             }
         }
+
+        // Aggregate stats evictions
+        let mut eviction_cnt = 0;
+        // make sure ConnectionTracker stats are at the end of the list and don't get evicted
+        self.aggregate_traffic_stats
+            .get_refresh(&AggregateStatKind::ConnectionTracker)
+            .expect("AggregateStatKind::ConnectionTracker should always be there")
+            .last_update_time = now;
+        while let Some((_kind, stat_entry)) = self.aggregate_traffic_stats.front() {
+            let elapsed = now - stat_entry.last_update_time;
+            if eviction_cnt < MAX_ENTRIES_TO_EVICT
+                && elapsed > self.aggregate_traffic_stats_time_wait
+            {
+                let (key, _) = self.aggregate_traffic_stats.pop_front().unwrap();
+                debug!(
+                    "Evicting aggregate stat {:?} from connection_tracker due to idle",
+                    key
+                );
+                eviction_cnt += 1;
+            } else {
+                break;
+            }
+        }
     }
 
     fn new_connection(&mut self, key: ConnectionKey, pkt_timestamp: DateTime<Utc>) {
@@ -705,6 +742,7 @@ impl<'a> ConnectionTracker<'a> {
             &mut self.aggregate_traffic_stats,
             AggregateStatKind::HostIp(key.remote_ip),
             &mut connection,
+            pkt_timestamp,
         );
 
         self.connections.insert(key, connection);
@@ -809,6 +847,7 @@ impl<'a> ConnectionTracker<'a> {
                                 &mut self.aggregate_traffic_stats,
                                 group,
                                 connection,
+                                self.last_packet_time,
                             );
                         }
                         Err(e) => warn!("Unparsible DNS name: {} :: {}", &remote_hostname, e),
@@ -874,7 +913,12 @@ impl<'a> ConnectionTracker<'a> {
                     // so we might double count some bytes.... Probably fine but
                     // something to be aware
                     let group = AggregateStatKind::Application(app_key);
-                    add_aggregate_group(&mut self.aggregate_traffic_stats, group, connection);
+                    add_aggregate_group(
+                        &mut self.aggregate_traffic_stats,
+                        group,
+                        connection,
+                        self.last_packet_time,
+                    );
                 }
                 connection.associated_apps = Some(application.associated_apps);
             } else {
@@ -924,6 +968,7 @@ impl<'a> ConnectionTracker<'a> {
                     entry.connections.push(m);
                 } else {
                     // else look up the traffic counters and add this connection to the new list
+                    // Don't update LRU for aggregate_traffic_stats!
                     if let Some(traffic_stats) = self.aggregate_traffic_stats.get_mut(&kind) {
                         entries.insert(
                             kind.clone(),
@@ -1009,18 +1054,20 @@ impl<'a> ConnectionTracker<'a> {
 /// in the context where we need to call it, the connection_tracker is already mutually
 /// borrowed.
 fn add_aggregate_group(
-    aggregate_stats: &mut HashMap<AggregateStatKind, BidirectionalStats>,
+    aggregate_stats: &mut LinkedHashMap<AggregateStatKind, BidirectionalStats>,
     group: AggregateStatKind,
     connection: &mut Connection,
+    timestamp: DateTime<Utc>,
 ) {
     // this is a HashSet, so a plain insert() if fine even if a name
     // already exists
     connection.aggregate_groups.insert(group.clone());
     aggregate_stats
         .entry(group)
-        .or_insert(BidirectionalStats::new(std::time::Duration::from_millis(
-            MAX_BURST_RATE_TIME_WINDOW_MILLIS,
-        )));
+        .or_insert(BidirectionalStats::new(
+            std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS),
+            timestamp,
+        ));
 }
 
 #[cfg(test)]
@@ -1656,6 +1703,21 @@ pub mod test {
         // it has a valid ProbeReport
         mock_prober.redirect_into_connection_tracker(&mut connection_tracker);
 
+        // expect the connection tracker stats and the AggregateStatKind::Host stat.
+        let remote_ip_in_trace = IpAddr::from_str("34.121.150.27").unwrap();
+        let agg_traffic_keys: HashSet<AggregateStatKind> = connection_tracker
+            .aggregate_traffic_stats
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(
+            agg_traffic_keys,
+            HashSet::from([
+                AggregateStatKind::ConnectionTracker,
+                AggregateStatKind::HostIp(remote_ip_in_trace)
+            ])
+        );
+
         // Create a packet from a different connection.
         let mut pkt_unrelated_conn_raw: Vec<u8> = Vec::new();
         etherparse::PacketBuilder::ethernet2(
@@ -1670,7 +1732,7 @@ pub mod test {
         .tcp(12345, 80, 42, 1024)
         .write(&mut pkt_unrelated_conn_raw, &[])
         .unwrap();
-        let pkt_unrelated_conn = OwnedParsedPacket::try_from_timestamp(
+        let mut pkt_unrelated_conn = OwnedParsedPacket::try_from_timestamp(
             pkt_unrelated_conn_raw,
             last_packet_time + Duration::milliseconds(TIME_WAIT_MS + 10),
         )
@@ -1683,7 +1745,7 @@ pub mod test {
 
         // and put the packet into connection tracker. The previous connection should
         // be evicted
-        connection_tracker.add(pkt_unrelated_conn);
+        connection_tracker.add(pkt_unrelated_conn.clone());
         assert_eq!(connection_tracker.connections.len(), 1);
         let evicted = evict_rx.try_recv().unwrap().skip_perf_check();
         use TopologyServerMessage::*;
@@ -1703,6 +1765,38 @@ pub mod test {
             .connections
             .get_no_lru(&unrelated_conn_key)
             .is_some());
+
+        // stats should not have been evicted yet
+        // expect the connection tracker stats and the AggregateStatKind::Host stat.
+        let agg_traffic_keys: HashSet<AggregateStatKind> = connection_tracker
+            .aggregate_traffic_stats
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(
+            agg_traffic_keys,
+            HashSet::from([
+                AggregateStatKind::ConnectionTracker,
+                AggregateStatKind::HostIp(remote_ip_in_trace),
+                AggregateStatKind::HostIp(IpAddr::from_str("192.168.1.2").unwrap()),
+            ])
+        );
+        // Test eviction for stats
+        pkt_unrelated_conn.timestamp =
+            last_packet_time + Duration::milliseconds(AGGREGATE_STAT_TIME_WAIT_MS + 10);
+        connection_tracker.add(pkt_unrelated_conn.clone());
+        let agg_traffic_keys: HashSet<AggregateStatKind> = connection_tracker
+            .aggregate_traffic_stats
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(
+            agg_traffic_keys,
+            HashSet::from([
+                AggregateStatKind::ConnectionTracker,
+                AggregateStatKind::HostIp(IpAddr::from_str("192.168.1.2").unwrap()),
+            ])
+        );
     }
 
     /// Tests that when a connection gets evicted we only send it to the storage server
@@ -1960,6 +2054,10 @@ pub mod test {
 
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
         let mut conn_track = mk_mock_connection_tracker(local_addrs);
+        // the trace we are using has some long idle periods in it. But we want the aggregate stats
+        // to keep counting, so set a high aggregate_traffic_stats_time_wait to make sure we don't evict
+        // stats
+        conn_track.aggregate_traffic_stats_time_wait = Duration::hours(24);
         let mut capture =
             pcap::Capture::from_file(test_dir("libconntrack", "tests/tcp-with-tx-loss.pcap"))
                 .unwrap();

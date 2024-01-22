@@ -361,14 +361,16 @@ impl TrafficStats {
 #[derive(Clone, Debug, PartialEq)]
 pub struct BidirectionalStats {
     burst_time_window: Duration,
+    pub last_update_time: DateTime<Utc>,
     pub rx: Option<TrafficStats>,
     pub tx: Option<TrafficStats>,
 }
 
 impl BidirectionalStats {
-    pub fn new(burst_time_window: Duration) -> BidirectionalStats {
+    pub fn new(burst_time_window: Duration, now: DateTime<Utc>) -> BidirectionalStats {
         BidirectionalStats {
             burst_time_window,
+            last_update_time: now,
             rx: None,
             tx: None,
         }
@@ -376,6 +378,7 @@ impl BidirectionalStats {
 
     /// return tx or create it
     fn tx_or_create(&mut self, timestamp: DateTime<Utc>) -> &mut TrafficStats {
+        self.last_update_time = timestamp;
         if self.tx.is_none() {
             self.tx = Some(TrafficStats::new(timestamp, self.burst_time_window));
         }
@@ -384,6 +387,7 @@ impl BidirectionalStats {
 
     /// return rx or create it
     fn rx_or_create(&mut self, timestamp: DateTime<Utc>) -> &mut TrafficStats {
+        self.last_update_time = timestamp;
         if self.rx.is_none() {
             self.rx = Some(TrafficStats::new(timestamp, self.burst_time_window));
         }
@@ -423,6 +427,7 @@ impl BidirectionalStats {
 
     /// call `advance_time` on both directions (if the exist)
     pub fn advance_time(&mut self, now: DateTime<Utc>) {
+        self.last_update_time = now;
         if let Some(s) = self.tx.as_mut() {
             s.advance_time(now)
         }
@@ -615,7 +620,7 @@ mod test {
     #[test]
     fn test_bidir_traffic_stats_summary_1() {
         let start = Utc::now();
-        let mut bds = BidirectionalStats::new(Duration::from_millis(10));
+        let mut bds = BidirectionalStats::new(Duration::from_millis(10), start);
         assert_eq!(bds.tx_stats_summary(start), TrafficStatsSummary::default());
         assert_eq!(bds.rx_stats_summary(start), TrafficStatsSummary::default());
 
@@ -674,7 +679,7 @@ mod test {
     #[test]
     fn test_bidir_traffic_stats_summary_2() {
         let start = Utc::now();
-        let mut bds = BidirectionalStats::new(Duration::from_millis(10));
+        let mut bds = BidirectionalStats::new(Duration::from_millis(10), start);
         assert_eq!(bds.tx_stats_summary(start), TrafficStatsSummary::default());
         assert_eq!(bds.rx_stats_summary(start), TrafficStatsSummary::default());
 
@@ -694,7 +699,7 @@ mod test {
     #[test]
     fn test_bidir_traffic_stats_summary_advance_time() {
         let start = Utc::now();
-        let mut bds = BidirectionalStats::new(Duration::from_millis(10));
+        let mut bds = BidirectionalStats::new(Duration::from_millis(10), start);
 
         let mut t = start;
         for _ in 1..=70 {
