@@ -114,6 +114,10 @@ pub enum ConnectionTrackerMsg {
         tx: mpsc::Sender<Vec<AggregateStatEntry>>,
         time_mode: TimeMode,
     },
+    GetHostTrafficCounters {
+        tx: mpsc::Sender<Vec<AggregateStatEntry>>,
+        time_mode: TimeMode,
+    },
     GetAppTrafficCounters {
         tx: mpsc::Sender<Vec<AggregateStatEntry>>,
         time_mode: TimeMode,
@@ -535,6 +539,13 @@ impl<'a> ConnectionTracker<'a> {
                     time_mode,
                 );
             }
+            GetHostTrafficCounters { tx, time_mode } => {
+                self.get_aggregate_traffic_counters(
+                    |kind| matches!(kind, AggregateStatKind::HostIp { .. }),
+                    tx,
+                    time_mode,
+                );
+            }
             AddConnectionUpdateListener { tx, key, desc } => {
                 self.add_connection_update_listener(tx, key, desc)
             }
@@ -689,7 +700,12 @@ impl<'a> ConnectionTracker<'a> {
 
     fn new_connection(&mut self, key: ConnectionKey, pkt_timestamp: DateTime<Utc>) {
         debug!("Tracking new connection: {}", &key);
-        let connection = Connection::new(key.clone(), pkt_timestamp, self.stat_handles.clone());
+        let mut connection = Connection::new(key.clone(), pkt_timestamp, self.stat_handles.clone());
+        add_aggregate_group(
+            &mut self.aggregate_traffic_stats,
+            AggregateStatKind::HostIp(key.remote_ip),
+            &mut connection,
+        );
 
         self.connections.insert(key, connection);
     }
@@ -889,6 +905,7 @@ impl<'a> ConnectionTracker<'a> {
         time_mode: TimeMode,
     ) {
         let mut entries: HashMap<AggregateStatKind, AggregateStatEntry> = HashMap::new();
+        let mut ip_to_hostname: HashMap<IpAddr, String> = HashMap::new();
         let now = self.get_current_timestamp(time_mode);
         for (_key, connection) in self.connections.iter_mut() {
             // we clone aggregate_groups here. If we don't we borrow `connection` immutable, and
@@ -896,6 +913,9 @@ impl<'a> ConnectionTracker<'a> {
             for kind in connection.aggregate_groups.clone() {
                 if !match_rule(&kind) {
                     continue;
+                }
+                if let Some(hostname) = connection.remote_hostname.as_ref() {
+                    ip_to_hostname.insert(connection.connection_key().remote_ip, hostname.clone());
                 }
                 let m = connection.to_connection_measurements(now, None);
                 // if we've already seen this kind before
@@ -909,6 +929,7 @@ impl<'a> ConnectionTracker<'a> {
                             kind.clone(),
                             AggregateStatEntry {
                                 kind: kind.clone(),
+                                comment: None,
                                 bandwidth: bidir_bandwidth_to_chartjs(
                                     traffic_stats.as_bidir_bandwidth_history(now),
                                 ),
@@ -920,6 +941,15 @@ impl<'a> ConnectionTracker<'a> {
                 }
             }
         }
+        // this is a bit hacky. For the AggregateKindHost:: we'd like to use the hostname if we have it
+        // and use the IP instead. Internally, it's stored with IP. So if we have any host kinds in
+        // `entries`, lets try to convert the IP to string
+        for (kind, entry) in &mut entries {
+            if let AggregateStatKind::HostIp(ip) = kind {
+                entry.comment = ip_to_hostname.get(ip).cloned();
+            }
+        }
+
         if let Err(e) = tx.try_send(entries.into_values().collect_vec()) {
             warn!(
                 "Failed to return the aggregate counters to their caller!?: {}",
@@ -1523,7 +1553,31 @@ pub mod test {
         let mut connections = connections_rx.recv().await.unwrap();
         assert_eq!(connections.len(), 1);
         let first_connection = connections.pop().unwrap();
-        assert_eq!(first_connection.remote_hostname, Some(test_hostname));
+        assert_eq!(
+            first_connection.remote_hostname,
+            Some(test_hostname.clone())
+        );
+
+        let (traffic_counter_tx, mut traffic_counter_rx) = mpsc::channel(1);
+        conn_track_tx
+            .try_send(PerfMsgCheck::new(
+                ConnectionTrackerMsg::GetHostTrafficCounters {
+                    tx: traffic_counter_tx,
+                    time_mode: TimeMode::PacketTime,
+                },
+            ))
+            .unwrap();
+        let stat_entries = tokio::time::timeout(
+            tokio::time::Duration::from_millis(500),
+            traffic_counter_rx.recv(),
+        )
+        .await
+        .expect("Failed to get a response in time")
+        .expect("Got None from the channel? Weird");
+        assert_eq!(stat_entries.len(), 1);
+        assert_eq!(stat_entries[0].kind, AggregateStatKind::HostIp(remote_ip));
+        assert_eq!(stat_entries[0].comment, Some(test_hostname));
+        assert_eq!(stat_entries[0].summary.tx.pkts, 1);
     }
 
     #[test]

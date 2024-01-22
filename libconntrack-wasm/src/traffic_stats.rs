@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, time::Duration};
+use std::{collections::HashMap, fmt::Display, net::IpAddr, time::Duration};
 
 use chrono::{DateTime, Utc};
 use common_wasm::{
@@ -16,12 +16,17 @@ use crate::{pretty_print_si_units, ConnectionMeasurements};
 pub enum AggregateStatKind {
     DnsDstDomain(String),
     Application(String),
+    HostIp(IpAddr),
     ConnectionTracker,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypeDef)]
 pub struct AggregateStatEntry {
     pub kind: AggregateStatKind,
+    /// Additional information. We hack it by storing the hostname in the
+    /// the comment field for AggregateStatKind::Host
+    #[serde(default)]
+    pub comment: Option<String>,
     pub bandwidth: Vec<ChartJsBandwidth>,
     pub summary: BidirTrafficStatsSummary,
     pub connections: Vec<ConnectionMeasurements>,

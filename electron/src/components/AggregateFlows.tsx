@@ -19,6 +19,8 @@ function getNameFromAggKind(kind: AggregateStatKind): string {
       return kind.name;
     case "Application":
       return kind.name;
+    case "HostIp":
+      return kind.name;
     case "ConnectionTracker":
       return "global";
     default:
