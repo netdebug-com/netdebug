@@ -34,7 +34,8 @@ const config: ForgeConfig = {
       // see https://stackoverflow.com/questions/70132291/electron-content-security-policy-error-when-connecting-to-my-api
       // #black-magic
       devContentSecurityPolicy:
-        "default-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* ws://localhost:*;",
+        "default-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* ws://localhost:*;" +
+        "frame-src 'self' *.topology.netdebug.com topology.netdebug.com",
       renderer: {
         config: rendererConfig,
         entryPoints: [

@@ -25,6 +25,7 @@ import FlowsLayout from "./layouts/FlowsLayout";
 import RouterDelays, { routerDelayLoader } from "./pages/RouteDelays";
 import { DefaultErrorElement } from "./components/DefaultErrorElement";
 import RttLatency, { rttLatencyLoader } from "./pages/RttLatency";
+import Webtest from "./pages/Webtest";
 
 const router = createHashRouter(
   createRoutesFromElements(
@@ -60,6 +61,11 @@ const router = createHashRouter(
         path="rtt_latency"
         element={<RttLatency />}
         loader={rttLatencyLoader}
+        errorElement={<DefaultErrorElement />}
+      />
+      <Route
+        path="webtest"
+        element={<Webtest />}
         errorElement={<DefaultErrorElement />}
       />
       <Route
