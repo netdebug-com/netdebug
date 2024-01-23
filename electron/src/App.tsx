@@ -23,6 +23,7 @@ import RootLayout from "./layouts/RootLayout";
 import FlowsLayout from "./layouts/FlowsLayout";
 import RouterDelays, { routerDelayLoader } from "./pages/RouteDelays";
 import { DefaultErrorElement } from "./components/DefaultErrorElement";
+import RttLatency, { rttLatencyLoader } from "./pages/RttLatency";
 
 const router = createHashRouter(
   createRoutesFromElements(
@@ -54,6 +55,12 @@ const router = createHashRouter(
           errorElement={<DefaultErrorElement />}
         />
       </Route>
+      <Route
+        path="rtt_latency"
+        element={<RttLatency />}
+        loader={rttLatencyLoader}
+        errorElement={<DefaultErrorElement />}
+      />
       <Route
         path="dns"
         element={<Dns />}

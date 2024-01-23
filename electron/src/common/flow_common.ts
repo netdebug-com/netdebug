@@ -1,6 +1,10 @@
 import { GridColDef } from "@mui/x-data-grid";
-import { prettyPrintSiUnits, sortCmpWithNull } from "../utils";
-import { AggregateStatEntry, TrafficStatsSummary } from "../netdebug_types";
+import { neverReached, prettyPrintSiUnits, sortCmpWithNull } from "../utils";
+import {
+  AggregateStatEntry,
+  AggregateStatKind,
+  TrafficStatsSummary,
+} from "../netdebug_types";
 
 const FLEX_VALUE_FOR_NUMERIC_COLS = 15;
 export function getDefaultRateGridColDef(unitSuffix: string): {
@@ -79,4 +83,20 @@ export function aggregateStatEntryDefaultSortFn(entries: AggregateStatEntry[]) {
       a.summary.rx.last_min_byte_rate,
     ),
   );
+}
+
+export function getNameFromAggKind(kind: AggregateStatKind): string {
+  switch (kind.tag) {
+    case "DnsDstDomain":
+      return kind.name;
+    case "Application":
+      return kind.name;
+    case "HostIp":
+      return kind.name;
+    case "ConnectionTracker":
+      return "global";
+    default:
+      // exhaustive switch trick.
+      neverReached(kind);
+  }
 }
