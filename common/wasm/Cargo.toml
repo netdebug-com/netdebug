@@ -9,7 +9,7 @@ edition = "2021"
 approx = { workspace = true }
 chrono = "0.4.26"
 itertools = "*"
-linked-hash-map = "0.5.6"
+linked-hash-map = { workspace = true }
 serde = { version = "1.0.164", features = ["derive"] }
 serde_json = "1.0.96"
 serde_with = { version = "3.4.0", features = ["chrono_0_4"] }

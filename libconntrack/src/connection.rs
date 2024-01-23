@@ -192,9 +192,10 @@ impl Connection {
             start_tracking_time: ts,
             last_packet_time: ts,
             remote_hostname: None,
-            traffic_stats: BidirectionalStats::new(std::time::Duration::from_millis(
-                MAX_BURST_RATE_TIME_WINDOW_MILLIS,
-            )),
+            traffic_stats: BidirectionalStats::new(
+                std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS),
+                ts,
+            ),
             // all connections are part of the connection tracker counter group
             aggregate_groups: HashSet::from([AggregateStatKind::ConnectionTracker]),
             local_tcp_state: None,

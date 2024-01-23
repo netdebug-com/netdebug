@@ -1699,6 +1699,7 @@ dependencies = [
  "libc",
  "libconntrack-wasm",
  "libproc",
+ "linked-hash-map",
  "log",
  "mac_address 1.1.5 (git+https://github.com/netdebug-com/mac_address?branch=master)",
  "net-route",
