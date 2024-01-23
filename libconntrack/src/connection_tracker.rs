@@ -622,11 +622,11 @@ impl<'a> ConnectionTracker<'a> {
                             conn_update_return.new_lost_bytes,
                             pkt_timestamp,
                         );
-                        // NOTE, tracking RTT for per-application, per-dns-domain, and conn-tracker aggregat_traffic_stats doesn't
-                        // make sense (as there's no expectation that these RTTs should be similar). So we are not adding
-                        // them.
-
-                        // TODO: add aggregate_traffic_stats per destination IP
+                        traffic_stats.add_rtt_sample(
+                            !src_is_local, // The side that has the RTT, is the opposite of the one sending ACKs
+                            conn_update_return.rtt_sample,
+                            pkt_timestamp,
+                        );
                     } else {
                         warn!(
                             "Group counters out of sync between connection {} and tracker: missing {:?}", 
@@ -1073,6 +1073,7 @@ fn add_aggregate_group(
 #[cfg(test)]
 pub mod test {
     use core::panic;
+    use std::net::Ipv4Addr;
     use std::str::FromStr;
     use std::time::Instant;
 
@@ -2016,26 +2017,76 @@ pub mod test {
         assert_eq!(rx_rtt_stat.num_samples(), 2);
         assert_relative_eq!(rx_rtt_stat.mean(), 0.3605, epsilon = 1e-5);
 
+        //=====================
         // Get DNS aggregate
+        //=====================
         let (tx, mut rx) = mpsc::channel(1);
         conn_track.handle_one_msg(ConnectionTrackerMsg::GetDnsTrafficCounters {
             tx,
             time_mode: TimeMode::PacketTime,
         });
-        let agg_stat_entry = rx
+        let dns_agg_stat_entry = rx
             .try_recv()
             .expect("No response for GetDnsTrafficCounters");
-        assert_eq!(agg_stat_entry.len(), 1);
+        assert_eq!(dns_agg_stat_entry.len(), 1);
         assert_eq!(
-            agg_stat_entry[0].kind,
+            dns_agg_stat_entry[0].kind,
             AggregateStatKind::DnsDstDomain("example.com".to_owned())
         );
         // Make sure that we actually tracked something for this domain
-        assert!(agg_stat_entry[0].summary.tx.bytes > 0);
-        assert!(agg_stat_entry[0].summary.rx.bytes > 0);
-        // ... but we are not tracking RTT for dns domains
-        assert_eq!(agg_stat_entry[0].summary.tx.rtt_stats_ms, None);
-        assert_eq!(agg_stat_entry[0].summary.rx.rtt_stats_ms, None);
+        assert!(dns_agg_stat_entry[0].summary.tx.bytes > 0);
+        assert!(dns_agg_stat_entry[0].summary.rx.bytes > 0);
+
+        // while RTT stats per destination domain don't make a lot of sense (could
+        // be geographically very different hosts for this domain), we track the RTT
+        // for all aggregation groups. So test if they are as expected. This will test
+        // that aggregated stats are properly updated
+        let rx_rtt_stat = dns_agg_stat_entry[0]
+            .summary
+            .rx
+            .rtt_stats_ms
+            .clone()
+            .expect("rx_rtt_stat should be Some(...)");
+        assert_eq!(rx_rtt_stat.num_samples(), 2);
+        assert_relative_eq!(rx_rtt_stat.mean(), 0.3605, epsilon = 1e-5);
+        let tx_rtt_stat = dns_agg_stat_entry[0]
+            .summary
+            .tx
+            .rtt_stats_ms
+            .clone()
+            .expect("tx_rtt_stat should be Some(...)");
+        // see connection::test::test_rtt_samples() for why we check these values
+        assert_eq!(tx_rtt_stat.num_samples(), 4);
+        assert_relative_eq!(tx_rtt_stat.mean(), 55.81775, epsilon = 1e-5);
+
+        //=====================
+        // Get Host aggregate
+        //=====================
+        let (tx, mut rx) = mpsc::channel(1);
+        conn_track.handle_one_msg(ConnectionTrackerMsg::GetHostTrafficCounters {
+            tx,
+            time_mode: TimeMode::PacketTime,
+        });
+        let host_agg_stat_entry = rx
+            .try_recv()
+            .expect("No response for GetDnsTrafficCounters");
+        assert_eq!(host_agg_stat_entry.len(), 1);
+        assert_eq!(
+            host_agg_stat_entry[0].kind,
+            AggregateStatKind::HostIp(IpAddr::V4(Ipv4Addr::new(34, 121, 150, 27)))
+        );
+        assert_eq!(
+            host_agg_stat_entry[0].comment,
+            Some("somewhere.example.com".to_owned())
+        );
+        assert_eq!(
+            host_agg_stat_entry[0].summary.tx.rtt_stats_ms,
+            dns_agg_stat_entry[0].summary.tx.rtt_stats_ms
+        );
+        assert_eq!(
+            host_agg_stat_entry[0].summary.rx.rtt_stats_ms,
+            dns_agg_stat_entry[0].summary.rx.rtt_stats_ms
+        );
     }
 
     #[test]

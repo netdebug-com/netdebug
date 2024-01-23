@@ -8,6 +8,7 @@ const TAB_NAV_INFO = [
   { label: "Bandwidth", to: "/bandwidth" },
   { label: "DNS", to: "/dns" },
   { label: "Flows", to: "/flows" },
+  { label: "Ping", to: "/rtt_latency" },
   { label: "Router Delays", to: "/router_delays" },
   { label: "Counters", to: "/counters" },
 ];

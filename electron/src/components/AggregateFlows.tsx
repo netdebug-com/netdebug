@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { AggregateStatEntry, AggregateStatKind } from "../netdebug_types";
-import { dataGridDefaultSxProp, neverReached } from "../utils";
+import { dataGridDefaultSxProp } from "../utils";
 import { SwitchHelper } from "../components/SwitchHelper";
 import { Box } from "@mui/material";
 import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
@@ -8,26 +8,11 @@ import {
   calculateLossPercentage,
   getDefaultPercentageGridColDef,
   getDefaultRateGridColDef as getDefaultGridColDefWithUnits,
+  getNameFromAggKind,
 } from "../common/flow_common";
 import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../usePeriodicRefresh";
 import { ErrorMessage } from "./ErrorMessage";
-
-function getNameFromAggKind(kind: AggregateStatKind): string {
-  switch (kind.tag) {
-    case "DnsDstDomain":
-      return kind.name;
-    case "Application":
-      return kind.name;
-    case "HostIp":
-      return kind.name;
-    case "ConnectionTracker":
-      return "global";
-    default:
-      // exhaustive switch trick.
-      neverReached(kind);
-  }
-}
 
 const columns: GridColDef[] = [
   {
