@@ -370,6 +370,10 @@ pub fn extract_tcp_timestamp(tcph: &TcpHeader) -> Option<(TcpTimestamp, TcpTimes
 
 pub fn tcp_payload_len(packet: &OwnedParsedPacket, tcp: &TcpHeader) -> u16 {
     // NOTE: we can't just use packet.payload.len() b/c we might have a partial capture
+    // BUT, with Tcp Segment Offloading (TSO, or really any offload), we might have
+    // an ip6.payload_length of zero because the hw will compute it.  In any case,
+    // return the max of payload.length() and the ip.length - tcp header to account
+    // for both cases
     match &packet.ip {
         None => 0,
         Some(IpHeader::Version4(ip4, _)) => {
@@ -379,14 +383,13 @@ pub fn tcp_payload_len(packet: &OwnedParsedPacket, tcp: &TcpHeader) -> u16 {
             {
                 Some(x) => x,
                 None => {
-                    warn!(
-                                "Malformed TCP packet with ip4.payload ({}) < ip4.header_len({}) + tcp.header_len ({}) :: {:?}",
+                    debug!(
+                                "Malformed TCP packet with ip4.payload ({}) < ip4.header_len({}) + tcp.header_len ({}) :: assuming TSO and adjusting ",
                                 ip4.total_len(),
                                 ip4.header_len(),
                                 tcp.header_len(),
-                                &packet
                         );
-                    0
+                    packet.payload.len() as u16
                 }
             }
         }
@@ -394,13 +397,12 @@ pub fn tcp_payload_len(packet: &OwnedParsedPacket, tcp: &TcpHeader) -> u16 {
             match ip6.payload_length.checked_sub(tcp.header_len()) {
                 Some(x) => x,
                 None => {
-                    warn!(
-                        "Malformed TCP packet with ip6.payload ({}) < tcp.header_len ({}) :: {:?}",
+                    debug!(
+                        "Malformed TCP packet with ip6.payload ({}) < tcp.header_len ({}) :: assuming TSO and adjusting",
                         ip6.payload_length,
                         tcp.header_len(),
-                        &packet
                     );
-                    0
+                    packet.payload.len() as u16
                 }
             }
         }
