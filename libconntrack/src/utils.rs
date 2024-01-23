@@ -2,7 +2,6 @@ use std::net::IpAddr;
 
 use chrono::{DateTime, Utc};
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration};
-use etherparse::IpHeader;
 use log::warn;
 use tokio::{
     sync::mpsc::{Receiver, Sender},
@@ -10,18 +9,6 @@ use tokio::{
 };
 
 use crate::owned_packet::OwnedParsedPacket;
-
-pub fn etherparse_ipheaders2ipaddr(ip: &Option<IpHeader>) -> Result<(IpAddr, IpAddr), pcap::Error> {
-    match ip {
-        Some(IpHeader::Version4(ip4, _)) => {
-            Ok((IpAddr::from(ip4.source), IpAddr::from(ip4.destination)))
-        }
-        Some(IpHeader::Version6(ip6, _)) => {
-            Ok((IpAddr::from(ip6.source), IpAddr::from(ip6.destination)))
-        }
-        None => Err(pcap::Error::PcapError("No IP address to parse".to_string())),
-    }
-}
 
 /***
  * Given a remote IP address, figure out which local ip the local host

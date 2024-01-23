@@ -205,10 +205,6 @@ impl<'a> ConnectionTracker<'a> {
         target_ip: IpAddr,
         tx: Sender<(IpAddr, MacAddress)>,
     ) {
-        if target_ip.is_ipv6() {
-            warn!("Don't have NDP neighbor lookup support yet!");
-            return;
-        }
         // do we have the target Mac already cached?
         if self
             .neighbor_cache
@@ -354,7 +350,7 @@ pub struct ConnectionTracker<'a> {
     /// L3 and/or L4 header or unhandled ICMP.
     no_conn_key_packets: StatHandle,
     /// Track that packets with ethertype of Arp
-    arp_packets: StatHandle,
+    arp_or_ndp_packets: StatHandle,
     /// Tracks ICMP packets (of type we handle) from which we failed to extract the inner
     /// packet's ConnectionKey
     icmp_extract_failed_packet: StatHandle,
@@ -435,7 +431,11 @@ impl<'a> ConnectionTracker<'a> {
                 [StatType::COUNT],
             ),
             no_conn_key_packets: stats.add_stat("no_conn_key", Units::Packets, [StatType::COUNT]),
-            arp_packets: stats.add_stat("arp_packets", Units::Packets, [StatType::COUNT]),
+            arp_or_ndp_packets: stats.add_stat(
+                "arp_or_ndp_packets",
+                Units::Packets,
+                [StatType::COUNT],
+            ),
             icmp_extract_failed_packet: stats.add_stat(
                 "icmp_extract_failed",
                 Units::Packets,
@@ -685,9 +685,15 @@ impl<'a> ConnectionTracker<'a> {
             Err(ConnectionKeyError::IgnoredPacket) => self.no_conn_key_packets.bump(),
             Err(ConnectionKeyError::NoLocalAddr) => self.not_local_packets.bump(),
             Err(ConnectionKeyError::Arp) => {
-                self.arp_packets.bump();
+                self.arp_or_ndp_packets.bump();
                 if let Err(e) = self.neighbor_cache.process_arp_packet(packet) {
                     warn!("Ignoring failed to parse Arp packet: {}", e);
+                }
+            }
+            Err(ConnectionKeyError::NdpNeighbor) => {
+                self.arp_or_ndp_packets.bump();
+                if let Err(e) = self.neighbor_cache.process_ndp_packet(packet) {
+                    warn!("Ignoring failed to parse NDP packet: {}", e);
                 }
             }
         }

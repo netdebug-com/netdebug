@@ -1,12 +1,18 @@
-use std::{error::Error, net::IpAddr};
+use std::{
+    error::Error,
+    io::{Cursor, Write},
+    net::IpAddr,
+};
 
 use common_wasm::PROBE_MAX_TTL;
-use etherparse::{PacketHeaders, TcpHeader, TransportHeader};
+use etherparse::{icmpv6::TYPE_NEIGHBOR_SOLICITATION, PacketHeaders, TcpHeader, TransportHeader};
 use log::{debug, warn};
 use tokio::sync::mpsc::{channel, Sender};
 
 use crate::{
-    neighbor_cache::ArpPacket, owned_packet::OwnedParsedPacket, pcap::RawSocketWriter,
+    neighbor_cache::{ArpPacket, MIN_NDP_SIZE},
+    owned_packet::OwnedParsedPacket,
+    pcap::RawSocketWriter,
     utils::PerfMsgCheck,
 };
 
@@ -78,23 +84,58 @@ pub fn prober_handle_one_message(raw_sock: &mut dyn RawSocketWriter, message: Pr
             local_mac,
             local_ip,
             target_ip,
-        } => send_arp(raw_sock, local_ip, local_mac, target_ip),
+        } => send_neighbor_discovery(raw_sock, local_ip, local_mac, target_ip),
     }
 }
 
-fn send_arp(
+fn send_neighbor_discovery(
     raw_sock: &mut dyn RawSocketWriter,
     local_ip: IpAddr,
     local_mac: [u8; 6],
     target_ip: IpAddr,
 ) {
     // can't think of why this should ever fail, so panic
-    let arp_request = ArpPacket::new_request(local_mac, local_ip, target_ip)
-        .expect("valid IP/mac for Arp Request");
-    let pkt = arp_request.to_ethernet_pkt().unwrap();
+    let pkt = match (local_ip.is_ipv4(), target_ip.is_ipv4()) {
+        (true, true) => {
+            let arp_request = ArpPacket::new_request(local_mac, local_ip, target_ip)
+                .expect("valid IP/mac for Arp Request");
+            arp_request.to_ethernet_pkt().unwrap()
+        }
+        (false, false) => make_icmp6_neighbor_discovery_solicit(local_ip, local_mac, target_ip),
+        _ => {
+            panic!("Tried to call Prober::send_arp with a mixed v4/v6 Ip address combo!")
+        }
+    };
     if let Err(e) = raw_sock.sendpacket(&pkt) {
         warn!("Failed to send out Arp request from Prober: {}", e);
     }
+}
+
+const ICMP6_NDP_MULTICAST_MAC_ADDR: [u8; 6] = [0x33, 0x33, 0xff, 0x00, 0x00, 0x53];
+const ICMP6_NDP_MULTICAST_IP_ADDR: [u8; 16] = [
+    0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xff, 0x00, 0x00, 0x53,
+];
+
+fn make_icmp6_neighbor_discovery_solicit(
+    local_ip: IpAddr,
+    local_mac: [u8; 6],
+    target_ip: IpAddr,
+) -> Vec<u8> {
+    let mut cursor = Cursor::new([0; MIN_NDP_SIZE]); // just the size of the target IPv6 addr
+    let (local_ip_buf, target_ip_buf) = match (local_ip, target_ip) {
+        (IpAddr::V6(local), IpAddr::V6(target)) => (local.octets(), target.octets()),
+        _ => panic!("Called make_icmp6_neighbor_discovery with a v4 target adddress"),
+    };
+    cursor
+        .write_all(&target_ip_buf)
+        .expect("Bad length for icmp6 ndp!?");
+    let payload = cursor.into_inner();
+    let builder = etherparse::PacketBuilder::ethernet2(local_mac, ICMP6_NDP_MULTICAST_MAC_ADDR)
+        .ipv6(local_ip_buf, ICMP6_NDP_MULTICAST_IP_ADDR, 64)
+        .icmpv6_raw(TYPE_NEIGHBOR_SOLICITATION, 0, [0, 0, 0, 0]);
+    let mut pkt = Vec::with_capacity(builder.size(payload.len()));
+    builder.write(&mut pkt, &payload).unwrap(); // unwrap ok; unless our math is bad
+    pkt
 }
 
 pub fn make_ping_icmp_echo_request(
@@ -269,7 +310,7 @@ pub mod test {
     use etherparse::{IpHeader, PacketBuilder};
     use mac_address::MacAddress;
 
-    use crate::neighbor_cache::ArpOperation;
+    use crate::neighbor_cache::{self, ArpOperation, NeighborCache};
     use crate::owned_packet::OwnedParsedPacket;
     use crate::pcap::MockRawSocketProber;
 
@@ -378,7 +419,7 @@ pub mod test {
         let local_mac = [0, 1, 2, 3, 4, 5];
         let local_ip = IpAddr::from_str("192.168.1.34").unwrap();
         let target_ip = IpAddr::from_str("192.168.1.1").unwrap();
-        send_arp(&mut mock_raw_sock, local_ip, local_mac, target_ip);
+        send_neighbor_discovery(&mut mock_raw_sock, local_ip, local_mac, target_ip);
         // make sure we got 1 packet
         assert_eq!(mock_raw_sock.captured.len(), 1);
         let pkt =
@@ -388,5 +429,25 @@ pub mod test {
         assert_eq!(arp.get_target_ip().unwrap(), target_ip);
         assert_eq!(arp.get_sender_mac().unwrap(), MacAddress::from(local_mac));
         assert_eq!(arp.operation, ArpOperation::Request);
+    }
+
+    #[test]
+    fn test_send_ndp_request() {
+        let mut mock_raw_sock = MockRawSocketProber::new();
+        let local_mac = [0, 1, 2, 3, 4, 5];
+        let local_ip = IpAddr::from_str("2600:1700:5b20:4e10:78eb:ea4d:7d28:8d7").unwrap();
+        let target_ip = IpAddr::from_str("2600:1700:5b20:4e10::2b").unwrap();
+        send_neighbor_discovery(&mut mock_raw_sock, local_ip, local_mac, target_ip);
+        // make sure we got 1 packet
+        assert_eq!(mock_raw_sock.captured.len(), 1);
+        let pkt =
+            OwnedParsedPacket::try_from_fake_time(mock_raw_sock.captured.pop().unwrap()).unwrap();
+        let mut neighbor_cache = NeighborCache::new(10);
+        neighbor_cache.process_ndp_packet(pkt).unwrap();
+        neighbor_cache::test::assert_learned(
+            &mut neighbor_cache,
+            local_ip,
+            MacAddress::from(local_mac),
+        );
     }
 }
