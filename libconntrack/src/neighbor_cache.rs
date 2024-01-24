@@ -1,4 +1,6 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use chrono::{DateTime, Utc};
+use libconntrack_wasm::ExportedNeighborState;
 use log::warn;
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
@@ -27,9 +29,15 @@ pub enum LookupMacByIpResult {
     NotFound,
 }
 
+#[derive(Clone, Debug)]
+pub struct NeighborState {
+    pub mac: MacAddress,
+    pub learn_time: DateTime<Utc>,
+}
+
 // NOTE: can't derive Clone/Debug/Default due to EvictingHashMap
 pub struct NeighborCache<'a> {
-    pub ip2mac: EvictingHashMap<'a, IpAddr, MacAddress>,
+    pub ip2mac: EvictingHashMap<'a, IpAddr, NeighborState>,
     /// Keep a list of agents that want to get updates about each IP to Mac address binding
     /// The 'String' is a human-readible identifier for who is listening; needs to be unique across
     /// the program ]
@@ -52,7 +60,9 @@ impl<'a> NeighborCache<'a> {
     /// LRU info, so this function needs to be mutable even though the
     /// returned value is immutable
     pub fn lookup_mac_by_ip(&mut self, ip: &IpAddr) -> Option<MacAddress> {
-        self.ip2mac.get_mut(ip).map(|ip| *ip)
+        self.ip2mac
+            .get_mut(ip)
+            .map(|neighbor_state| neighbor_state.mac)
     }
 
     /// Try to lookup this IP: if it's there, send it on the tx queue.
@@ -107,18 +117,37 @@ impl<'a> NeighborCache<'a> {
         // parse it
         let arp = ArpPacket::from_wire(&packet.payload)?;
         // and learn all of the addresses we can
-        self.learn(&arp.get_sender_ip(), &arp.get_sender_mac());
-        self.learn(&arp.get_target_ip(), &arp.get_target_mac());
+        self.learn(
+            &arp.get_sender_ip(),
+            &arp.get_sender_mac(),
+            packet.timestamp,
+        );
+        self.learn(
+            &arp.get_target_ip(),
+            &arp.get_target_mac(),
+            packet.timestamp,
+        );
 
         Ok(())
     }
 
     /// if both IP and Mac are defined, add them to our mapping
-    pub(crate) fn learn(&mut self, ip: &Option<IpAddr>, mac: &Option<MacAddress>) {
+    pub(crate) fn learn(
+        &mut self,
+        ip: &Option<IpAddr>,
+        mac: &Option<MacAddress>,
+        learn_time: DateTime<Utc>,
+    ) {
         // TODO: should we record the time here?  Packet vs. Realtime param needed
         // add this now and improve later
         if let (Some(ip), Some(mac)) = (ip, mac) {
-            self.ip2mac.insert(*ip, *mac);
+            self.ip2mac.insert(
+                *ip,
+                NeighborState {
+                    mac: *mac,
+                    learn_time,
+                },
+            );
             if let Some(list) = self.pending_lookups.get_mut(ip) {
                 // updated anyone waiting for this ip --> mac mapping
                 for (identifier, tx) in list {
@@ -134,6 +163,18 @@ impl<'a> NeighborCache<'a> {
             }
         }
         // else do nothing
+    }
+
+    /// Write out a snapshot of our neighbor table when asked, probably for GUI
+    pub(crate) fn export_neighbors(&self) -> Vec<libconntrack_wasm::ExportedNeighborState> {
+        self.ip2mac
+            .iter()
+            .map(|(ip, neighbor_state)| ExportedNeighborState {
+                ip: *ip,
+                mac: neighbor_state.mac.to_string(),
+                learn_time: neighbor_state.learn_time,
+            })
+            .collect()
     }
 }
 

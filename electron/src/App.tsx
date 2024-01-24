@@ -9,6 +9,7 @@ import {
 import Home from "./pages/Home";
 import Bandwidth, { bandwidthLoader } from "./pages/Bandwidth";
 import Dns, { dnsCacheLoader } from "./pages/Dns";
+import Devices, { devicesLoader } from "./pages/Devices";
 import Counters, { countersLoader } from "./pages/Counters";
 import Flows, { flowsLoader } from "./pages/Flows";
 import FlowsByApplication, {
@@ -65,6 +66,12 @@ const router = createHashRouter(
         path="dns"
         element={<Dns />}
         loader={dnsCacheLoader}
+        errorElement={<DefaultErrorElement />}
+      />
+      <Route
+        path="devices"
+        element={<Devices />}
+        loader={devicesLoader}
         errorElement={<DefaultErrorElement />}
       />
       <Route

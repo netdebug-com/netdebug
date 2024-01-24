@@ -653,6 +653,7 @@ mod test {
     use tokio::sync::mpsc::channel;
 
     use crate::{
+        neighbor_cache::NeighborState,
         pcap::MockRawSocketProber,
         prober::{make_ping_icmp_echo_reply, make_ping_icmp_echo_request},
         utils::etherparse_ipheaders2ipaddr,
@@ -711,10 +712,13 @@ mod test {
         let mut mock_connection_tracker =
             crate::connection_tracker::test::mk_mock_connection_tracker(HashSet::from([local_ip]));
         // pre-cache the gateway's Mac in the neighbor_cache
-        mock_connection_tracker
-            .neighbor_cache
-            .ip2mac
-            .insert(gateway, MacAddress::from(gateway_mac));
+        mock_connection_tracker.neighbor_cache.ip2mac.insert(
+            gateway,
+            NeighborState {
+                mac: MacAddress::from(gateway_mac),
+                learn_time: Utc::now(),
+            },
+        );
         let mut mock_network_interface_state =
             NetworkInterfaceState::mk_mock("test".to_string(), Utc::now());
         let (ping_listener_tx, mut ping_listener_rx) = channel(10);

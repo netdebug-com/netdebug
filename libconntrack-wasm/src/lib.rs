@@ -303,6 +303,14 @@ impl NetworkInterfaceState {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
+pub struct ExportedNeighborState {
+    pub ip: IpAddr,
+    pub mac: String,
+    #[type_def(type_of = "String")]
+    pub learn_time: DateTime<Utc>,
+}
+
 #[cfg(test)]
 mod test {
 
