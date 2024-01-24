@@ -5,6 +5,7 @@ import { useMatchNavInfo } from "../router_utils";
 
 const TAB_NAV_INFO = [
   { label: "Home", to: "/", exactMatch: true },
+  { label: "Local", to: "/local_network" },
   { label: "Bandwidth", to: "/bandwidth" },
   { label: "DNS", to: "/dns" },
   { label: "Devices", to: "/devices" },

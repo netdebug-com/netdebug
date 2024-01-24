@@ -3,3 +3,5 @@ target/
 *.log
 logs/
 *.sqlite3
+.timescaledb_auth
+.github_access_token

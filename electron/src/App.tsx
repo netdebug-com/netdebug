@@ -9,6 +9,7 @@ import {
 import Home from "./pages/Home";
 import Bandwidth, { bandwidthLoader } from "./pages/Bandwidth";
 import Dns, { dnsCacheLoader } from "./pages/Dns";
+import LocalNetwork, { localNetworkLoader } from "./pages/LocalNetwork";
 import Devices, { devicesLoader } from "./pages/Devices";
 import Counters, { countersLoader } from "./pages/Counters";
 import Flows, { flowsLoader } from "./pages/Flows";
@@ -66,6 +67,12 @@ const router = createHashRouter(
       <Route
         path="webtest"
         element={<Webtest />}
+        errorElement={<DefaultErrorElement />}
+      />
+      <Route
+        path="local_network"
+        element={<LocalNetwork />}
+        loader={localNetworkLoader}
         errorElement={<DefaultErrorElement />}
       />
       <Route
