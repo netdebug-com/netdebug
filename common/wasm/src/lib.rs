@@ -238,14 +238,14 @@ impl ProbeReportEntry {
                 in_timestamp_ms: _,
                 src_ip,
                 comment: _,
-            } => Some(*src_ip),
-            RouterReplyNoProbe {
+            }
+            | RouterReplyNoProbe {
                 ttl: _,
                 in_timestamp_ms: _,
-                src_ip: _,
+                src_ip,
                 comment: _,
-            }
-            | NoReply {
+            } => Some(*src_ip),
+            NoReply {
                 ttl: _,
                 out_timestamp_ms: _,
                 comment: _,
