@@ -40,7 +40,7 @@ pub struct WebServerContext {
     pub connection_tracker: ConnectionTrackerSender,
     pub topology_server: TopologyServerSender,
     pub counter_registries: SharedExportedStatRegistries,
-    pub remotedb_client: RemoteDBClientSender,
+    pub remotedb_client: Option<RemoteDBClientSender>,
 }
 
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
@@ -96,13 +96,19 @@ impl WebServerContext {
         let (tx, rx) = tokio::sync::mpsc::channel(MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
         let (topology_server_tx, topology_server_rx) =
             tokio::sync::mpsc::channel(MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE);
-        let remotedb_client = RemoteDBClient::spawn(
-            args.timescaledb_auth_file.clone(),
-            MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE,
-            Duration::from_secs(5),
-            counter_registries.new_registry("remotedb_client"),
-        )
-        .unwrap();
+        let remotedb_client = if args.no_timescaledb {
+            None
+        } else {
+            Some(
+                RemoteDBClient::spawn(
+                    args.timescaledb_auth_file.clone(),
+                    MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE,
+                    Duration::from_secs(5),
+                    counter_registries.new_registry("remotedb_client"),
+                )
+                .unwrap(),
+            )
+        };
         let context = WebServerContext {
             user_db: UserDb::new(),
             html_root: args.html_root.clone(),
@@ -217,6 +223,10 @@ pub struct Args {
     /// The path to the TimescaleDB Cloud service auth credential
     #[arg(long, default_value = ".timescaledb_auth")]
     pub timescaledb_auth_file: String,
+
+    /// If set, the remote timescaledb will not be used.
+    #[arg(long, default_value_t = false)]
+    pub no_timescaledb: bool,
 }
 
 pub type Context = Arc<RwLock<WebServerContext>>;
@@ -315,7 +325,7 @@ pub mod test {
             topology_server: topology_server_tx,
             max_connections_per_tracker: 4096,
             counter_registries,
-            remotedb_client,
+            remotedb_client: Some(remotedb_client),
         }))
     }
 }
