@@ -26,6 +26,8 @@ pub async fn make_webserver_http_routes(
 
     let login = make_login_route(&context).with(warp_log(|i| custom_logger1("login", i)));
     let webtest = make_webtest_route(&context).with(warp_log(|i| custom_logger1("webtest", i)));
+    let webtest_no_auth = make_webtest_no_auth_route(&context, &html_root)
+        .with(warp_log(|i| custom_logger1("webtest_no_auth", i)));
     let webclient =
         make_webclient_route(&wasm_root).with(warp_log(|i| custom_logger1("webclient", i)));
     let webclient_ws =
@@ -50,6 +52,7 @@ pub async fn make_webserver_http_routes(
     // it's in this order to make sure the cookie auth works right
 
     webtest
+        .or(webtest_no_auth)
         .or(desktop_ws)
         .or(webclient_ws)
         .or(counters)
@@ -167,6 +170,16 @@ fn make_webtest_route(
         .and(with_context(context))
         .and(cookie(COOKIE_LOGIN_NAME))
         .and_then(webtest)
+}
+
+// Temp. hack so we can access the webtewst from the desktop
+fn make_webtest_no_auth_route(
+    _context: &Context,
+    html_root: &String,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    warp::path("webtest_8338550042") // just a random string. High security ;-)
+        .and(warp::get())
+        .and(warp::fs::file(format!("{}/webtest.html", html_root)))
 }
 
 pub fn make_webclient_route(

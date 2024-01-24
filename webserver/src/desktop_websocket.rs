@@ -74,7 +74,7 @@ pub async fn handle_desktop_websocket(
 
 async fn handle_desktop_message(
     topology_server: &TopologyServerSender,
-    remotedb_client: &RemoteDBClientSender,
+    remotedb_client: &Option<RemoteDBClientSender>,
     msg: DesktopToTopologyServer,
     ws_tx: &Sender<TopologyServerToDesktop>,
     user_agent: &str,
@@ -99,33 +99,41 @@ async fn handle_desktop_message(
 }
 
 async fn handle_push_counters(
-    remotedb_client: &RemoteDBClientSender,
+    remotedb_client: &Option<RemoteDBClientSender>,
     timestamp: chrono::prelude::DateTime<chrono::prelude::Utc>,
     counters: indexmap::IndexMap<String, u64>,
     addr: &SocketAddr,
     os: String,
     version: String,
 ) {
-    debug!(
-        "Got {} counters from {}  at {} - OS {} version {} : TODO - store them!",
-        counters.len(),
-        addr,
-        timestamp,
-        os,
-        version
-    );
-    send_or_log_async!(
-        remotedb_client,
-        "handle_push_counters",
-        RemoteDBClientMessages::StoreCounters {
-            counters,
-            source: addr.to_string(), // TODO: replace this with an obfuscated client identifier!
-            time: timestamp,
+    if let Some(remotedb_client) = remotedb_client {
+        debug!(
+            "Got {} counters from {}  at {} - OS {} version {} : TODO - store them!",
+            counters.len(),
+            addr,
+            timestamp,
             os,
             version
-        }
-    )
-    .await;
+        );
+        send_or_log_async!(
+            remotedb_client,
+            "handle_push_counters",
+            RemoteDBClientMessages::StoreCounters {
+                counters,
+                source: addr.to_string(), // TODO: replace this with an obfuscated client identifier!
+                time: timestamp,
+                os,
+                version
+            }
+        )
+        .await;
+    } else {
+        debug!(
+            "Got {} counters from {}. NOT STORING THEM -- NO REMOTE DB CONFIGURED",
+            counters.len(),
+            addr,
+        );
+    }
 }
 
 async fn handle_infer_congestion(
