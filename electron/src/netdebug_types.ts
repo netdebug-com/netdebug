@@ -470,4 +470,5 @@ export type ExportedNeighborState = {
     "ip": string;
     "mac": string;
     "learn_time": string;
+    "vendor_oui": (string | null);
 };

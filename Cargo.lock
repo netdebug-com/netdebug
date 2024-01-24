@@ -841,7 +841,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "common-wasm",
- "itertools 0.11.0",
+ "itertools 0.12.0",
  "libconntrack-wasm",
  "serde",
  "serde_json",
@@ -1702,6 +1702,7 @@ dependencies = [
  "linked-hash-map",
  "log",
  "mac_address 1.1.5 (git+https://github.com/netdebug-com/mac_address?branch=master)",
+ "mac_oui",
  "net-route",
  "netstat2",
  "pcap",
@@ -1848,6 +1849,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "mac_oui"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a22d3a10b831b1dd25e7e9feb0be45dace6246b61cd8aec8165c19cbcd5f4d7a"
+dependencies = [
+ "byteorder",
+ "csv",
+ "macaddr",
+ "multimap",
+ "rangemap",
+ "serde",
+]
+
+[[package]]
+name = "macaddr"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baee0bbc17ce759db233beb01648088061bf678383130602a298e6998eedb2d8"
+
+[[package]]
 name = "matchit"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1971,6 +1992,15 @@ dependencies = [
  "mime",
  "spin 0.9.8",
  "version_check",
+]
+
+[[package]]
+name = "multimap"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1a5d38b9b352dbd913288736af36af41c48d61b1a8cd34bcecd727561b7d511"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -2614,6 +2644,12 @@ checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom",
 ]
+
+[[package]]
+name = "rangemap"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "977b1e897f9d764566891689e642653e5ed90c6895106acd005eb4c1d0203991"
 
 [[package]]
 name = "redox_syscall"
