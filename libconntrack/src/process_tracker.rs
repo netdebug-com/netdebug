@@ -149,7 +149,7 @@ impl ProcessTracker {
                     self.pid2app_name_cache = pid2process.clone();
                 }
             }
-            warn!("Got msg: {:?} :: {:?}", msg.get_name(), start.elapsed());
+            debug!("Got msg: {:?} :: {:?}", msg.get_name(), start.elapsed());
             perf_check!(
                 format!(
                     "ProcessTracker: message handle {:?} :: {} tcp {} udp",
