@@ -89,6 +89,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let system_epoch = std::time::Instant::now();
 
+    // are we really, really running the multi-threaded runtime?
+    info!(
+        "Current tokio scheduler flavor is: {:?}",
+        tokio::runtime::Handle::current().runtime_flavor()
+    );
     let mut trackers = Trackers::empty();
 
     let mut counter_registries = SuperRegistry::new(system_epoch);

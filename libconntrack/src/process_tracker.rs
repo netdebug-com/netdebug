@@ -16,7 +16,7 @@ use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 use crate::connection::connection_key_from_protocol_socket_info;
 use crate::connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender};
 use crate::utils::{make_perf_check_stats, PerfCheckStats, PerfMsgCheck};
-use crate::{perf_check, send_or_log_async, send_or_log_sync};
+use crate::{perf_check, send_or_log_sync};
 
 pub type ProcessTrackerTcpCache = HashMap<ConnectionKey, ProcessTrackerEntry>;
 pub type ProcessTrackerUdpCache = HashMap<(IpAddr, u16), ProcessTrackerEntry>;
@@ -27,7 +27,10 @@ pub enum ProcessTrackerMessage {
         key: ConnectionKey,
         tx: ConnectionTrackerSender,
     },
-    UpdateCache,
+    UpdateCache {
+        tcp_update: ProcessTrackerTcpCache,
+        udp_update: ProcessTrackerUdpCache,
+    },
     UpdatePidMapping {
         // enumerating processes is usually slow, so do this
         // in a different task and send the results here periodically
@@ -39,6 +42,18 @@ pub enum ProcessTrackerMessage {
     },
 }
 
+impl ProcessTrackerMessage {
+    fn get_name(&self) -> String {
+        use ProcessTrackerMessage::*;
+        match self {
+            LookupOne { .. } => "LookupOne",
+            UpdateCache { .. } => "UpdateCache",
+            UpdatePidMapping { .. } => "UpdatePidMapping",
+            DumpCache { .. } => "DumpCache",
+        }
+        .to_string()
+    }
+}
 pub type ProcessTrackerSender = tokio::sync::mpsc::Sender<PerfMsgCheck<ProcessTrackerMessage>>;
 pub type ProcessTrackerReceiver = tokio::sync::mpsc::Receiver<PerfMsgCheck<ProcessTrackerMessage>>;
 pub struct ProcessTracker {
@@ -50,7 +65,6 @@ pub struct ProcessTracker {
     msgs_received: StatHandle,
     msgs_tx_errors: StatHandle,
     dump_cache_perf_stat: PerfCheckStats,
-    update_cache_perf_stat: PerfCheckStats,
     lookup_queue: Vec<(ConnectionKey, ConnectionTrackerSender)>, // where we store queued lookup requests
 }
 
@@ -73,7 +87,6 @@ impl ProcessTracker {
             msgs_received,
             msgs_tx_errors,
             dump_cache_perf_stat: make_perf_check_stats("dump_cache", &mut stats),
-            update_cache_perf_stat: make_perf_check_stats("update_cache", &mut stats),
             lookup_queue: Vec::new(),
         }
     }
@@ -91,7 +104,7 @@ impl ProcessTracker {
         {
             let tx = self.tx.clone();
             let _join_pid2process_loop =
-                tokio::spawn(async move { run_pid2process_loop(update_frequency, tx).await });
+                tokio::task::spawn_blocking(move || run_pid2process_loop(update_frequency, tx));
         }
         let tx = self.tx.clone();
         let join = tokio::spawn(async move { self.do_async_loop(update_frequency).await });
@@ -101,34 +114,21 @@ impl ProcessTracker {
     pub async fn do_async_loop(&mut self, update_frequency: Duration) {
         // setup a background task to periodically send a UpdateCache message
         let tx = self.tx.clone();
-        let stat = self.msgs_tx_errors.clone();
-        tokio::spawn(async move {
-            loop {
-                // TODO: break on too many errors? Then do what?
-                tokio::time::sleep(update_frequency.to_std().unwrap()).await;
-                send_or_log_async!(
-                    &tx,
-                    "process_tracker",
-                    ProcessTrackerMessage::UpdateCache,
-                    &stat
-                )
-                .await;
-            }
+        tokio::task::spawn_blocking(move || {
+            ProcessTracker::update_task(tx, update_frequency);
         });
         while let Some(msg) = self.rx.recv().await {
             use ProcessTrackerMessage::*;
-            self.msgs_received.add_value(1);
+            self.msgs_received.bump();
             let start = Instant::now();
             let msg = msg.perf_check_get("ProcessTracker::do_async_loop queue");
             // quick debug message, unless it's the really big
-            if let UpdatePidMapping { pid2process } = &msg {
-                debug!("Got UpdatePidMapping msg : {} pids", pid2process.len());
-            } else {
-                debug!("Got msg: {:?}", msg); // all the rest are short enough to log via Debug
-            }
             match &msg {
                 LookupOne { key, tx } => self.lookup_or_queue(key.clone(), tx.clone()),
-                UpdateCache => self.update_cache(),
+                UpdateCache {
+                    tcp_update,
+                    udp_update,
+                } => self.update_cache(tcp_update, udp_update),
                 DumpCache { tx } => {
                     let start = Instant::now();
                     if let Err(e) = tx.send((self.tcp_cache.clone(), self.udp_cache.clone())) {
@@ -149,6 +149,7 @@ impl ProcessTracker {
                     self.pid2app_name_cache = pid2process.clone();
                 }
             }
+            warn!("Got msg: {:?} :: {:?}", msg.get_name(), start.elapsed());
             perf_check!(
                 format!(
                     "ProcessTracker: message handle {:?} :: {} tcp {} udp",
@@ -157,7 +158,7 @@ impl ProcessTracker {
                     self.udp_cache.len()
                 ),
                 start,
-                std::time::Duration::from_millis(100)
+                std::time::Duration::from_millis(10)
             );
         }
     }
@@ -197,38 +198,49 @@ impl ProcessTracker {
         }
     }
 
-    /**
-     * Update the cache of connections from the OS (with mapping from connection to pid)
-     * and the mapping of pid to process name.  
-     *
-     * Note that Windows claims that a given connection can be owned by multiple PIDs, e.g.,
-     * when a DLL starts a DNS cache, but this makes no sense to me.  Just rolling with it but
-     * this is why all of the resulting data structures are one to many (e.g., Vec()/HashMap() rather than one to one.
-     */
-    fn update_cache(&mut self) {
+    /// Loop indefinitely in the background, sending updated lists of processes
+    /// to the process tracker.  Keep this out of the main rx_loop() because
+    /// it seems on windows this can take seconds (!!) to process
+    fn update_task(process_tracker_tx: ProcessTrackerSender, update_frequency: Duration) {
+        loop {
+            // TODO: break on too many errors? Then do what?
+            std::thread::sleep(update_frequency.to_std().unwrap());
+            match ProcessTracker::update_task_once() {
+                Ok((new_tcp_cache, new_udp_cache)) =>
+                // send update to the process_tracker
+                {
+                    send_or_log_sync!(
+                        &process_tracker_tx,
+                        "process_tracker",
+                        ProcessTrackerMessage::UpdateCache {
+                            tcp_update: new_tcp_cache,
+                            udp_update: new_udp_cache,
+                        }
+                    )
+                }
+                Err(e) => {
+                    warn!("Error trying to get process socket info: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Lookup the Active connections and their pids one time
+    /// Broken out from [`ProcessTracker::update_task`] for testing
+    fn update_task_once(
+    ) -> Result<(ProcessTrackerTcpCache, ProcessTrackerUdpCache), netstat2::error::Error> {
         let start = Instant::now();
         let af_flags = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
         let proto_flags = ProtocolFlags::TCP | ProtocolFlags::UDP;
         // pull the sockets to process mapping from the OS via this cool (buggy?) netstat2 crate
-        let sockets_info = match netstat2::get_sockets_info(af_flags, proto_flags) {
-            Ok(info) => info,
-            Err(e) => {
-                warn!(
-                    "Failed to get socket info netstat2::get_sockets_info() :: {}",
-                    e
-                );
-                return;
-            }
-        };
+        let sockets_info = netstat2::get_sockets_info(af_flags, proto_flags)?;
         let mut new_tcp_cache: HashMap<ConnectionKey, ProcessTrackerEntry> = HashMap::new();
         let mut new_udp_cache: HashMap<(IpAddr, u16), ProcessTrackerEntry> = HashMap::new();
 
         // parse out all of the new data
         for si in sockets_info {
             let associated_apps = HashMap::from_iter(si.associated_pids.into_iter().map(|p| {
-                // clone the app name if it exists
-                let app = self.pid2app_name_cache.get(&p).cloned();
-                (p, app)
+                (p, None) // will fill in the app name later
             }));
             match &si.protocol_socket_info {
                 ProtocolSocketInfo::Tcp(tcp_si) => {
@@ -252,17 +264,40 @@ impl ProcessTracker {
                 }
             }
         }
-
-        // last, move new cache into place
-        self.tcp_cache = new_tcp_cache;
-        self.udp_cache = new_udp_cache;
-        self.process_queued_lookups();
         perf_check!(
-            "ProcessTracker::update_cache",
+            "ProcessTracker::update_task",
             start,
-            std::time::Duration::from_millis(25),
-            self.update_cache_perf_stat
+            std::time::Duration::from_millis(25)
         );
+        Ok((new_tcp_cache, new_udp_cache))
+    }
+
+    /**
+     * Update the cache of connections from the OS (with mapping from connection to pid)
+     * and the mapping of pid to process name.  
+     *
+     * Note that Windows claims that a given connection can be owned by multiple PIDs, e.g.,
+     * when a DLL starts a DNS cache, but this makes no sense to me.  Just rolling with it but
+     * this is why all of the resulting data structures are one to many (e.g., Vec()/HashMap() rather than one to one.
+     */
+    fn update_cache(
+        &mut self,
+        new_tcp_cache: &ProcessTrackerTcpCache,
+        new_udp_cache: &ProcessTrackerUdpCache,
+    ) {
+        // last, move new cache into place
+        self.tcp_cache = new_tcp_cache.clone();
+        // union the process pid data with the process name data
+        for entry in self.tcp_cache.values_mut() {
+            entry.associated_apps = HashMap::from_iter(
+                entry
+                    .associated_apps
+                    .keys()
+                    .map(|p| (*p, self.pid2app_name_cache.get(p).cloned())),
+            );
+        }
+        self.udp_cache = new_udp_cache.clone();
+        self.process_queued_lookups();
     }
 
     /**
@@ -291,7 +326,7 @@ impl ProcessTracker {
  * This can take a long time to run .. seconds even, so run in a diff
  * task/thread and async post the data back to the main ProcessTracker
  */
-async fn run_pid2process_loop(update_frequency: Duration, tx: ProcessTrackerSender) {
+fn run_pid2process_loop(update_frequency: Duration, tx: ProcessTrackerSender) {
     use chrono::Utc;
 
     loop {
@@ -305,14 +340,14 @@ async fn run_pid2process_loop(update_frequency: Duration, tx: ProcessTrackerSend
         };
 
         use ProcessTrackerMessage::*;
-        send_or_log_async!(tx, "process_tracker", UpdatePidMapping { pid2process }).await;
+        send_or_log_sync!(tx, "process_tracker", UpdatePidMapping { pid2process });
 
         let next_update = start + update_frequency;
         let now = Utc::now();
         if next_update > now {
             let delta = next_update - now;
             debug!("run_pid2process_loop sleeping for {}", delta);
-            tokio::time::sleep(delta.to_std().unwrap()).await;
+            std::thread::sleep(delta.to_std().unwrap());
         }
     }
 }
@@ -418,7 +453,9 @@ mod test {
             128,
             ExportedStatRegistry::new("process_tracker", Instant::now()),
         );
-        process_tracker.update_cache();
+
+        let (tcp_update, udp_update) = ProcessTracker::update_task_once().unwrap();
+        process_tracker.update_cache(&tcp_update, &udp_update);
 
         let mut found_it = false;
         for (key, entry) in &process_tracker.tcp_cache {
