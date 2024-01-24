@@ -10,7 +10,10 @@ use common_wasm::{
 };
 
 use derive_getters::Getters;
-use etherparse::{IpHeader, TcpHeader, TransportHeader, UdpHeader};
+use etherparse::{
+    icmpv6::{TYPE_NEIGHBOR_ADVERTISEMENT, TYPE_NEIGHBOR_SOLICITATION},
+    IpHeader, TcpHeader, TransportHeader, UdpHeader,
+};
 use libconntrack_wasm::{
     traffic_stats::BidirectionalStats, AggregateStatKind, ConnectionKey, IpProtocol,
 };
@@ -30,7 +33,7 @@ use crate::{
     owned_packet::OwnedParsedPacket,
     prober::ProbeMessage,
     prober_helper::ProberHelper,
-    utils::{calc_rtt_ms, etherparse_ipheaders2ipaddr, timestamp_to_ms, PerfMsgCheck},
+    utils::{calc_rtt_ms, timestamp_to_ms, PerfMsgCheck},
     ConnectionSide, ProcessRxAckReturn, TcpSeq64, UnidirectionalTcpState,
 };
 
@@ -257,10 +260,18 @@ impl Connection {
             }
             Some(TransportHeader::Icmpv6(icmp6)) => {
                 if src_is_local {
-                    warn!(
-                        "Ignoring ICMP6 from our selves but for this connection: {} : {:?}",
-                        key, packet
-                    );
+                    use etherparse::Icmpv6Type::*;
+                    match icmp6.icmp_type {
+                        Unknown { type_u8, .. }
+                            if type_u8 == TYPE_NEIGHBOR_ADVERTISEMENT
+                                || type_u8 == TYPE_NEIGHBOR_SOLICITATION => {}
+
+                        EchoRequest(_) | EchoReply(_) => {} // we expect these; don't warn
+                        _ => warn!(
+                            "Ignoring ICMP6 from our selves but for this connection: {} : {:?}",
+                            key, packet
+                        ),
+                    }
                 } else {
                     self.update_icmp6_remote(&packet, icmp6);
                 }
@@ -765,7 +776,7 @@ impl Connection {
                         } else {
                             // else is an ICMP reply
                             // unwrap is ok here b/c we would have never stored a non-IP packet as a reply
-                            let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
+                            let (src_ip, _dst_ip) = reply.get_src_dst_ips().unwrap();
                             // NAT check - does the dst of the connection key == this src_ip?
                             if src_ip == self.connection_key.remote_ip {
                                 report.insert(
@@ -829,7 +840,7 @@ impl Connection {
                             );
                         } else {
                             // ICMP reply
-                            let (src_ip, _dst_ip) = etherparse_ipheaders2ipaddr(&reply.ip).unwrap();
+                            let (src_ip, _dst_ip) = reply.get_src_dst_ips().unwrap();
                             // NAT check - does the dst of the connection key == this src_ip?
                             if src_ip == self.connection_key.remote_ip {
                                 report.insert(

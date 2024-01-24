@@ -1,5 +1,6 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use chrono::{DateTime, Utc};
+use etherparse::icmpv6::{TYPE_NEIGHBOR_ADVERTISEMENT, TYPE_NEIGHBOR_SOLICITATION};
 use libconntrack_wasm::ExportedNeighborState;
 use log::warn;
 use std::collections::HashMap;
@@ -8,7 +9,7 @@ use std::net::IpAddr;
 use tokio::sync::mpsc::Sender;
 
 use common_wasm::evicting_hash_map::EvictingHashMap;
-use etherparse::{ether_type, EtherType};
+use etherparse::{ether_type, EtherType, TransportHeader};
 use mac_address::MacAddress;
 
 use crate::owned_packet::OwnedParsedPacket;
@@ -103,16 +104,16 @@ impl<'a> NeighborCache<'a> {
     pub fn process_arp_packet(
         &mut self,
         packet: Box<OwnedParsedPacket>,
-    ) -> Result<(), ArpParseError> {
+    ) -> Result<(), NeighborParseError> {
         // make sure this is an ARP packet (reply or request)
         if let Some(ethheader) = &packet.link {
             if ethheader.ether_type != EtherType::Arp as u16 {
-                return Err(ArpParseError::NotArp {
+                return Err(NeighborParseError::NotArp {
                     ether_type: ethheader.ether_type,
                 });
             }
         } else {
-            return Err(ArpParseError::NotEthernet);
+            return Err(NeighborParseError::NotEthernet);
         }
         // parse it
         let arp = ArpPacket::from_wire(&packet.payload)?;
@@ -132,14 +133,13 @@ impl<'a> NeighborCache<'a> {
     }
 
     /// if both IP and Mac are defined, add them to our mapping
+    /// Gracefully handles 're'learning of IPs we've already learned
     pub(crate) fn learn(
         &mut self,
         ip: &Option<IpAddr>,
         mac: &Option<MacAddress>,
         learn_time: DateTime<Utc>,
     ) {
-        // TODO: should we record the time here?  Packet vs. Realtime param needed
-        // add this now and improve later
         if let (Some(ip), Some(mac)) = (ip, mac) {
             self.ip2mac.insert(
                 *ip,
@@ -176,10 +176,62 @@ impl<'a> NeighborCache<'a> {
             })
             .collect()
     }
+
+    /// Parse the NDP solitiation msg to record the Mac and IPv6 address of the sender
+    /// or the NDP advertisment msg to record the Mac and IPv6 address of the sender
+    ///
+    /// See https://en.wikipedia.org/wiki/Neighbor_Discovery_Protocol#Messages_formats for format
+    /// but it's basically: first 4 bytes are reserved, second 16 bytes at the target address
+    pub(crate) fn process_ndp_packet(
+        &mut self,
+        packet: Box<OwnedParsedPacket>,
+    ) -> Result<(), NeighborParseError> {
+        use etherparse::Icmpv6Type::*;
+        // make sure we've really got the right kind of packet
+        if packet.link.is_none() {
+            return Err(NeighborParseError::NoIpv6);
+        }
+        // Always learn that the src ip maps to the src mac
+        let (src_ip, _dst_ip) = packet.as_ref().get_src_dst_ips().unwrap();
+        let is_advertisement = match packet.transport {
+            Some(TransportHeader::Icmpv6(icmpv6)) => match icmpv6.icmp_type {
+                Unknown { type_u8, .. } if type_u8 == TYPE_NEIGHBOR_ADVERTISEMENT => true,
+                Unknown { type_u8, .. } if type_u8 == TYPE_NEIGHBOR_SOLICITATION => false,
+                _ => return Err(NeighborParseError::NotNDP),
+            },
+            _ => return Err(NeighborParseError::NotNDP),
+        };
+
+        if packet.payload.len() < MIN_NDP_SIZE {
+            return Err(NeighborParseError::PacketTooShort {
+                size: packet.payload.len(),
+                min_size: MIN_NDP_SIZE,
+            });
+        }
+        // .unwrap() ok b/c we checked it's not None above
+        let src_mac = MacAddress::from(packet.link.unwrap().source);
+        self.learn(&Some(src_ip), &Some(src_mac), packet.timestamp);
+        // For our purposes, the ADVERTISEMENT and SOLICITATION packets can be parsed the same way.
+        // Technically, with ADVERTISEMENT packets, the first 3 bytes of the reserved bytes5to8
+        // have been allocated/have meaning, but we don't care about that meaning for now so just ignore
+        // TODO: look through the myriad (!) options that could follow this and decide if there's useful
+        // data that we can use; ignore it all for now
+        if is_advertisement {
+            let mut cursor = Cursor::new(packet.payload);
+            let mut ip_buf = [0; 16];
+            cursor.read_exact(&mut ip_buf)?;
+            let ip = IpAddr::from(ip_buf);
+            // NOTE: I've not see a case where 'target_ip' is not the same as 'src_ip' and thus this
+            // is redundant with the IP learned above, but this is my
+            // understanding of the spec, so let's record this just in case they're different
+            self.learn(&Some(ip), &Some(src_mac), packet.timestamp);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ArpParseError {
+pub enum NeighborParseError {
     #[error("Can't parse as Arp: Not an Ethernet packet")]
     NotEthernet,
     #[error("Can't parse as Arp: Ethertype is {}", ether_type)]
@@ -190,6 +242,8 @@ pub enum ArpParseError {
     ShortRead(#[from] std::io::Error),
     #[error("Can't make an Arp: use NDP instead of Arp for IPv6")]
     NoIpv6,
+    #[error("Can't make an NDP packet: transport not ICMP6")]
+    NotNDP,
 }
 
 /// full description of Arp at : https://en.wikipedia.org/wiki/Address_Resolution_Protocol
@@ -212,12 +266,13 @@ pub struct ArpPacket {
     pub target_protocol_address: Vec<u8>,
 }
 
+pub const MIN_NDP_SIZE: usize = 16; // 16 bytes of IPv6 target address
 const ARP_MIN_SIZE: usize = 28; // for a normal ethernet + IPv4 packet
 const ARP_FIXED_SIZE: usize = 8; // just the part of the Arp packet that's fixed length
 impl ArpPacket {
-    pub fn from_wire(buffer: &Vec<u8>) -> Result<ArpPacket, ArpParseError> {
+    pub fn from_wire(buffer: &Vec<u8>) -> Result<ArpPacket, NeighborParseError> {
         if buffer.len() < ARP_MIN_SIZE {
-            return Err(ArpParseError::PacketTooShort {
+            return Err(NeighborParseError::PacketTooShort {
                 size: buffer.len(),
                 min_size: ARP_MIN_SIZE,
             });
@@ -292,7 +347,7 @@ impl ArpPacket {
         local_mac: [u8; 6],
         local_ip: IpAddr,
         target_ip: IpAddr,
-    ) -> Result<ArpPacket, ArpParseError> {
+    ) -> Result<ArpPacket, NeighborParseError> {
         match (local_ip, target_ip) {
             (IpAddr::V4(local_ip), IpAddr::V4(target_ip)) => Ok(ArpPacket {
                 htype: ArpHardwareType::Ethernet,
@@ -305,7 +360,7 @@ impl ArpPacket {
                 target_hardware_address: vec![0; 6],
                 target_protocol_address: Vec::from(target_ip.octets()),
             }),
-            _ => Err(ArpParseError::NoIpv6),
+            _ => Err(NeighborParseError::NoIpv6),
         }
     }
 
@@ -440,7 +495,7 @@ impl ArpOperation {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use std::{net::IpAddr, str::FromStr};
 
     use common::test_utils::test_dir;
@@ -543,5 +598,42 @@ mod test {
         assert_eq!(neighbors.ip2mac.len(), 2); // trace only has two different hosts
         assert_eq!(neighbors.lookup_mac_by_ip(&router_ip), Some(router_mac));
         assert_eq!(neighbors.lookup_mac_by_ip(&laptop_ip), Some(laptop_mac));
+    }
+
+    #[test]
+    fn test_ndp_parsing() {
+        // pulled from wireshark
+        let target_ip = IpAddr::from([
+            0x26, 0x00, 0x17, 0x00, 0x5b, 0x20, 0x4e, 0x10, 0x78, 0xeb, 0xea, 0x4d, 0x7d, 0x28,
+            0x08, 0xd7,
+        ]);
+        let mut capture =
+            pcap::Capture::from_file(test_dir("libconntrack", "tests/ndp_solicit_advert.pcapng"))
+                .unwrap();
+        // from the trace, the first arp we see is an unresolved request
+        let solicit = OwnedParsedPacket::try_from_pcap(capture.next_packet().unwrap()).unwrap();
+        let advert = OwnedParsedPacket::try_from_pcap(capture.next_packet().unwrap()).unwrap();
+        let mut neighbor_cache = NeighborCache::new(4096);
+        assert_eq!(neighbor_cache.ip2mac.len(), 0);
+        // learn what we can from the solicitation
+        neighbor_cache.process_ndp_packet(solicit.clone()).unwrap();
+        assert_eq!(neighbor_cache.ip2mac.len(), 1);
+        let (expected_src_ip, _dst_ip) = solicit.get_src_dst_ips().unwrap();
+        let (expected_src_mac, _dst_mac) = solicit.get_src_dst_mac_addresses().unwrap();
+        assert_learned(&mut neighbor_cache, expected_src_ip, expected_src_mac);
+
+        // learn what we can from the reply advertisement: two different IPs to the same MacAddress
+        neighbor_cache.process_ndp_packet(advert.clone()).unwrap();
+        let (expected_src_ip, _dst_ip) = advert.get_src_dst_ips().unwrap();
+        let (expected_src_mac, _dst_mac) = advert.get_src_dst_mac_addresses().unwrap();
+        assert_eq!(neighbor_cache.ip2mac.len(), 2);
+        // these are actually identical ips, in this capture; are they ever different?
+        assert_learned(&mut neighbor_cache, expected_src_ip, expected_src_mac);
+        assert_learned(&mut neighbor_cache, target_ip, expected_src_mac);
+    }
+
+    pub fn assert_learned(neighbor_cache: &mut NeighborCache, ip: IpAddr, mac: MacAddress) {
+        let state = neighbor_cache.ip2mac.get_mut(&ip).unwrap();
+        assert_eq!(state.mac, mac);
     }
 }

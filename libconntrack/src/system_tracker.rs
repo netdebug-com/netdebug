@@ -656,7 +656,6 @@ mod test {
         neighbor_cache::NeighborState,
         pcap::MockRawSocketProber,
         prober::{make_ping_icmp_echo_reply, make_ping_icmp_echo_request},
-        utils::etherparse_ipheaders2ipaddr,
     };
 
     use super::*;
@@ -797,7 +796,7 @@ mod test {
         let (update_pkt, key) = ping_listener_rx.recv().await.unwrap();
         println!("Got ping reply from ping_listener!");
         assert_eq!(ping_state.key, key);
-        let (ping_src_ip, ping_dst_ip) = etherparse_ipheaders2ipaddr(&update_pkt.ip).unwrap();
+        let (ping_src_ip, ping_dst_ip) = update_pkt.get_src_dst_ips().unwrap();
         assert_eq!(ping_src_ip, local_ip);
         assert_eq!(ping_dst_ip, gateway);
         assert_eq!(

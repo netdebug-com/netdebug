@@ -6,11 +6,13 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use etherparse::{
+    icmpv6::{TYPE_NEIGHBOR_ADVERTISEMENT, TYPE_NEIGHBOR_SOLICITATION},
     EtherType, IcmpEchoHeader, Icmpv4Header, Icmpv6Header, IpHeader, TcpHeader, TransportHeader,
     UdpHeader,
 };
 use libconntrack_wasm::{ConnectionKey, IpProtocol};
 use log::warn;
+use mac_address::MacAddress;
 use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
 
 /// Errors when trying to create a `ConnectionKey` from a OwnedParsedPacket
@@ -28,6 +30,8 @@ pub enum ConnectionKeyError {
     IcmpInnerPacketError,
     /// This packet is an Arp, so no ConnectionKey but will want other parsing for it
     Arp,
+    /// This packet is an Neighbor Discovery Protocol msg, so no ConnectionKey but will want other parsing for it
+    NdpNeighbor,
 }
 
 /**
@@ -424,6 +428,15 @@ impl OwnedParsedPacket {
             | DestinationUnreachable(_) => self.to_icmp_payload_connection_key(local_addrs),
             // no embedded packet for these types
             etherparse::Icmpv6Type::Unknown {
+                type_u8,
+                code_u8: _,
+                bytes5to8: _,
+            } if type_u8 == TYPE_NEIGHBOR_ADVERTISEMENT
+                || type_u8 == TYPE_NEIGHBOR_SOLICITATION =>
+            {
+                Err(ConnectionKeyError::NdpNeighbor)
+            }
+            etherparse::Icmpv6Type::Unknown {
                 type_u8: _,
                 code_u8: _,
                 bytes5to8: _,
@@ -562,6 +575,14 @@ impl OwnedParsedPacket {
             ts,
             pkt.len() as u32,
         )))
+    }
+    pub fn get_src_dst_mac_addresses(&self) -> Option<(MacAddress, MacAddress)> {
+        self.link.as_ref().map(|hdr| {
+            (
+                MacAddress::from(hdr.source),
+                MacAddress::from(hdr.destination),
+            )
+        })
     }
 }
 
