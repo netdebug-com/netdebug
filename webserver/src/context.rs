@@ -143,8 +143,7 @@ impl WebServerContext {
                 let prober_tx = spawn_raw_prober(
                     bind_writable_pcap(device).unwrap(),
                     MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
-                )
-                .await;
+                );
                 info!("Launching the connection tracker (single instance for now)");
                 let mut connection_tracker = ConnectionTracker::new(
                     Some(topology_server_tx),
