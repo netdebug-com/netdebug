@@ -4,8 +4,8 @@ use std::{
     sync::Arc,
 };
 
-use axum::extract::State;
-use axum::response;
+use axum::{extract::State, Router};
+use axum::{response, routing};
 use common_wasm::timeseries_stats::{CounterProvider, CounterProviderWithTimeUpdate};
 use desktop_common::CongestedLinksReply;
 use libconntrack::{
@@ -19,8 +19,52 @@ use libconntrack_wasm::{
     DnsTrackerEntry, ExportedNeighborState, NetworkInterfaceState,
 };
 use tokio::sync::mpsc::channel;
+use tower_http::{
+    cors::{self, AllowOrigin, CorsLayer},
+    trace::{DefaultMakeSpan, TraceLayer},
+};
 
 use crate::Trackers;
+
+// When running electron forge in dev mode, it (or rather the webpack
+// it uses) starts the HTTP dev-server on this URL/origin. We need to
+// set-up tower/axum to allow cross-origin requests from this origin
+const ELECTRON_DEV_SERVER_ORIGIN: &str = "http://localhost:3000";
+
+pub fn setup_axum_router() -> Router<Arc<Trackers>> {
+    // Setup CORS to make sure that the electron in dev-mode can request
+    // resources.
+    let allowed_origins = vec![ELECTRON_DEV_SERVER_ORIGIN.parse().unwrap()];
+    let cors = CorsLayer::new()
+        .allow_methods(cors::Any)
+        .allow_origin(AllowOrigin::list(allowed_origins));
+    // Basic Request logging
+    let trace_layer = TraceLayer::new_for_http()
+        .make_span_with(DefaultMakeSpan::new().level(tracing::Level::DEBUG));
+    Router::new()
+        .route("/api/get_counters", routing::get(handle_get_counters))
+        .route("/api/get_flows", routing::get(handle_get_flows))
+        .route("/api/get_dns_cache", routing::get(handle_get_dns_cache))
+        .route(
+            "/api/get_aggregate_bandwidth",
+            routing::get(handle_get_aggregate_bandwidth),
+        )
+        .route("/api/get_dns_flows", routing::get(handle_get_dns_flows))
+        .route("/api/get_app_flows", routing::get(handle_get_app_flows))
+        .route("/api/get_host_flows", routing::get(handle_get_host_flows))
+        .route("/api/get_my_ip", routing::get(handle_get_my_ip))
+        .route(
+            "/api/get_congested_links",
+            routing::get(handle_get_congested_links),
+        )
+        .route(
+            "/api/get_system_network_history",
+            routing::get(handle_get_system_network_history),
+        )
+        .route("/api/get_devices", routing::get(handle_get_devices))
+        .layer(cors)
+        .layer(trace_layer)
+}
 
 pub async fn handle_get_counters(State(trackers): State<Arc<Trackers>>) -> String {
     // IndexMap iterates over entries in insertion order
