@@ -291,11 +291,11 @@ impl SystemTracker {
     ) {
         let system_tracker_clone = system_tracker.clone();
         // task #2
-        tokio::spawn(async move {
+        tokio::task::spawn(async move {
             SystemTracker::ping_and_neighbor_listener(system_tracker_clone).await;
         });
         // task #1
-        tokio::spawn(async move {
+        tokio::task::spawn(async move {
             SystemTracker::network_change_watcher(system_tracker, update_period).await;
         });
     }
@@ -320,17 +320,25 @@ impl SystemTracker {
 
     /// Get all of the default routes in the system in an OS-independent way
     pub async fn get_default_gateways_async() -> std::io::Result<Vec<IpAddr>> {
-        // this magic crate claims to list the routing table on MacOs/Linux/Windows... let's see
-        let handle = net_route::Handle::new()?;
-        // don't use the handle.default_route() function as it only returns the first route it finds where we
-        // want all of them (v4 and v6)
-        Ok(handle
-            .list()
-            .await?
-            .into_iter()
-            // needs to have a prefix of 0 and a valid gateway to be considered a 'default' route
-            .filter_map(|r| if r.prefix == 0 { r.gateway } else { None })
-            .collect())
+        tokio::task::spawn_blocking(|| {
+            // The net-route crate is async but we don't trust that it won't block on some OS calls,
+            // so we spawn it with spawn_blocking() (a separate OS thread essentially), and then start a runtime
+            // in this thread so we can call the async fn in net route
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            // this magic crate claims to list the routing table on MacOs/Linux/Windows... let's see
+            // don't use the handle.default_route() function as it only returns the first route it finds where we
+            // want all of them (v4 and v6)
+            let routes = rt.block_on(async { net_route::Handle::new()?.list().await })?;
+            Ok(routes
+                .into_iter()
+                // needs to have a prefix of 0 and a valid gateway to be considered a 'default' route
+                .filter_map(|r| if r.prefix == 0 { r.gateway } else { None })
+                .collect())
+        })
+        .await?
     }
 
     /// Persistent task that waits for various updates from the system and calls the relevant handlers

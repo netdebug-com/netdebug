@@ -41,16 +41,13 @@ pub enum ProbeMessage {
     },
 }
 
-pub async fn spawn_raw_prober<R>(
-    mut raw_sock: R,
-    max_queued: usize,
-) -> Sender<PerfMsgCheck<ProbeMessage>>
+pub fn spawn_raw_prober<R>(mut raw_sock: R, max_queued: usize) -> Sender<PerfMsgCheck<ProbeMessage>>
 where
     R: RawSocketWriter + 'static,
 {
     let (tx, mut rx) = channel::<PerfMsgCheck<ProbeMessage>>(max_queued);
-    tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
+    tokio::task::spawn_blocking(move || {
+        while let Some(msg) = rx.blocking_recv() {
             let msg = msg.perf_check_get("spawn_raw_prober");
             prober_handle_one_message(&mut raw_sock, msg);
         }
