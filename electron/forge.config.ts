@@ -30,9 +30,11 @@ const config: ForgeConfig = {
     new AutoUnpackNativesPlugin({}),
     new WebpackPlugin({
       mainConfig,
-      // Need this otherwise I can't connect to websocket in dev mode?!?!
+      // deault-src: Need this otherwise I can't connect to websocket in dev mode?!?!
       // see https://stackoverflow.com/questions/70132291/electron-content-security-policy-error-when-connecting-to-my-api
       // #black-magic
+      // frame-src: see https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy/frame-src
+      //            specify which domains can be opened in iframes
       devContentSecurityPolicy:
         "default-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* ws://localhost:*;" +
         "frame-src 'self' *.topology.netdebug.com topology.netdebug.com",
