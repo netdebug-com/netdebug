@@ -125,10 +125,7 @@ impl WebServerContext {
 
         // TODO Spawn lots for multi-processing
         if !args.web_server_only {
-            let (max_connections_per_tracker, device) = (
-                context.max_connections_per_tracker,
-                context.pcap_device.clone(),
-            );
+            let max_connections_per_tracker = context.max_connections_per_tracker;
             // Spawn a ConnectionTracker task
             let db_path = args.topology_server_db_path.clone();
             tokio::spawn(async move {
@@ -140,10 +137,8 @@ impl WebServerContext {
                 )
                 .await
                 .unwrap();
-                let prober_tx = spawn_raw_prober(
-                    bind_writable_pcap(device).unwrap(),
-                    MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
-                );
+                let prober_tx =
+                    spawn_raw_prober(bind_writable_pcap(), MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
                 info!("Launching the connection tracker (single instance for now)");
                 let mut connection_tracker = ConnectionTracker::new(
                     Some(topology_server_tx),

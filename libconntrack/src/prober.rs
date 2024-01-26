@@ -103,7 +103,7 @@ fn send_neighbor_discovery(
             panic!("Tried to call Prober::send_arp with a mixed v4/v6 Ip address combo!")
         }
     };
-    if let Err(e) = raw_sock.sendpacket(&pkt) {
+    if let Err(e) = raw_sock.sendpacket(local_ip, &pkt) {
         warn!("Failed to send out Arp request from Prober: {}", e);
     }
 }
@@ -220,7 +220,7 @@ fn icmp_ping(
     // If we don't know the remote_mac address, fall back to broadcast
     let remote_mac = remote_mac.unwrap_or([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
     let buf = make_ping_icmp_echo_request(&local_ip, &remote_ip, local_mac, remote_mac, id, seq);
-    if let Err(e) = raw_sock.sendpacket(&buf) {
+    if let Err(e) = raw_sock.sendpacket(local_ip, &buf) {
         warn!("Error sending ping in icmp_ping: {}", e);
     }
 }
@@ -239,6 +239,7 @@ pub fn tcp_inband_probe(
     min_ttl: u8,
 ) -> Result<(), Box<dyn Error>> {
     let l2 = packet.link.as_ref().unwrap();
+    let (src_ip, _dst_ip) = packet.get_src_dst_ips().unwrap();
     // build up probes
     let probes: Vec<Vec<u8>> = (min_ttl..=PROBE_MAX_TTL)
         .map(|ttl| {
@@ -291,7 +292,7 @@ pub fn tcp_inband_probe(
         debug!("Sending tcp_inband_probes() :: {:?}", parsed_probe);
     }
     for probe in probes {
-        if let Err(e) = raw_sock.sendpacket(&probe) {
+        if let Err(e) = raw_sock.sendpacket(src_ip, &probe) {
             warn!("Error sending tcp_band_probe() : {} -- {:?}", e, packet);
         }
     }

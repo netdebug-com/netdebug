@@ -1,7 +1,7 @@
 use pcap::Error as PcapError;
-use std::error::Error;
 use std::net::IpAddr;
 use std::str::FromStr;
+use std::{collections::HashMap, error::Error};
 
 use crate::{
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
@@ -305,30 +305,62 @@ pub fn lookup_pcap_device_by_name(name: &String) -> Result<pcap::Device, PcapErr
     )))
 }
 
+pub fn lookup_pcap_device_by_ip(ip: &IpAddr) -> Result<pcap::Device, PcapError> {
+    for d in &pcap::Device::list()? {
+        if d.addresses.iter().any(|d| d.addr == *ip) {
+            return Ok(d.clone());
+        }
+    }
+    let all_interfaces = pcap::Device::list()?
+        .iter()
+        .map(|d| d.name.clone())
+        .join(" , ");
+    Err(pcap::Error::PcapError(format!(
+        "Failed to find any pcap device with ip '{}' out of {}",
+        ip, all_interfaces
+    )))
+}
+
 /**
  * Wrapper around pcap::Capture::sendpacket() so we can mock it during testing
  */
 pub trait RawSocketWriter: Send {
-    fn sendpacket(&mut self, buf: &[u8]) -> Result<(), pcap::Error>;
+    /// Send the ethernet packet (with L2 headers) out the interface that matches
+    /// [`src_ip]
+    fn sendpacket(&mut self, interface_ip: IpAddr, buf: &[u8]) -> Result<(), pcap::Error>;
 }
 
 /**
  * Real instantiation of a RawSocketWriter using the portable libpcap library
  */
 struct PcapRawSocketWriter {
-    capture: Capture<pcap::Active>,
+    interface_map: HashMap<IpAddr, Capture<pcap::Active>>,
 }
 
 impl PcapRawSocketWriter {
-    pub fn new(capture: Capture<pcap::Active>) -> PcapRawSocketWriter {
-        PcapRawSocketWriter { capture }
+    pub fn new() -> PcapRawSocketWriter {
+        PcapRawSocketWriter {
+            interface_map: HashMap::new(),
+        }
     }
 }
 
 impl RawSocketWriter for PcapRawSocketWriter {
-    fn sendpacket(&mut self, buf: &[u8]) -> Result<(), pcap::Error> {
+    fn sendpacket(&mut self, interface_ip: IpAddr, buf: &[u8]) -> Result<(), pcap::Error> {
         let start = std::time::Instant::now();
-        let result = self.capture.sendpacket(buf);
+        // include the lookup time in the performance check
+        let capture = match self.interface_map.get_mut(&interface_ip) {
+            Some(capture) => capture,
+            None => {
+                // we haven't tried to send out this interface before
+                // lookup the interface by IP, create a capture to it, and cache it
+                let device = lookup_pcap_device_by_ip(&interface_ip)?;
+                let capture = device.open()?;
+                self.interface_map.insert(interface_ip, capture);
+                self.interface_map.get_mut(&interface_ip).unwrap()
+            }
+        };
+        let result = capture.sendpacket(buf);
         perf_check!(
             "Pcap::sendpacket",
             start,
@@ -387,27 +419,21 @@ impl MockRawSocketProber {
 
 #[cfg(test)]
 impl RawSocketWriter for MockRawSocketProber {
-    fn sendpacket(&mut self, buf: &[u8]) -> Result<(), pcap::Error> {
+    /// NOTE: the MockRawSocketProber ignores which interface we try to send on
+    /// and just stores all of the packets sent to it in the same buffer
+    fn sendpacket(&mut self, _interface_ip: IpAddr, buf: &[u8]) -> Result<(), pcap::Error> {
         self.captured.push(buf.to_vec());
         Ok(())
     }
 }
 
 /**
- * Bind a pcap capture instance so we can raw write packets out of it.
+ * Create a RawSocketWriter
  *
  * NOTE: funky implementation issue in Linux: if you pcap::sendpacket() out a pcap instance,
  * that same instance does NOT actually see the outgoing packet.  We get around this by
  * binding a different instance for reading vs. writing packets.
  */
-pub fn bind_writable_pcap(device: pcap::Device) -> Result<impl RawSocketWriter, PcapError> {
-    let cap = Capture::from_device(device)?.open()?;
-    Ok(PcapRawSocketWriter::new(cap))
-}
-
-pub fn bind_writable_pcap_by_name(
-    pcap_device_name: String,
-) -> Result<impl RawSocketWriter, PcapError> {
-    let device = lookup_pcap_device_by_name(&pcap_device_name)?;
-    bind_writable_pcap(device)
+pub fn bind_writable_pcap() -> impl RawSocketWriter {
+    PcapRawSocketWriter::new()
 }
