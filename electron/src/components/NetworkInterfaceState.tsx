@@ -244,6 +244,9 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
       chart: {
         type: "boxPlot",
         height: 350,
+        animations: {
+          enabled: false,
+        },
       },
       title: {
         text: "RTT to Local Gateways (ms)",

@@ -39,7 +39,7 @@ use crate::{
     process_tracker::{ProcessTrackerEntry, ProcessTrackerMessage, ProcessTrackerSender},
     send_or_log_sync,
     topology_client::{TopologyServerMessage, TopologyServerSender},
-    utils::{self, packet_is_tcp_rst, PerfMsgCheck},
+    utils::{self, packet_is_tcp_rst, remote_ip_to_local, PerfMsgCheck},
 };
 
 /// When evicting stale/old connection entries: evict at most this many
@@ -214,12 +214,7 @@ impl<'a> ConnectionTracker<'a> {
             // our lookup failed; let's source a Arp or Ndp lookup to the IP to force it
             // first, figure out a source IP and mac; just look through our local_addrs
             // and use the first one that's the same IP version as the target
-            let local_ip = self
-                .local_addrs
-                .iter()
-                // TODO: update this logic for IPv6 to try to match the target_ip's subnet
-                .find(|a| a.is_ipv4() == target_ip.is_ipv4());
-            if let Some(local_ip) = local_ip {
+            if let Ok(local_ip) = remote_ip_to_local(target_ip) {
                 /*
                  * Even if the external network is completely hosed, we should be able to see Arp/Ndp
                  * messages outgoing from our selves and thus have learned our own mac for the local_ip
@@ -231,16 +226,16 @@ impl<'a> ConnectionTracker<'a> {
                  * efficiency here
                  */
                 let local_mac = if let Some(local_mac) =
-                    self.neighbor_cache.lookup_mac_by_ip(local_ip)
+                    self.neighbor_cache.lookup_mac_by_ip(&local_ip)
                 {
                     local_mac
                 } else {
                     // lookup via system call(s)
-                    match mac_address::get_mac_address_by_ip(local_ip) {
+                    match mac_address::get_mac_address_by_ip(&local_ip) {
                         Ok(Some(mac)) => {
                             // got it; cache it
                             self.neighbor_cache
-                                .learn(&Some(*local_ip), &Some(mac), Utc::now());
+                                .learn(&Some(local_ip), &Some(mac), Utc::now());
                             mac
                         }
                         Ok(None) => {
@@ -258,7 +253,7 @@ impl<'a> ConnectionTracker<'a> {
                     "Send Arp/NDP to prober",
                     ProbeMessage::SendIpLookup {
                         local_mac: local_mac.bytes(),
-                        local_ip: *local_ip,
+                        local_ip,
                         target_ip,
                     }
                 );
@@ -2280,8 +2275,6 @@ pub mod test {
             target_mac: MacAddress,
             connection_tracker: &mut ConnectionTracker<'_>,
             prober_rx: &mut Receiver<PerfMsgCheck<ProbeMessage>>,
-            local_mac: MacAddress,
-            local_ip: IpAddr,
         ) {
             // first, lookup something that doesn't exist to verify we send a lookup for it
             let (lookup_tx, mut lookup_rx) = channel(10);
@@ -2294,12 +2287,14 @@ pub mod test {
             use ProbeMessage::*;
             match probe_msg {
                 SendIpLookup {
-                    local_mac: test_local_mac,
-                    local_ip: test_local_ip,
+                    local_mac: _test_local_mac,
+                    local_ip: _test_local_ip,
                     target_ip: remote_ip,
                 } => {
-                    assert_eq!(test_local_mac, local_mac.bytes());
-                    assert_eq!(test_local_ip, local_ip);
+                    // don't test against the test_local_{mac,ip}
+                    // because they will come from the system under test
+                    // assert_eq!(test_local_mac, local_mac.bytes());
+                    // assert_eq!(test_local_ip, local_ip);
                     assert_eq!(remote_ip, target_ip);
                 }
                 _wut => panic!("Unexpected probe message {:?}", _wut),
@@ -2325,18 +2320,18 @@ pub mod test {
             target_mac,
             &mut connection_tracker,
             &mut prober_rx,
-            local_mac,
-            local_ipv4,
         );
-        // check v6; should work even though we don't yet parse v6 NDP
+        // check v6; only if the machine where the tests are run supports it
         let target_ipv6 = IpAddr::from_str("de:ad:be:ef::").unwrap();
-        check_lookup_for_ip(
-            target_ipv6,
-            target_mac,
-            &mut connection_tracker,
-            &mut prober_rx,
-            local_mac,
-            local_ipv6,
-        );
+        if remote_ip_to_local(target_ipv6).is_ok() {
+            check_lookup_for_ip(
+                target_ipv6,
+                target_mac,
+                &mut connection_tracker,
+                &mut prober_rx,
+            );
+        } else {
+            println!("Testing machine does not impl IPv6: skipping v6 test");
+        }
     }
 }
