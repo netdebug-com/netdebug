@@ -1,30 +1,6 @@
+import { ApexOptions } from "apexcharts";
 import { NetworkInterfaceState } from "../netdebug_types";
-import { Bar } from "react-chartjs-2";
-
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  PointElement,
-  LinearScale,
-  Tooltip,
-  Legend,
-  Colors,
-  LineElement,
-  Title,
-  BarElement,
-} from "chart.js";
-
-ChartJS.register(
-  BarElement,
-  CategoryScale,
-  PointElement,
-  LinearScale,
-  Tooltip,
-  Legend,
-  Colors,
-  LineElement,
-  Title,
-);
+import ReactApexChart from "react-apexcharts";
 
 // Re-usable components to show the detailed information in a flow
 // Assumes we already have the corresponding connection measurement
@@ -85,10 +61,11 @@ export interface NetworkInterfaceStateProps {
 
 interface PingStats {
   min: number;
+  q1: number;
+  median: number;
+  q3: number;
   max: number;
-  p25: number;
-  p50: number;
-  p75: number;
+  raw_rtts: number[];
   drop_count: number;
   missed_outgoing: number;
   total_non_missed_probes: number;
@@ -124,11 +101,12 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
       rtts.sort();
 
       const ping_stats = {
+        raw_rtts: rtts,
         min: rtts[0],
+        q1: rtts[Math.floor(rtts.length / 4)],
+        median: rtts[Math.floor(rtts.length / 2)],
+        q3: rtts[Math.floor((3 * rtts.length) / 4)],
         max: rtts[rtts.length - 1],
-        p25: rtts[Math.floor(rtts.length / 4)],
-        p50: rtts[Math.floor(rtts.length / 2)],
-        p75: rtts[Math.floor((3 * rtts.length) / 4)],
         missed_outgoing: missed_outgoing.length,
         drop_count: drop_count,
         total_non_missed_probes:
@@ -143,8 +121,9 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
   /* Plot a stacked barchat for each gateway vs. their rtts
    * TODO: plot drops as well
    */
+  /*
 
-  function getChartjsData(state: NetworkInterfaceState) {
+  function getChartjsDataStackedBar(state: NetworkInterfaceState) {
     const stats = calcPingStats(state);
     const rtt_data = Array.from(stats).map(([gateway_ip, ping_stats]) => {
       const d = {
@@ -202,7 +181,7 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
       datasets: datasets,
     };
   }
-  function getChartOptions() {
+  function getChartOptionsStackedBar() {
     const opts = {
       scales: {
         x: {
@@ -219,10 +198,74 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
     };
     return opts;
   }
+  */
+
+  function getBoxplotData(state: NetworkInterfaceState) {
+    const pingData = calcPingStats(state);
+    const rtt_data = Array.from(pingData).map(([gateway_ip, ping_stats]) => {
+      return {
+        x: gateway_ip,
+        y: [
+          ping_stats.min,
+          ping_stats.q1,
+          ping_stats.median,
+          ping_stats.q3,
+          ping_stats.max,
+        ],
+      };
+    });
+    /* TODO!
+    const drop_data = Array.from(pingData).map(([gateway_ip, ping_stats]) => {
+      return {
+        x: gateway_ip,
+        y: (100 * ping_stats.drop_count) / ping_stats.total_non_missed_probes,
+      };
+    });
+    */
+
+    const series = [
+      // first, a box and whiskers ('boxPlot') of the rtt data
+      {
+        type: "boxPlot",
+        data: rtt_data,
+      },
+      // second, a bar chart with same x values of the drop counts
+      /*
+      {
+        type: "bar",
+        data: drop_data,
+      },*/
+    ];
+    return series;
+  }
+
+  function getBoxplotOptions(): ApexOptions {
+    return {
+      chart: {
+        type: "boxPlot",
+        height: 350,
+      },
+      title: {
+        text: "RTT to Local Gateways (ms)",
+        align: "left",
+      },
+      plotOptions: {
+        boxPlot: {
+          colors: {
+            upper: "#5C4742",
+            lower: "#A5978B",
+          },
+        },
+      },
+    };
+  }
 
   return (
-    <div>
-      <Bar data={getChartjsData(props.state)} options={getChartOptions()} />
-    </div>
+    <ReactApexChart
+      options={getBoxplotOptions()}
+      series={getBoxplotData(props.state)}
+      type="boxPlot"
+      // height={350}
+    />
   );
 };
