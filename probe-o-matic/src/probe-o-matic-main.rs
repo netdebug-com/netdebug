@@ -107,9 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the first probe. So lets simply wait a bit after starting the pcap polling
     // loop to ensure we won't miss the very first probe
     tokio::time::sleep(Duration::from_millis(400)).await;
-    let raw_sock = Box::new(libconntrack::pcap::bind_writable_pcap_by_name(
-        dev.name.clone(),
-    )?);
+    let raw_sock = Box::new(libconntrack::pcap::bind_writable_pcap());
 
     let ips_to_probe: Vec<String> = if args.ips_from_stdin {
         io::stdin().lines().map_while(Result::ok).collect()

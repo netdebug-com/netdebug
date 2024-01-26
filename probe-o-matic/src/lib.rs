@@ -486,7 +486,13 @@ impl ProbeOMatic {
             assert_eq!(payload.len(), probe_state.next_probe_num as usize);
             let dst = SocketAddr::new(probe_state.target, dst_port);
             let pkt = create_probe_packet(&self.addr_config, dst, DEFAULT_TTL, &payload);
-            match self.raw_sock.sendpacket(&pkt) {
+            // figure out what IP we're sending out so we can tell our raw_socket
+            let src_ip = if ip.is_ipv4() {
+                IpAddr::from(*self.addr_config.v4_src_addr.ip())
+            } else {
+                IpAddr::from(*self.addr_config.v6_src_addr.ip())
+            };
+            match self.raw_sock.sendpacket(src_ip, &pkt) {
                 Err(e) => warn!("Failed to send probe to {}: {}", probe_state.target, e),
                 Ok(_) => debug!(
                     "Sent probe #{} to {}",

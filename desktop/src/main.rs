@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .flat_map(|d| d.addresses.iter().map(|a| a.addr).collect::<Vec<IpAddr>>())
         .collect::<HashSet<IpAddr>>();
     // TODO! Change this logic so that the binding to the interface can change over time
-    let raw_sock = libconntrack::pcap::bind_writable_pcap_by_name(devices[0].name.clone()).unwrap();
+    let raw_sock = libconntrack::pcap::bind_writable_pcap();
     let prober_tx = spawn_raw_prober(raw_sock, MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
 
     let system_tracker = Arc::new(RwLock::new(
