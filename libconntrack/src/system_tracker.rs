@@ -20,6 +20,7 @@ use libconntrack_wasm::{
 #[cfg(not(test))]
 use log::{debug, warn};
 use mac_address::MacAddress;
+use net_route::Route;
 use pcap::{ConnectionStatus, IfFlags};
 #[cfg(test)]
 use std::{println as debug, println as warn};
@@ -330,15 +331,66 @@ impl SystemTracker {
                 .build()?;
             // this magic crate claims to list the routing table on MacOs/Linux/Windows... let's see
             // don't use the handle.default_route() function as it only returns the first route it finds where we
-            // want all of them (v4 and v6)
+            // want all of them (v4 and v6) which oddly [`net_route::Handle::default_route`] only returns
+            // one ... which one!?  Just do it ourselves...
             let routes = rt.block_on(async { net_route::Handle::new()?.list().await })?;
-            Ok(routes
+            // first, strip out the default routes, e.g., with prefix = 0
+            let default_routes = routes
                 .into_iter()
                 // needs to have a prefix of 0 and a valid gateway to be considered a 'default' route
-                .filter_map(|r| if r.prefix == 0 { r.gateway } else { None })
-                .collect())
+                .filter(|r| r.prefix == 0)
+                .collect::<Vec<Route>>();
+            if cfg!(windows) {
+                // ANNOYING: the 'metric' attribute of a route exists on Window and Linux but the [`net-route::Route`]
+                // create only implements it for windows.  On systems with multiple active interfaces
+                //
+                // split into v4 and v6, and if there are multiple of one type, tie break by lowest
+                // route metric (this is what routing tables do)
+                // NOTE: multiple default routes with different metrics can happen, e.g., if there's a WiFI
+                // and wired link at the same time, or a VPN (or probably in other cases)
+                // TODO: do all OS's use "lowest route metric is highest priority"!?
+                let (mut default_v4_routes, mut default_v6_routes): (Vec<Route>, Vec<Route>) =
+                    default_routes
+                        .iter()
+                        .cloned()
+                        .partition(|r| r.destination.is_ipv4());
+
+                let mut gateways = Vec::new();
+                SystemTracker::get_gateway_ip_by_lowest_metric_route(
+                    &mut default_v4_routes,
+                    &mut gateways,
+                );
+                SystemTracker::get_gateway_ip_by_lowest_metric_route(
+                    &mut default_v6_routes,
+                    &mut gateways,
+                );
+                Ok(gateways)
+            } else {
+                // On MacOs and Linux (for now), just return all of the gateway IPs and let the GUI print
+                // all possible gatways
+                Ok(default_routes.iter().filter_map(|r| r.gateway).collect())
+            }
         })
         .await?
+    }
+
+    /// quick helper function to get the active route
+    /// Currently only works on windows because the [`net-route`] crate is braindead: TODO Fix it
+    #[cfg(windows)]
+    fn get_gateway_ip_by_lowest_metric_route(routes: &mut [Route], gateways: &mut Vec<IpAddr>) {
+        routes.sort_by(|a, b| a.metric.cmp(&b.metric));
+        if let Some(gateway_ip) = routes.iter().next().map(|r| r.gateway).unwrap() {
+            gateways.push(gateway_ip);
+        }
+    }
+    #[cfg(not(windows))]
+    fn get_gateway_ip_by_lowest_metric_route(routes: &mut [Route], gateways: &mut Vec<IpAddr>) {
+        // just put them all in, no 'metric' defined
+        for r in routes {
+            if let Some(gateway_ip) = r.gateway {
+                gateways.push(gateway_ip);
+            }
+        }
     }
 
     /// Persistent task that waits for various updates from the system and calls the relevant handlers
@@ -655,7 +707,7 @@ const PING_LISTENER_DESC: &str = "SystemTracker::ping_listener";
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashSet, str::FromStr};
+    use std::{collections::HashSet, str::FromStr, vec};
 
     use etherparse::{Icmpv4Type, TransportHeader};
     use tokio::sync::mpsc::channel;
@@ -1027,5 +1079,36 @@ mod test {
         assert!(probe.sent_time.is_some());
         assert!(probe.recv_time.is_some());
         assert_eq!(probe.calc_rtt().unwrap().to_std().unwrap(), rtt);
+    }
+
+    #[test]
+    /// Given two routes with different metrics, can we correctly pick the highest priority/lowest
+    /// metric route
+    fn test_route_selection_by_metric() {
+        let ignore_ip = IpAddr::from_str("192.168.1.0").unwrap();
+        let gateway_1 = IpAddr::from_str("192.168.1.1").unwrap();
+        let gateway_2 = IpAddr::from_str("192.168.1.2").unwrap();
+        let route1 = Route {
+            destination: ignore_ip,
+            prefix: 0, // means a 'default' route
+            gateway: Some(gateway_1),
+            ifindex: None,
+            metric: Some(100),
+            luid: None,
+        };
+        let route2 = Route {
+            destination: ignore_ip,
+            prefix: 0, // means a 'default' route
+            gateway: Some(gateway_2),
+            ifindex: None,
+            metric: Some(200),
+            luid: None,
+        };
+
+        let mut routes = vec![route2, route1];
+        let mut gateways = Vec::new();
+        // do we correctly pick the gateway1 IP?
+        SystemTracker::get_gateway_ip_by_lowest_metric_route(&mut routes, &mut gateways);
+        assert_eq!(gateways, vec![gateway_1]);
     }
 }
