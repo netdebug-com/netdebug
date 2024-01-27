@@ -355,6 +355,11 @@ impl RawSocketWriter for PcapRawSocketWriter {
                 // we haven't tried to send out this interface before
                 // lookup the interface by IP, create a capture to it, and cache it
                 let device = lookup_pcap_device_by_ip(&interface_ip)?;
+                info!(
+                    "Starting new raw_socket capture for IP {} on device {}",
+                    interface_ip,
+                    device.desc.as_ref().unwrap_or(&device.name)
+                );
                 let capture = device.open()?;
                 self.interface_map.insert(interface_ip, capture);
                 self.interface_map.get_mut(&interface_ip).unwrap()
