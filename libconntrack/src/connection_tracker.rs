@@ -1084,12 +1084,19 @@ fn add_aggregate_group(
     // this is a HashSet, so a plain insert() if fine even if a name
     // already exists
     connection.aggregate_groups.insert(group.clone());
-    aggregate_stats
-        .entry(group)
-        .or_insert(BidirectionalStats::new(
-            std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS),
-            timestamp,
-        ));
+    // The Entry API for LinkedHashMap appears to not refresh the LRU position, so
+    // do it manually with `get_fresh() / insert()`
+    if let Some(entry) = aggregate_stats.get_refresh(&group) {
+        entry.advance_time(timestamp);
+    } else {
+        aggregate_stats.insert(
+            group,
+            BidirectionalStats::new(
+                std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS),
+                timestamp,
+            ),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1104,7 +1111,7 @@ pub mod test {
     use common::test_utils::test_dir;
     use common_wasm::{ProbeReportEntry, PROBE_MAX_TTL};
     use etherparse::{TcpHeader, TransportHeader};
-    use libconntrack_wasm::DnsTrackerEntry;
+    use libconntrack_wasm::{DnsTrackerEntry, IpProtocol};
     use tokio::sync::mpsc::channel;
     use tokio::sync::mpsc::error::TryRecvError;
 
@@ -1134,6 +1141,72 @@ pub mod test {
             ExportedStatRegistry::new("test.conn_tracker", Instant::now()),
             true,
         )
+    }
+
+    #[test]
+    fn test_add_aggregate_group() {
+        let stat_handles = ConnectionStatHandles::new(&ExportedStatRegistry::new(
+            "testing",
+            std::time::Instant::now(),
+        ));
+        let t0 = Utc::now();
+        let mk_conn = |x: u8| -> (Connection, DateTime<Utc>) {
+            let conn_key = ConnectionKey {
+                local_ip: Ipv4Addr::new(1, 2, 3, 4).into(),
+                remote_ip: Ipv4Addr::new(5, 6, 7, x).into(),
+                local_l4_port: 23,
+                remote_l4_port: 42,
+                ip_proto: IpProtocol::UDP,
+            };
+            let now = t0 + chrono::Duration::seconds(x as i64);
+            (Connection::new(conn_key, now, stat_handles.clone()), now)
+        };
+        let (mut c1, t1) = mk_conn(1);
+        let (mut c2, t2) = mk_conn(2);
+        let (mut c3, t3) = mk_conn(3);
+        let mut agg_stats = LinkedHashMap::new();
+
+        // Add first aggregate group
+        add_aggregate_group(
+            &mut agg_stats,
+            AggregateStatKind::DnsDstDomain("example.com".to_owned()),
+            &mut c1,
+            t1,
+        );
+        let (back_kind, back_entry) = agg_stats.back().unwrap();
+        assert_eq!(
+            *back_kind,
+            AggregateStatKind::DnsDstDomain("example.com".to_owned())
+        );
+        assert_eq!(back_entry.last_update_time, t1);
+
+        // Add another agg group
+        add_aggregate_group(
+            &mut agg_stats,
+            AggregateStatKind::DnsDstDomain("netdebug.com".to_owned()),
+            &mut c2,
+            t2,
+        );
+        let (back_kind, back_entry) = agg_stats.back().unwrap();
+        assert_eq!(
+            *back_kind,
+            AggregateStatKind::DnsDstDomain("netdebug.com".to_owned())
+        );
+        assert_eq!(back_entry.last_update_time, t2);
+
+        // First group again. Should be moved to back.
+        add_aggregate_group(
+            &mut agg_stats,
+            AggregateStatKind::DnsDstDomain("example.com".to_owned()),
+            &mut c3,
+            t3,
+        );
+        let (back_kind, back_entry) = agg_stats.back().unwrap();
+        assert_eq!(
+            *back_kind,
+            AggregateStatKind::DnsDstDomain("example.com".to_owned())
+        );
+        assert_eq!(back_entry.last_update_time, t3);
     }
 
     #[tokio::test]
