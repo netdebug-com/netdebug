@@ -200,7 +200,7 @@ impl ProcessTracker {
 
     /// Loop indefinitely in the background, sending updated lists of processes
     /// to the process tracker.  Keep this out of the main rx_loop() because
-    /// it seems on windows this can take seconds (!!) to process
+    /// it could run for a long-ish time and/or block.
     fn update_task(process_tracker_tx: ProcessTrackerSender, update_frequency: Duration) {
         loop {
             // TODO: break on too many errors? Then do what?
@@ -264,10 +264,12 @@ impl ProcessTracker {
                 }
             }
         }
+        // TODO: the comment for `update_task` says that this could take seconds on Windows. So
+        // even 200ms SLA might be too aggressive?
         perf_check!(
             "ProcessTracker::update_task",
             start,
-            std::time::Duration::from_millis(25)
+            std::time::Duration::from_millis(200)
         );
         Ok((new_tcp_cache, new_udp_cache))
     }

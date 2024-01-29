@@ -313,7 +313,7 @@ impl TopologyServerConnection {
         let url = self.url.clone();
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
-                let msg = msg.perf_check_get("TopologyServerClient::spawn_ws_writer");
+                let msg = msg.perf_check_get("TopologyServerConnection::spawn_ws_writer");
                 if let Err(e) = writer
                     .send(Message::Text(serde_json::to_string(&msg).unwrap()))
                     .await
