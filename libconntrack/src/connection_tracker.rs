@@ -199,13 +199,15 @@ impl<'a> ConnectionTracker<'a> {
         }
     }
 
-    fn lookup_ip_by_mac(
+    fn lookup_mac_by_ip(
         &mut self,
         identifier: String,
         target_ip: IpAddr,
         tx: Sender<(IpAddr, MacAddress)>,
     ) {
         // do we have the target Mac already cached?
+        // NOTE: this function will send the reply if it is cached, so we
+        // don't need to do anything else
         if self
             .neighbor_cache
             .lookup_mac_by_ip_pending(identifier, &target_ip, tx)
@@ -577,7 +579,7 @@ impl<'a> ConnectionTracker<'a> {
             DelConnectionUpdateListener { key, desc } => {
                 self.del_connection_update_listener(desc, key)
             }
-            LookupMacByIp { ip, tx, identifier } => self.lookup_ip_by_mac(identifier, ip, tx),
+            LookupMacByIp { ip, tx, identifier } => self.lookup_mac_by_ip(identifier, ip, tx),
             GetCachedNeighbors { tx } => self.get_cached_neighbors(tx),
         }
     }

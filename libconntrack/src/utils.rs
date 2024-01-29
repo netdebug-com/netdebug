@@ -3,6 +3,7 @@ use std::net::IpAddr;
 use chrono::{DateTime, Utc};
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration};
 use log::warn;
+use mac_address::MacAddress;
 use tokio::{
     sync::mpsc::{Receiver, Sender},
     time::timeout,
@@ -57,6 +58,42 @@ pub fn packet_is_tcp_rst(packet: &OwnedParsedPacket) -> bool {
         *rst
     } else {
         false
+    }
+}
+
+/// An IPv6 "link-local" address (e.g., starts with fe80::) actually
+/// encodes the MacAddress of the target.  Unfortunately it encodes it
+/// in an arcane EUI-64 mechanism which involves the bit manipulation
+/// equivalents of snuff porn and for no clear reason.  But sometimes
+/// you have to put on the leather and ride that walrus... sigh...
+///
+/// NOTE: rust unstable has a [`IPv6Address.is_unicast_link_local`] function
+/// which would solve some of this for us, but not all of it...
+/// But we're not running unstable anyway, so...
+pub fn link_local_ipv6_to_mac_address(ip: IpAddr) -> Option<MacAddress> {
+    match ip {
+        IpAddr::V4(_) => None, // not v6
+        IpAddr::V6(v6) => {
+            let octets = v6.octets();
+            if octets[0] != 0xfe || octets[1] != 0x80 || octets[11] != 0xff || octets[12] != 0xfe {
+                return None; // not link local
+            }
+            // is link, local; now decode as a MacAddress ala EUI-64
+            // I'm not making this shit up, see:
+            // https://en.wikipedia.org/wiki/MAC_address  and
+            // https://support.lenovo.com/us/en/solutions/ht509925-how-to-convert-a-mac-address-into-an-ipv6-link-local-address-eui-64
+            Some(MacAddress::from([
+                // NOTE: (1 << 1) is the 7th bit... somehow...
+                // check out : 'bc -l' with 'ibase=16' and 'obase=2' if you don't believe me
+                octets[8] ^ (1 << 1), // flip the 7th bit, but only on Tuesday
+                octets[9],
+                octets[10],
+                // skip bytes 11-12, because they must have a higher rate of bit flipping/morally suspect
+                octets[13],
+                octets[14],
+                octets[15],
+            ]))
+        }
     }
 }
 
@@ -429,6 +466,8 @@ pub fn dns_to_cannonical_domain(hostname: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
     use super::*;
 
     #[test]
@@ -466,5 +505,19 @@ mod test {
         for (test, valid) in test_pairs {
             assert_eq!(dns_to_cannonical_domain(test), Ok(valid.to_string()));
         }
+    }
+
+    #[test]
+    fn test_ipv6_link_local_to_mac() {
+        // double checked with online calculator
+        // https://ben.akrin.com/ipv6-link-local-address-to-mac-address-online-converter/
+        let ip1 = IpAddr::from_str("fe80::e21f:2bff:fe32:6e52").unwrap();
+        let mac1 = MacAddress::from([0xE0, 0x1F, 0x2B, 0x32, 0x6E, 0x52]);
+        assert_eq!(link_local_ipv6_to_mac_address(ip1), Some(mac1));
+        let ip2 = IpAddr::from_str("fe80::62b7:6eff:feba:5989").unwrap();
+        let mac2 = MacAddress::from([0x60, 0xb7, 0x6e, 0xba, 0x59, 0x89]);
+        assert_eq!(link_local_ipv6_to_mac_address(ip2), Some(mac2));
+        let ip3 = IpAddr::from_str("2600:1700:5b20:4e1f:a93d:d726:acd0:c0a3").unwrap();
+        assert_eq!(link_local_ipv6_to_mac_address(ip3), None);
     }
 }
