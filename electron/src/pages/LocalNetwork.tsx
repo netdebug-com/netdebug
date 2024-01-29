@@ -5,7 +5,10 @@ import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../usePeriodicRefresh";
 import { fetchAndCheckResult } from "../common/data_loading";
 import { NetworkInterfaceState } from "../netdebug_types";
-import { NetworkInterfaceStateComponent } from "../components/NetworkInterfaceState";
+import {
+  IpVersionSelector,
+  NetworkInterfaceStateComponent,
+} from "../components/NetworkInterfaceState";
 
 export const localNetworkLoader = async () => {
   const res = await fetchAndCheckResult(
@@ -33,7 +36,6 @@ const LocalNetwork: React.FC = () => {
 
   return (
     <>
-      <h1>Local Network State</h1>
       <SwitchHelper
         text={"Auto Refresh"}
         state={autoRefresh}
@@ -45,6 +47,7 @@ const LocalNetwork: React.FC = () => {
             <NetworkInterfaceStateComponent
               key={state.start_time}
               state={state}
+              ip_selector={IpVersionSelector.BOTH}
             />
           );
         })}
