@@ -169,7 +169,6 @@ const Bandwidth: React.FC = () => {
 
   return (
     <>
-      <h1>Bandwidth Page</h1>
       <SwitchHelper
         text={"Auto Refresh"}
         state={autoRefresh}
