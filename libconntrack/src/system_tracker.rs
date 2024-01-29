@@ -63,7 +63,13 @@ fn network_interface_state_from_pcap_device(
     match pcap_dev {
         Ok(pcap_dev) => NetworkInterfaceState {
             gateways,
-            interface_name: Some(pcap_dev.name.clone()),
+            // NOTE: pcap puts a more human readable name in the description,
+            // so use that if it exists, else fall back the device name
+            interface_name: if let Some(desc) = pcap_dev.desc {
+                Some(desc.clone())
+            } else {
+                Some(pcap_dev.name.clone())
+            },
             interface_ips: pcap_dev
                 .addresses
                 .iter()
@@ -707,7 +713,7 @@ const PING_LISTENER_DESC: &str = "SystemTracker::ping_listener";
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashSet, str::FromStr, vec};
+    use std::{collections::HashSet, str::FromStr};
 
     use etherparse::{Icmpv4Type, TransportHeader};
     use tokio::sync::mpsc::channel;
@@ -1081,6 +1087,7 @@ mod test {
         assert_eq!(probe.calc_rtt().unwrap().to_std().unwrap(), rtt);
     }
 
+    #[cfg(windows)]
     #[test]
     /// Given two routes with different metrics, can we correctly pick the highest priority/lowest
     /// metric route

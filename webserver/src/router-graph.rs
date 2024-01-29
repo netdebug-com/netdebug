@@ -659,10 +659,11 @@ fn run_intf_test(args: IntfTestCmd) -> ExitCode {
         let new_egress_device = lookup_egress_device().unwrap();
         if compare_devices(&devices, &new_devices) {
             println!("Network changed!");
-            println!("    Old devices: {:?}", devices);
-            println!("    New devices: {:?}", new_devices);
-            println!("    Old Egress device: {:?}", old_egress_device);
-            println!("    New Egress device: {:?}", new_egress_device);
+            // NOTE: {:#?} is a pretty printer for debug!
+            println!("    Old devices: {:#?}", devices);
+            println!("    New devices: {:#?}", new_devices);
+            println!("    Old Egress device: {:#?}", old_egress_device);
+            println!("    New Egress device: {:#?}", new_egress_device);
         } else {
             println!("- No change - {:?}", Utc::now());
         }
