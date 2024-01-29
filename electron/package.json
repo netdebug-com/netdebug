@@ -5,7 +5,7 @@
     "description": "NetDebug Desktop Application",
     "main": ".webpack/main",
     "scripts": {
-        "start": "$(cd .. && ./build.sh -r) && electron-forge start",
+        "start": "$(cd .. && cargo b --release --bin desktop && cp target/release/desktop electron/extra-resources ) && electron-forge start",
         "package": "electron-forge package",
         "make": "electron-forge make",
         "publish": "electron-forge publish",
