@@ -63,7 +63,13 @@ fn network_interface_state_from_pcap_device(
     match pcap_dev {
         Ok(pcap_dev) => NetworkInterfaceState {
             gateways,
-            interface_name: Some(pcap_dev.name.clone()),
+            // NOTE: pcap puts a more human readable name in the description,
+            // so use that if it exists, else fall back the device name
+            interface_name: if let Some(desc) = pcap_dev.desc {
+                Some(desc.clone())
+            } else {
+                Some(pcap_dev.name.clone())
+            },
             interface_ips: pcap_dev
                 .addresses
                 .iter()
