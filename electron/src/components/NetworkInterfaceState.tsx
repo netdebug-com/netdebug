@@ -1,6 +1,19 @@
 import { ApexOptions } from "apexcharts";
 import { NetworkInterfaceState } from "../netdebug_types";
 import ReactApexChart from "react-apexcharts";
+import { useTheme } from "@mui/material/styles";
+import Table from "@mui/material/Table";
+import TableBody from "@mui/material/TableBody";
+import TableCell from "@mui/material/TableCell";
+import TableContainer from "@mui/material/TableContainer";
+import TableHead from "@mui/material/TableHead";
+import TableRow from "@mui/material/TableRow";
+import Paper from "@mui/material/Paper";
+import Tabs from "@mui/material/Tabs";
+import Tab from "@mui/material/Tab";
+import Typography from "@mui/material/Typography";
+import Box from "@mui/material/Box";
+import { useState } from "react";
 
 // Re-usable components to show the detailed information in a flow
 // Assumes we already have the corresponding connection measurement
@@ -43,20 +56,50 @@ export const NetworkInterfaceStateComponent: React.FC<
   return (
     <details open={should_open}>
       <summary>Interface {props.state.interface_name}</summary>
-      <ul>
-        <li> {renderIps("Interface IP", props.state.interface_ips)}</li>
-        <li> {renderIps("Gateway IP", props.state.gateways)}</li>
-        <li> hasLink={prettyBool(props.state.has_link)}</li>
-        <li> isWireless={prettyBool(props.state.is_wireless)}</li>
-        <li> TODO: list time in a pretty way </li>
-      </ul>
-      <PingGraph state={props.state} />
+      <TableContainer component={Paper}>
+        <Table sx={{ minWidth: 650 }} aria-label="simple table">
+          <TableHead>
+            <TableRow>
+              <TableCell>Interface IPs</TableCell>
+              <TableCell align="right">Gateway IPs</TableCell>
+              <TableCell align="right">Link?</TableCell>
+              <TableCell align="right">Wireless?</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            <TableRow
+              sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+            >
+              <TableCell component="th" scope="row">
+                {renderIps("IP", props.state.interface_ips)}
+              </TableCell>
+              <TableCell align="right" component="th" scope="row">
+                {renderIps("IP", props.state.gateways)}
+              </TableCell>
+              <TableCell align="right">
+                {prettyBool(props.state.has_link)}
+              </TableCell>
+              <TableCell align="right">
+                {prettyBool(props.state.is_wireless)}
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </TableContainer>
+      <PingGraph state={props.state} ip_selector={IpVersionSelector.BOTH} />
     </details>
   );
 };
 
+export enum IpVersionSelector {
+  IPV4_ONLY,
+  IPV6_ONLY,
+  BOTH,
+}
+
 export interface NetworkInterfaceStateProps {
   state: NetworkInterfaceState;
+  ip_selector: IpVersionSelector;
 }
 
 interface PingStats {
@@ -72,11 +115,46 @@ interface PingStats {
   total_probes: number;
 }
 
+/* Does this IP match the version specified ? */
+function matchesSelector(ip: string, ip_selector: IpVersionSelector): boolean {
+  if (ip_selector == IpVersionSelector.BOTH) {
+    return true;
+  } else {
+    // HACK : use the ':' character to identify IPv6
+    // seems like this should be accomplishable in fewer lines, but low ROI
+    if (ip_selector == IpVersionSelector.IPV4_ONLY) {
+      return !ip.includes(":");
+    } else {
+      return ip.includes(":");
+    }
+  }
+}
+
 export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
+  const theme = useTheme();
+  const [value, setValue] = useState(0);
+
+  // copied from https://mui.com/material-ui/react-tabs/
+  const handleChange = (event: React.SyntheticEvent, newValue: number) => {
+    setValue(newValue);
+  };
+  function a11yProps(index: number) {
+    return {
+      id: `simple-tab-${index}`,
+      "aria-controls": `simple-tabpanel-${index}`,
+    };
+  }
+
   // Calculate a bunch of useful stats on the Ping information, per gateway
-  function calcPingStats(state: NetworkInterfaceState): Map<string, PingStats> {
+  function calcPingStats(
+    state: NetworkInterfaceState,
+    ip_selector: IpVersionSelector,
+  ): Map<string, PingStats> {
     const stats = new Map<string, PingStats>();
     Object.entries(state.gateways_ping).forEach(([gateway_ip, ping_info]) => {
+      if (!matchesSelector(gateway_ip, ip_selector)) {
+        return; // this is 'continue' in a forEach() loop
+      }
       // which probes do we have both a valid sent and recv time?
       const good_replies = ping_info.historical_probes.filter(
         (probe) => !probe.dropped,
@@ -118,90 +196,11 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
     return stats;
   }
 
-  /* Plot a stacked barchat for each gateway vs. their rtts
-   * TODO: plot drops as well
-   */
-  /*
-
-  function getChartjsDataStackedBar(state: NetworkInterfaceState) {
-    const stats = calcPingStats(state);
-    const rtt_data = Array.from(stats).map(([gateway_ip, ping_stats]) => {
-      const d = {
-        x: gateway_ip,
-        // chartjs expects with stacked graphs that each value it the delta, not the
-        // total, so we have to calc the deltas from each one
-        min: ping_stats.min,
-        p25: ping_stats.p25 - ping_stats.min,
-        p50: ping_stats.p50 - ping_stats.p25,
-        p75: ping_stats.p75 - ping_stats.p50,
-        max: ping_stats.max - ping_stats.p75,
-      };
-      return d;
-    });
-    // the object formats for stacked bar graphs is really funky
-    const datasets = [
-      {
-        label: "Min Rtt (ms)",
-        data: rtt_data,
-        parsing: {
-          yAxisKey: "min",
-        },
-      },
-      {
-        label: "Some Rtts (p25)",
-        data: rtt_data,
-        parsing: {
-          yAxisKey: "p25",
-        },
-      },
-      {
-        label: "Typical Rtts (p50)",
-        data: rtt_data,
-        parsing: {
-          yAxisKey: "p50",
-        },
-      },
-      {
-        label: "Most Rtts (p75)",
-        data: rtt_data,
-        parsing: {
-          yAxisKey: "p75",
-        },
-      },
-      {
-        label: "Max Rtt (ms)",
-        data: rtt_data,
-        parsing: {
-          yAxisKey: "max",
-        },
-      },
-    ];
-    return {
-      labels: Object.keys(stats), // each gateway_ip
-      datasets: datasets,
-    };
-  }
-  function getChartOptionsStackedBar() {
-    const opts = {
-      scales: {
-        x: {
-          stacked: true,
-        },
-        y: {
-          stacked: true,
-          title: {
-            display: true,
-            text: "RTT to Gateway (milliseconds)",
-          },
-        },
-      },
-    };
-    return opts;
-  }
-  */
-
-  function getBoxplotData(state: NetworkInterfaceState) {
-    const pingData = calcPingStats(state);
+  function getBoxplotData(
+    state: NetworkInterfaceState,
+    ip_selector: IpVersionSelector,
+  ) {
+    const pingData = calcPingStats(state, ip_selector);
     const rtt_data = Array.from(pingData).map(([gateway_ip, ping_stats]) => {
       return {
         x: gateway_ip,
@@ -248,15 +247,40 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
           enabled: false,
         },
       },
+      legend: {
+        show: true,
+      },
       title: {
         text: "RTT to Local Gateways (ms)",
         align: "left",
       },
+      xaxis: {
+        title: {
+          text: "Round-Trip Time (milliseconds)",
+          style: {
+            fontSize: "14px",
+          },
+        },
+        // min: 0,
+      },
+      yaxis: {
+        /* looks like ass, overlapping the axis
+        labels: {
+          rotate: 90,
+          offsetX: 100,
+          offsetY: -50,
+        },
+        */
+      },
       plotOptions: {
+        bar: {
+          horizontal: true,
+        },
         boxPlot: {
           colors: {
-            upper: "#5C4742",
-            lower: "#A5978B",
+            // import the colors from the MUI theme
+            upper: theme.palette.primary.main,
+            lower: theme.palette.primary.light,
           },
         },
       },
@@ -264,11 +288,69 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
   }
 
   return (
-    <ReactApexChart
-      options={getBoxplotOptions()}
-      series={getBoxplotData(props.state)}
-      type="boxPlot"
-      // height={350}
-    />
+    <Box sx={{ width: "100%" }}>
+      <Box sx={{ borderBottom: 1, borderColor: "divider" }}>
+        <Tabs
+          value={value}
+          onChange={handleChange}
+          aria-label="basic tabs example"
+        >
+          <Tab label="IPv4" {...a11yProps(0)} />
+          <Tab label="IPv6" {...a11yProps(1)} />
+          <Tab label="Both" {...a11yProps(2)} />
+        </Tabs>
+      </Box>
+      <CustomTabPanel value={value} index={0}>
+        <ReactApexChart
+          options={getBoxplotOptions()}
+          series={getBoxplotData(props.state, IpVersionSelector.IPV4_ONLY)}
+          type="boxPlot"
+          height={350}
+        />
+      </CustomTabPanel>
+      <CustomTabPanel value={value} index={1}>
+        <ReactApexChart
+          options={getBoxplotOptions()}
+          series={getBoxplotData(props.state, IpVersionSelector.IPV6_ONLY)}
+          type="boxPlot"
+          height={350}
+        />
+      </CustomTabPanel>
+      <CustomTabPanel value={value} index={2}>
+        <ReactApexChart
+          options={getBoxplotOptions()}
+          series={getBoxplotData(props.state, IpVersionSelector.BOTH)}
+          type="boxPlot"
+          height={350}
+        />
+      </CustomTabPanel>
+    </Box>
   );
 };
+
+// copied from https://mui.com/material-ui/react-tabs/
+interface TabPanelProps {
+  children?: React.ReactNode;
+  index: number;
+  value: number;
+}
+
+function CustomTabPanel(props: TabPanelProps) {
+  const { children, value, index, ...other } = props;
+
+  return (
+    <div
+      role="tabpanel"
+      hidden={value !== index}
+      id={`simple-tabpanel-${index}`}
+      aria-labelledby={`simple-tab-${index}`}
+      {...other}
+    >
+      {value === index && (
+        <Box sx={{ p: 3 }}>
+          <Typography>{children}</Typography>
+        </Box>
+      )}
+    </div>
+  );
+}
