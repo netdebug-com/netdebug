@@ -148,20 +148,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .unwrap();
     }
 
-    for dev in &devices {
-        // launch the pcap grabber as a normal OS thread in the background
-        // pcap on windows doesn't understand tokio/async
-        let tx_clone = connection_tracker_tx.clone();
-        let device_name = dev.name.clone();
-        let _pcap_thread = libconntrack::pcap::run_blocking_pcap_loop_in_thread(
-            device_name,
-            None,
-            tx_clone,
-            NON_DNS_PAYLOAD_LEN,
-            None,
-        );
-    }
-
     // launch the connection tracker as a tokio::task in the background
     let args_clone = args.clone();
     let connection_manager_tx = connection_tracker_tx.clone();
@@ -187,6 +173,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // loop forever tracking messages sent on the channel
         connection_tracker.rx_loop().await;
     });
+
+    for dev in &devices {
+        // launch the pcap grabber as a normal OS thread in the background
+        // pcap on windows doesn't understand tokio/async
+        let tx_clone = connection_tracker_tx.clone();
+        let device_name = dev.name.clone();
+        let _pcap_thread = libconntrack::pcap::run_blocking_pcap_loop_in_thread(
+            device_name,
+            None,
+            tx_clone,
+            NON_DNS_PAYLOAD_LEN,
+            // delay starting the pcap loop for that long to give conn tracker a change to start
+            // up
+            Some(chrono::Duration::milliseconds(150)),
+            None,
+        );
+    }
 
     info!("Running desktop version: {}", get_git_hash_version());
     let listen_addr = ("127.0.0.1", args.listen_port);

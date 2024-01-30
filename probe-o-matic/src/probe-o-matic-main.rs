@@ -105,6 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pkt_tx.clone(),
         NON_DNS_PAYLOAD_LEN,
         None,
+        None,
     );
     // It appears we have a race between the pcap actually starting and us sending
     // the first probe. So lets simply wait a bit after starting the pcap polling
