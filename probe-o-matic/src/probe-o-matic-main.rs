@@ -11,6 +11,8 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::time::Duration;
 
+const NON_DNS_PAYLOAD_LEN: usize = 64;
+
 /// Probe-o-matic: for probing router IPs
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
@@ -101,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         dev.name.clone(),
         Some(args.pcap_filter.clone()),
         pkt_tx.clone(),
+        NON_DNS_PAYLOAD_LEN,
         None,
     );
     // It appears we have a race between the pcap actually starting and us sending

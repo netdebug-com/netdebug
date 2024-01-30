@@ -542,6 +542,12 @@ impl OwnedParsedPacket {
         Ok(Box::new(OwnedParsedPacket::new(parsed, *pkt.header)))
     }
 
+    /// Truncate the payload of this packet to `len`. Useful for both
+    /// performance as well as privacy
+    pub fn truncate_payload(&mut self, len: usize) {
+        self.payload.truncate(len);
+    }
+
     #[cfg(test)]
     /**
      * Utility to simplify testing - don't use in real code
