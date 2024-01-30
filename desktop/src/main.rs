@@ -21,6 +21,8 @@ use libconntrack::topology_client::{TopologyServerConnection, TopologyServerSend
 
 use crate::rest_endpoints::setup_axum_router;
 
+const NON_DNS_PAYLOAD_LEN: usize = 64;
+
 /// Struct to hold all of the various trackers
 /// We can clone this arbitrarily with no state/locking issues
 #[derive(Clone, Debug, Default)]
@@ -151,8 +153,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // pcap on windows doesn't understand tokio/async
         let tx_clone = connection_tracker_tx.clone();
         let device_name = dev.name.clone();
-        let _pcap_thread =
-            libconntrack::pcap::run_blocking_pcap_loop_in_thread(device_name, None, tx_clone, None);
+        let _pcap_thread = libconntrack::pcap::run_blocking_pcap_loop_in_thread(
+            device_name,
+            None,
+            tx_clone,
+            NON_DNS_PAYLOAD_LEN,
+            None,
+        );
     }
 
     // launch the connection tracker as a tokio::task in the background

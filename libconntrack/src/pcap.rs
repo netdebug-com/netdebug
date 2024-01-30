@@ -1,3 +1,4 @@
+use etherparse::TransportHeader;
 use pcap::Error as PcapError;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -124,13 +125,13 @@ pub fn blocking_pcap_loop(
     device_name: String,
     filter_rule: Option<String>,
     tx: ConnectionTrackerSender,
+    payload_len_for_non_dns: usize,
     stats_polling_frequency: Option<chrono::Duration>,
 ) -> Result<(), Box<dyn Error>> {
     let device = lookup_pcap_device_by_name(&device_name)?;
     info!("Starting pcap capture on {}", &device.name);
     let mut capture = Capture::from_device(device)?
         .buffer_size(64_000_000) // try to prevent any packet loss
-        .snaplen(512)
         .immediate_mode(true)
         .open()?;
     // only capture/probe traffic to the webserver
@@ -168,7 +169,22 @@ pub fn blocking_pcap_loop(
                 let pkt_timestamp = pkt.header.ts; // save this for stats checking
                 let parsed = etherparse::PacketHeaders::from_ethernet_slice(pkt.data);
                 if let Ok(parsed_pkt) = parsed {
-                    let parsed_packet = Box::new(OwnedParsedPacket::new(parsed_pkt, *pkt.header));
+                    let mut parsed_packet =
+                        Box::new(OwnedParsedPacket::new(parsed_pkt, *pkt.header));
+                    let mut should_truncate = true;
+                    if let Some(TransportHeader::Udp(ref udph)) = parsed_packet.transport {
+                        if udph.source_port == 53
+                            || udph.destination_port == 53
+                            || udph.source_port == 5353
+                            || udph.destination_port == 5353
+                        {
+                            should_truncate = false;
+                        }
+                    }
+                    if should_truncate {
+                        parsed_packet.truncate_payload(payload_len_for_non_dns);
+                    }
+
                     let _hash = parsed_packet.sloppy_hash();
                     // TODO: use this hash to map to 256 parallel ConnectionTrackers for parallelism
                     if tx.capacity() < throttle_threshold {
@@ -215,10 +231,17 @@ pub fn run_blocking_pcap_loop_in_thread(
     device_name: String,
     filter_rule: Option<String>,
     tx: ConnectionTrackerSender,
+    payload_len_for_non_dns: usize,
     stats_polling_frequency: Option<chrono::Duration>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        if let Err(e) = blocking_pcap_loop(device_name, filter_rule, tx, stats_polling_frequency) {
+        if let Err(e) = blocking_pcap_loop(
+            device_name,
+            filter_rule,
+            tx,
+            payload_len_for_non_dns,
+            stats_polling_frequency,
+        ) {
             panic!("pcap thread failed to start loop: {}", e);
         }
     })

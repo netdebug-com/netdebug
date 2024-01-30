@@ -7,6 +7,8 @@ use libwebserver::http_routes::make_webserver_http_routes;
 use log::{info, warn};
 use tokio::sync::RwLock;
 
+const NON_DNS_PAYLOAD_LEN: usize = 512;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     common::init::netdebug_init();
@@ -28,6 +30,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             device_name,
             Some(format!("tcp port {} or icmp or icmp6", tcp_listen_port)),
             connection_tx,
+            NON_DNS_PAYLOAD_LEN,
             None,
         );
     }
