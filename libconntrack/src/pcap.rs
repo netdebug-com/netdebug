@@ -232,9 +232,15 @@ pub fn run_blocking_pcap_loop_in_thread(
     filter_rule: Option<String>,
     tx: ConnectionTrackerSender,
     payload_len_for_non_dns: usize,
+    // delay starting the loop for that long to give other threads/tasks a chance to start up
+    // before starting the packet capture
+    startup_delay: Option<chrono::Duration>,
     stats_polling_frequency: Option<chrono::Duration>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
+        if let Some(delay) = startup_delay {
+            std::thread::sleep(delay.to_std().unwrap());
+        }
         if let Err(e) = blocking_pcap_loop(
             device_name,
             filter_rule,

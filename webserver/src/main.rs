@@ -32,6 +32,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             connection_tx,
             NON_DNS_PAYLOAD_LEN,
             None,
+            None,
         );
     }
 
