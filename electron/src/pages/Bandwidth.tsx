@@ -27,7 +27,7 @@ ChartJS.register(
   Title,
 );
 
-function getChartjsData(bw: ChartJsBandwidth, scale: BwChartScale) {
+export function getChartjsData(bw: ChartJsBandwidth, scale: BwChartScale) {
   return {
     datasets: [
       {
@@ -54,7 +54,7 @@ type BwChartScale = {
   time_unit: "minutes" | "seconds";
 };
 
-function getChartScale(bw: ChartJsBandwidth): BwChartScale {
+export function getChartScale(bw: ChartJsBandwidth): BwChartScale {
   const [y_scale, y_suffix] = getSiScale(bw.y_max_bps);
   return {
     y_scale: y_scale,
@@ -79,7 +79,7 @@ function scaleAndTrimeTimeseries(
   return ret;
 }
 
-function getChartOptions(bw: ChartJsBandwidth, scale: BwChartScale) {
+export function getChartOptions(bw: ChartJsBandwidth, scale: BwChartScale) {
   const opts = {
     showLine: true,
     // make TS: happy: animation can be false or some other type but never `true` so
