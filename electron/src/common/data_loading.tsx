@@ -1,3 +1,5 @@
+import { ErrorMessage } from "../components/ErrorMessage";
+
 // The state for loading data from an URL.
 export class DataLoadingState<T> {
   // The deserialized object, if the data was fetched successfully
@@ -44,6 +46,29 @@ export function loadData<T>(url: string, cb: DataLoadingCallback<T>) {
       console.log(err.message);
       cb({ isPending: false, error: err.message, data: null });
     });
+}
+
+// Render a DataLoadingState.
+// If the we are in `isPending`, then a `<div>Loading...</div>` is displayed
+// If there was an error, a `<ErrorMessage>` component is rendered
+// If the data loaded successfully, it is passed to a `renderer` callback
+// that takes a non-null instance of T and returns a JSX.Element. E.g.,
+//       <div>
+//        {renderDataLoadingState(myIpState, (x) => (
+//          <div style={{ color: "blue" }}>{x}</div>
+//        ))}
+//      </div>
+export function renderDataLoadingState<T>(
+  state: DataLoadingState<T>,
+  renderer: (data: T) => JSX.Element,
+) {
+  return (
+    <>
+      {state.isPending && <div>Loading ...</div>}
+      {state.error && <ErrorMessage msg={"ERROR: " + state.error} />}
+      {state.data && renderer(state.data)}
+    </>
+  );
 }
 
 // like loadData(), but delays the actual loading by 1sec. Allows one to
