@@ -19,6 +19,58 @@ const MAX_RESTARTS = 5;
 let desktopProcess: ChildProcess = undefined;
 let numRestarts = 0;
 
+// setup config for autoUpdate, following https://github.com/electron/update-electron-app
+import { updateElectronApp, UpdateSourceType } from "update-electron-app";
+
+/*** 
+ * A set of things I tried (unsuccessfully!) to get local-testing of upgrades with
+ * self-signed certificates to work. 
+ * Leaving it here to try again/more/harder in the future.
+ * 
+ * What a PITA
+// DO NOT SET TO 'true' for production; super insecure
+const debug_upgrade = true;
+//(in theory) allow a the self signed certificate if debugging upgrade
+// in practice and many hours later, non of this works... leaving it here
+// in case someone else can
+if (debug_upgrade) {
+  // lots of work arounds at: https://stackoverflow.com/questions/38986692/how-do-i-trust-a-self-signed-certificate-from-an-electron-app
+  // NOTE: when debugging upgrade issues, Electron creates a txt *file* in the
+  // same directory as the binary, e.g., on windows it's:
+  // $USER/AppData/Local/net_debug/Squirrel-CheckForUpdate
+  app.commandLine.appendSwitch("ignore-certificate-errors");
+
+  // /* This does nothing; apparently outdated stack-overflow wisdom
+  app.on(
+    "certificate-error",
+    (event, webContents, url, error, certificate, callback) => {
+      console.log("Checking certificate... YAY?");
+      // On certificate error we disable default behaviour (stop loading the page)
+      // and we then say "it is all fine - true" to the callback
+      event.preventDefault();
+      callback(true);
+    },
+  );
+  //
+}
+*/
+
+updateElectronApp({
+  updateSource: {
+    type: UpdateSourceType.StaticStorage,
+    // url must be 'https' or will assert()
+    // NOTE: on my machine at least, we have to hardcode '127.0.0.1' because the PITA
+    // python webserver won't bind a v4+v6 addr easily
+    baseUrl:
+      // NOTE: must use backticks and not quotes for variables to expand!
+      `https://topology.netdebug.com:443/static/updater_235235/${process.platform}/${process.arch}`,
+    // This triggers a GET of
+    // "/static/updater_235235/win32/x64/RELEASES?id=net_debug&localVersion=0.0.1&arch=amd64 HTTP/1.1"
+  },
+  // defaults to checking every 10m; seems fine for now
+  notifyUser: true, // this is the default, but be explicit
+});
+
 // Create the browser window.
 const createWindow = (): void => {
   const mainWindow = new BrowserWindow({
