@@ -1,8 +1,11 @@
 use etherparse::TransportHeader;
-use pcap::Error as PcapError;
+use pcap::{ConnectionStatus, Error as PcapError};
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::str::FromStr;
+use std::thread::JoinHandle;
 use std::{collections::HashMap, error::Error};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
@@ -14,8 +17,6 @@ use futures_util::StreamExt;
 use itertools::Itertools;
 use log::{debug, info, warn};
 use pcap::Capture;
-#[cfg(test)]
-use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::owned_packet::OwnedParsedPacket;
 struct PacketParserCodec {}
@@ -118,6 +119,105 @@ pub fn find_interesting_pcap_interfaces(
     Ok(vec![device])
 }
 
+pub struct PcapMonitorOptions {
+    pub filter_rule: Option<String>,
+    pub connection_tracker_tx: ConnectionTrackerSender,
+    pub payload_len_for_non_dns: usize,
+    pub startup_delay: Option<chrono::Duration>,
+    pub stats_polling_frequency: Option<chrono::Duration>,
+}
+
+pub type PcapMonitorSender = Sender<bool>;
+/// Start an OS-level thread to spawn pcap threads for all active interfaces
+/// Return a channel, that when someone sends a 'true' message to it, recheck all
+/// of the threads for new/dynamic interfaces
+pub fn spawn_pcap_monitor_all_interfaces(
+    channel_size: usize,
+    options: PcapMonitorOptions,
+) -> PcapMonitorSender {
+    let (tx, rx) = channel(channel_size);
+    std::thread::spawn(move || {
+        if let Err(e) = pcap_monitor_all_interfaces(rx, options) {
+            panic!("pcap_monitor_all_interfaces returned: {}", e);
+        }
+    });
+    tx
+}
+
+/// Blocking loop to monitor the list of interfaces and keep an active
+/// pcap thread for each one.
+/// Update the list on a channel signal
+fn pcap_monitor_all_interfaces(
+    mut rx: Receiver<bool>,
+    options: PcapMonitorOptions,
+) -> Result<(), pcap::Error> {
+    let mut device_thread_handle_map: HashMap<String, JoinHandle<Result<(), pcap::Error>>> =
+        HashMap::new();
+    loop {
+        // for each previously existing pcap thread, find the ones that have finished
+        let dead_threads = device_thread_handle_map
+            .iter()
+            .filter_map(|(dev, handle)| {
+                if handle.is_finished() {
+                    Some(dev)
+                } else {
+                    None
+                }
+            })
+            .cloned()
+            .collect::<Vec<String>>();
+        // clean up any dead threads
+        for dev in dead_threads {
+            // unwrap is ok, b/c we just verified each dev was in the list
+            let join_handle = device_thread_handle_map.remove(&dev).unwrap();
+            if let Err(e) = join_handle.join() {
+                warn!("Pcap thread for device {} exited with {:#?}", dev, e);
+            } else {
+                info!("Pcap thread for device {} exited cleanly", dev);
+            }
+        }
+        // for each active device, make sure we've launched a pcap thread for it
+        for dev in pcap::Device::list()? {
+            // start a new pcap thread if not already setup and is connected
+            if dev.flags.connection_status == ConnectionStatus::Connected
+                && !device_thread_handle_map.contains_key(&dev.name)
+            {
+                // NOTE: this function will do lots of logging, no need to add to it
+                let join_handle = run_blocking_pcap_loop_in_thread(
+                    dev.name.clone(),
+                    options.filter_rule.clone(),
+                    options.connection_tracker_tx.clone(),
+                    options.payload_len_for_non_dns,
+                    options.startup_delay,
+                    options.stats_polling_frequency,
+                );
+                device_thread_handle_map.insert(dev.name.clone(), join_handle);
+            }
+        }
+        // wait until the system tracker tells us there's been a change and we should
+        // iterate on the loop; sending 'false' means 'exit cleanly'
+        if let Some(should_continue) = rx.blocking_recv() {
+            if !should_continue {
+                info!("Got should_continue=false, exiting...");
+                break;
+            } else {
+                info!("Refreshing listening pcap threads, by request");
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn pcap_find_all_local_addrs() -> Result<HashSet<IpAddr>, pcap::Error> {
+    let mut local_addrs = HashSet::new();
+    for dev in pcap::Device::list()? {
+        for addr in dev.addresses {
+            local_addrs.insert(addr.addr);
+        }
+    }
+    Ok(local_addrs)
+}
+
 // cannot create a const chrono::Duration at compile time, so use seconds instead
 const DEFAULT_STATS_POLLING_FREQUENCY_SECONDS: u64 = 5;
 
@@ -127,9 +227,12 @@ pub fn blocking_pcap_loop(
     tx: ConnectionTrackerSender,
     payload_len_for_non_dns: usize,
     stats_polling_frequency: Option<chrono::Duration>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), pcap::Error> {
     let device = lookup_pcap_device_by_name(&device_name)?;
-    info!("Starting pcap capture on {}", &device.name);
+    info!(
+        "Starting pcap capture on {} ({:?})",
+        &device.name, &device.desc
+    );
     let mut capture = Capture::from_device(device)?
         .buffer_size(64_000_000) // try to prevent any packet loss
         .immediate_mode(true)
@@ -143,13 +246,12 @@ pub fn blocking_pcap_loop(
     // panic if not Ethernet for now (see #344)
     if capture.get_datalink() != pcap::Linktype::ETHERNET {
         let datalink = capture.get_datalink();
-        return Err(format!(
+        return Err(pcap::Error::PcapError(format!(
             "Unsupported link capture type - only support ethernet:  {:?} ({:?}) - {:?}",
             datalink.get_name(),
             datalink,
             datalink.get_description()
-        )
-        .into());
+        )));
     }
     let mut last_stats: Option<pcap::Stat> = None;
     let mut next_stats_time = 0u64;
@@ -218,7 +320,7 @@ pub fn blocking_pcap_loop(
                     _ => {
                         // die on any other error
                         warn!("start_pcap_stream got error: {} - exiting", e);
-                        return Err(Box::new(e));
+                        return Err(e);
                     }
                 }
             }
@@ -236,20 +338,18 @@ pub fn run_blocking_pcap_loop_in_thread(
     // before starting the packet capture
     startup_delay: Option<chrono::Duration>,
     stats_polling_frequency: Option<chrono::Duration>,
-) -> std::thread::JoinHandle<()> {
+) -> std::thread::JoinHandle<Result<(), pcap::Error>> {
     std::thread::spawn(move || {
         if let Some(delay) = startup_delay {
             std::thread::sleep(delay.to_std().unwrap());
         }
-        if let Err(e) = blocking_pcap_loop(
+        blocking_pcap_loop(
             device_name,
             filter_rule,
             tx,
             payload_len_for_non_dns,
             stats_polling_frequency,
-        ) {
-            panic!("pcap thread failed to start loop: {}", e);
-        }
+        )
     })
 }
 
