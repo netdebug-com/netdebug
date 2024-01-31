@@ -385,8 +385,14 @@ impl SystemTracker {
     #[cfg(windows)]
     fn get_gateway_ip_by_lowest_metric_route(routes: &mut [Route], gateways: &mut Vec<IpAddr>) {
         routes.sort_by(|a, b| a.metric.cmp(&b.metric));
-        if let Some(gateway_ip) = routes.iter().next().map(|r| r.gateway).unwrap() {
-            gateways.push(gateway_ip);
+        if !routes.is_empty() {
+            if let Some(gateway_ip) = routes.iter().next().map(|r| r.gateway).unwrap() {
+                gateways.push(gateway_ip);
+            }
+        } else {
+            warn!(
+                "Got an empty list of routes back from net_route::list() - will try again later !?"
+            );
         }
     }
     #[cfg(not(windows))]
@@ -1119,5 +1125,13 @@ mod test {
         // do we correctly pick the gateway1 IP?
         SystemTracker::get_gateway_ip_by_lowest_metric_route(&mut routes, &mut gateways);
         assert_eq!(gateways, vec![gateway_1]);
+    }
+
+    #[test]
+    fn test_handle_no_routes() {
+        let mut no_routes = Vec::new();
+        let mut _ignore = Vec::new();
+        // success is not panic!()'ing
+        SystemTracker::get_gateway_ip_by_lowest_metric_route(&mut no_routes, &mut _ignore);
     }
 }
