@@ -146,15 +146,9 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
   }
 
   // Calculate a bunch of useful stats on the Ping information, per gateway
-  function calcPingStats(
-    state: NetworkInterfaceState,
-    ip_selector: IpVersionSelector,
-  ): Map<string, PingStats> {
+  function calcPingStats(state: NetworkInterfaceState): Map<string, PingStats> {
     const stats = new Map<string, PingStats>();
     Object.entries(state.gateways_ping).forEach(([gateway_ip, ping_info]) => {
-      if (!matchesSelector(gateway_ip, ip_selector)) {
-        return; // this is 'continue' in a forEach() loop
-      }
       // which probes do we have both a valid sent and recv time?
       const good_replies = ping_info.historical_probes.filter(
         (probe) => !probe.dropped,
@@ -197,22 +191,24 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
   }
 
   function getBoxplotData(
-    state: NetworkInterfaceState,
+    pingData: Map<string, PingStats>,
     ip_selector: IpVersionSelector,
   ) {
-    const pingData = calcPingStats(state, ip_selector);
-    const rtt_data = Array.from(pingData).map(([gateway_ip, ping_stats]) => {
-      return {
-        x: gateway_ip,
-        y: [
-          ping_stats.min,
-          ping_stats.q1,
-          ping_stats.median,
-          ping_stats.q3,
-          ping_stats.max,
-        ],
-      };
-    });
+    const rtt_data = Array.from(pingData)
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      .filter(([gateway_ip, _]) => matchesSelector(gateway_ip, ip_selector))
+      .map(([gateway_ip, ping_stats]) => {
+        return {
+          x: gateway_ip,
+          y: [
+            ping_stats.min,
+            ping_stats.q1,
+            ping_stats.median,
+            ping_stats.q3,
+            ping_stats.max,
+          ],
+        };
+      });
     /* TODO!
     const drop_data = Array.from(pingData).map(([gateway_ip, ping_stats]) => {
       return {
@@ -238,11 +234,29 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
     return series;
   }
 
-  function getBoxplotOptions(): ApexOptions {
+  function getBoxplotOptions(
+    pingData: Map<string, PingStats>,
+    ip_selector: IpVersionSelector,
+  ): ApexOptions {
+    let total_packets = 0;
+    let dropped_packets = 0;
+    Array.from(pingData)
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      .filter(([gateway_ip, _]) => matchesSelector(gateway_ip, ip_selector))
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      .forEach(([_, pingStats]) => {
+        total_packets += pingStats.total_non_missed_probes;
+        dropped_packets += pingStats.drop_count;
+      });
+    const percent_dropped_packets =
+      total_packets == 0 ? 0 : (100 * dropped_packets) / total_packets;
+    // is this really how to format to 2 decimal places in javascript?
+    const percent_dropped_packets_pretty = (
+      Math.round(percent_dropped_packets * 100) / 100
+    ).toFixed(2);
     return {
       chart: {
         type: "boxPlot",
-        height: 350,
         animations: {
           enabled: false,
         },
@@ -251,7 +265,10 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
         show: true,
       },
       title: {
-        text: "RTT to Local Gateways (ms)",
+        text:
+          "RTT to Local Gateways (ms) -- " +
+          percent_dropped_packets_pretty +
+          "% packet loss",
         align: "left",
       },
       xaxis: {
@@ -287,6 +304,8 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
     };
   }
 
+  const pingStats = calcPingStats(props.state);
+  const boxPlotHeight = 200;
   return (
     <Box sx={{ width: "100%" }}>
       <Box sx={{ borderBottom: 1, borderColor: "divider" }}>
@@ -302,26 +321,26 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
       </Box>
       <CustomTabPanel value={value} index={0}>
         <ReactApexChart
-          options={getBoxplotOptions()}
-          series={getBoxplotData(props.state, IpVersionSelector.IPV4_ONLY)}
+          options={getBoxplotOptions(pingStats, IpVersionSelector.IPV4_ONLY)}
+          series={getBoxplotData(pingStats, IpVersionSelector.IPV4_ONLY)}
           type="boxPlot"
-          height={350}
+          height={boxPlotHeight}
         />
       </CustomTabPanel>
       <CustomTabPanel value={value} index={1}>
         <ReactApexChart
-          options={getBoxplotOptions()}
-          series={getBoxplotData(props.state, IpVersionSelector.IPV6_ONLY)}
+          options={getBoxplotOptions(pingStats, IpVersionSelector.IPV6_ONLY)}
+          series={getBoxplotData(pingStats, IpVersionSelector.IPV6_ONLY)}
           type="boxPlot"
-          height={350}
+          height={boxPlotHeight}
         />
       </CustomTabPanel>
       <CustomTabPanel value={value} index={2}>
         <ReactApexChart
-          options={getBoxplotOptions()}
-          series={getBoxplotData(props.state, IpVersionSelector.BOTH)}
+          options={getBoxplotOptions(pingStats, IpVersionSelector.BOTH)}
+          series={getBoxplotData(pingStats, IpVersionSelector.BOTH)}
           type="boxPlot"
-          height={350}
+          height={2 * boxPlotHeight} // 2* b/c there are two of them
         />
       </CustomTabPanel>
     </Box>
