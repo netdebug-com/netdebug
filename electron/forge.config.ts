@@ -17,6 +17,13 @@ const config: ForgeConfig = {
     // extensions is automatically added based on target platform:
     // .icns for Mac; .ico for Windows. joy
     icon: "src/images/icon",
+    osxUniversal: {
+      // config options for `@electron/universal`
+      // Needed, otherwise I get:
+      // Error: Detected file "Contents/Resources/extra-resources/desktop" that's the same in both
+      //        x64 and arm64 builds and not covered by the x64ArchFiles rule: "undefined"
+      x64ArchFiles: "*",
+    },
   },
   rebuildConfig: {},
   makers: [
