@@ -64,8 +64,11 @@ pub struct TopologyServerConnection {
     waiting_for_hello: Vec<Sender<PerfMsgCheck<(IpAddr, String)>>>,
     waiting_for_congestion_summary: Vec<Sender<PerfMsgCheck<CongestionSummary>>>,
     retry_stat: StatHandle,
+    /// stats about msgs that go from us/the desktop to the remote topology servert
     desktop2server_msgs_stat: StatHandle,
+    /// a subset of desktop2server_msgs: only the ones for the store operation
     desktop2server_store_msgs_stat: StatHandle,
+    /// stats about msgs that come from the server back to us/the desktop
     server2desktop_msgs_stat: StatHandle,
     /// Maintain a pointer to the whole counters registry for remote export
     super_counters_registries: SharedExportedStatRegistries,
@@ -103,7 +106,7 @@ impl TopologyServerConnection {
             ),
             desktop2server_msgs_stat: stats_registry.add_stat(
                 "desktop2server_msgs",
-                Units::None,
+                Units::Bytes,
                 vec![StatType::SUM, StatType::RATE],
             ),
             desktop2server_store_msgs_stat: stats_registry.add_stat(
@@ -264,7 +267,6 @@ impl TopologyServerConnection {
         desktop_msg: PerfMsgCheck<TopologyServerMessage>,
         ws_tx: &Sender<PerfMsgCheck<DesktopToTopologyServer>>,
     ) {
-        self.desktop2server_msgs_stat.bump();
         use TopologyServerMessage::*;
         match desktop_msg.perf_check_get("TopologyServerConnection:: handle_desktop_msg()") {
             GetMyIpAndUserAgent { reply_tx } => {
@@ -309,15 +311,18 @@ impl TopologyServerConnection {
         &self,
         mut writer: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
     ) -> Sender<PerfMsgCheck<DesktopToTopologyServer>> {
+        // give the writer a private copy of the stats so it can update them
+        // recall that the stats all have their own private locks so this is ok
+        let desktop2server_stats_clone = self.desktop2server_msgs_stat.clone();
         let (tx, mut rx) = channel::<PerfMsgCheck<DesktopToTopologyServer>>(self.buffer_size);
         let url = self.url.clone();
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 let msg = msg.perf_check_get("TopologyServerConnection::spawn_ws_writer");
-                if let Err(e) = writer
-                    .send(Message::Text(serde_json::to_string(&msg).unwrap()))
-                    .await
-                {
+                let outgoing_msg = Message::Text(serde_json::to_string(&msg).unwrap());
+                // count the number and size of messages sent to the topology server
+                desktop2server_stats_clone.add_value(outgoing_msg.len() as u64);
+                if let Err(e) = writer.send(outgoing_msg).await {
                     warn!("Tried to send to the TopologyServer {}, but got {}", url, e);
                     break;
                 }
