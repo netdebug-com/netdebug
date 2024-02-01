@@ -55,9 +55,9 @@ function make_context_string(state: NetworkInterfaceState): string {
   } else {
     return (
       "(Old - from " +
-      new Date(Date.parse(state.start_time)).toLocaleString("en-US") +
+      new Date(Date.parse(state.start_time)).toLocaleString() +
       " to " +
-      new Date(Date.parse(state.end_time)).toLocaleString("en-US") +
+      new Date(Date.parse(state.end_time)).toLocaleString() +
       " ) "
     );
   }

@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::{net::IpAddr, str::FromStr};
 
 use chrono::{DateTime, Utc};
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration};
@@ -464,6 +464,69 @@ pub fn dns_to_cannonical_domain(hostname: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(cannonical_domain).to_string())
 }
 
+///
+/// Magic trick!  Every IPv6 link-local IP address must be bound to a specific
+/// interface and expose the 'scope_id' which is the ifIndex that we want.
+///
+/// To convert a link-local IP to if_index, bind it to a Udp socket, connect() it
+/// to an exterior address and read back the scope_id
+///
+/// See [`https://doc.rust-lang.org/std/net/struct.SocketAddrV6.html#method.scope_id`]
+///
+/// See https://datatracker.ietf.org/doc/html/rfc2553#section-3.3
+///
+/// No packets are sent using this technique, it's a hack to portably talk to the
+/// routing table.
+///
+/// FYI: On windows at least (TODO: test MacOS, Linux), if you call .scope_id() on a
+/// non-Link-Local IP, you always get back zero which is not a valid ifIndex (at
+/// least on the machines I've tested)
+///
+pub fn link_local_ip_to_interface_index(link_local_ipv6: IpAddr) -> Result<u32, std::io::Error> {
+    let sock = std::net::UdpSocket::bind((link_local_ipv6, 0))?;
+    let google_v6_dns = IpAddr::from_str("2001:4860:4860::8888").unwrap();
+    sock.connect((google_v6_dns, 53))?;
+    use std::net::SocketAddr::*;
+    match sock.local_addr()? {
+        V4(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            "Got a v4 address when connecting to a v6 addr?",
+        )),
+        V6(local_ip) => Ok(local_ip.scope_id()),
+    }
+}
+
+/// Does this IP address match this broadcast address?
+pub fn ip_in_broadcast(ip: IpAddr, broadcast_addr: IpAddr, netmask: IpAddr) -> bool {
+    use IpAddr::*;
+    let (ip_octets, broadcast_octets, netmask_octets) = match (ip, broadcast_addr, netmask) {
+        (V4(gw), V4(broadcast), V4(netmask)) => (
+            Vec::from(gw.octets()),
+            Vec::from(broadcast.octets()),
+            Vec::from(netmask.octets()),
+        ),
+        (V6(gw), V6(broadcast), V6(netmask)) => (
+            Vec::from(gw.octets()),
+            Vec::from(broadcast.octets()),
+            Vec::from(netmask.octets()),
+        ),
+
+        _ => return false, // this can happen normally
+    };
+    // walk backwards and mask the ip vs. the netmask and compare to broadcast net
+    assert_eq!(ip_octets.len(), broadcast_octets.len());
+    for i in (0..ip_octets.len()).rev() {
+        let netmask_octet = *netmask_octets.get(i).unwrap();
+        let broadcast_octet = *broadcast_octets.get(i).unwrap();
+        let ip_octet = *ip_octets.get(i).unwrap();
+        if (ip_octet & netmask_octet) != broadcast_octet {
+            return false;
+        }
+    }
+    // getting here means everything matches!
+    true
+}
+
 #[cfg(test)]
 mod test {
     use std::str::FromStr;
@@ -519,5 +582,62 @@ mod test {
         assert_eq!(link_local_ipv6_to_mac_address(ip2), Some(mac2));
         let ip3 = IpAddr::from_str("2600:1700:5b20:4e1f:a93d:d726:acd0:c0a3").unwrap();
         assert_eq!(link_local_ipv6_to_mac_address(ip3), None);
+    }
+
+    #[test]
+    fn test_ip_in_broadcast() {
+        let test_cases = [
+            (
+                "easy positive IPv4",
+                IpAddr::from_str("192.168.1.1").unwrap(),
+                IpAddr::from_str("192.168.1.0").unwrap(),
+                IpAddr::from_str("255.255.255.0").unwrap(),
+                true,
+            ),
+            (
+                "easy negative IPv4",
+                IpAddr::from_str("192.168.99.1").unwrap(),
+                IpAddr::from_str("192.168.1.0").unwrap(),
+                IpAddr::from_str("255.255.255.0").unwrap(),
+                false,
+            ),
+            (
+                "easy positive IPv6",
+                IpAddr::from_str("fe80::1").unwrap(),
+                IpAddr::from_str("fe80::").unwrap(),
+                IpAddr::from_str("ffff::").unwrap(),
+                true,
+            ),
+            (
+                "easy negative IPv6",
+                IpAddr::from_str("9999::1").unwrap(),
+                IpAddr::from_str("fe80::").unwrap(),
+                IpAddr::from_str("ffff::").unwrap(),
+                false,
+            ),
+            (
+                "mix v4 + v6",
+                IpAddr::from_str("9999::1").unwrap(),
+                IpAddr::from_str("192.168.0.0").unwrap(),
+                IpAddr::from_str("ffff::").unwrap(),
+                false,
+            ),
+            (
+                "prefix=4 IPv4 - non /8 aligned",
+                IpAddr::from([0x80, 0x0, 0x0, 0x1]),
+                IpAddr::from([0x80, 0x0, 0x0, 0x0]),
+                IpAddr::from([0xf0, 0x0, 0x0, 0x0]),
+                true,
+            ),
+        ];
+
+        for (msg, ip, broadcast_addr, netmask, expected) in test_cases {
+            assert_eq!(
+                ip_in_broadcast(ip, broadcast_addr, netmask),
+                expected,
+                "{}",
+                msg
+            );
+        }
     }
 }

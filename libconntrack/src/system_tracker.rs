@@ -1,13 +1,15 @@
 use std::{
     collections::{HashMap, VecDeque},
-    error::Error,
     net::IpAddr,
     num::Wrapping,
     sync::Arc,
     time::Duration,
 };
 
-use crate::{pcap::PcapMonitorSender, utils::PerfMsgCheck};
+use crate::{
+    pcap::PcapMonitorSender,
+    utils::{ip_in_broadcast, link_local_ip_to_interface_index, PerfMsgCheck},
+};
 
 use chrono::Utc;
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units};
@@ -56,7 +58,7 @@ use crate::{
  * be part of the libconntrack_wasm crate.
  */
 fn network_interface_state_from_pcap_device(
-    pcap_dev: Result<pcap::Device, Box<dyn Error>>,
+    pcap_dev: Result<pcap::Device, pcap::Error>,
     gateways: Vec<IpAddr>, // If known
     comment: String,
 ) -> NetworkInterfaceState {
@@ -314,12 +316,18 @@ impl SystemTracker {
         });
         // task #1
         tokio::task::spawn(async move {
-            SystemTracker::network_change_watcher(system_tracker, update_period).await;
+            SystemTracker::network_change_watcher(system_tracker.clone(), update_period).await;
         });
     }
 
     pub async fn snapshot_current_network_state() -> NetworkInterfaceState {
-        let gateways = match SystemTracker::get_default_gateways_async().await {
+        let device = lookup_egress_device();
+        let hints = if let Ok(d) = &device {
+            d.addresses.clone()
+        } else {
+            Vec::new()
+        };
+        let gateways = match SystemTracker::get_default_gateways_async(hints).await {
             Ok(g) => g,
             Err(e) => {
                 warn!(
@@ -329,16 +337,16 @@ impl SystemTracker {
                 Vec::new()
             }
         };
-        network_interface_state_from_pcap_device(
-            lookup_egress_device(),
-            gateways,
-            "Update".to_string(),
-        )
+        network_interface_state_from_pcap_device(device, gateways, "Update".to_string())
     }
 
     /// Get all of the default routes in the system in an OS-independent way
-    pub async fn get_default_gateways_async() -> std::io::Result<Vec<IpAddr>> {
-        tokio::task::spawn_blocking(|| {
+    /// In the cases where there are multiple gateway addresses, use the broadcast hints to
+    /// prefer gateway IPs that match our egress interface
+    pub async fn get_default_gateways_async(
+        hints: Vec<pcap::Address>,
+    ) -> std::io::Result<Vec<IpAddr>> {
+        tokio::task::spawn_blocking(move || {
             // The net-route crate is async but we don't trust that it won't block on some OS calls,
             // so we spawn it with spawn_blocking() (a separate OS thread essentially), and then start a runtime
             // in this thread so we can call the async fn in net route
@@ -357,63 +365,102 @@ impl SystemTracker {
                 // needs to have a prefix of 0 and a valid gateway to be considered a 'default' route
                 .filter(|r| r.prefix == 0)
                 .collect::<Vec<Route>>();
-            if cfg!(windows) {
-                // ANNOYING: the 'metric' attribute of a route exists on Window and Linux but the [`net-route::Route`]
-                // create only implements it for windows.  On systems with multiple active interfaces
-                //
-                // split into v4 and v6, and if there are multiple of one type, tie break by lowest
-                // route metric (this is what routing tables do)
-                // NOTE: multiple default routes with different metrics can happen, e.g., if there's a WiFI
-                // and wired link at the same time, or a VPN (or probably in other cases)
-                // TODO: do all OS's use "lowest route metric is highest priority"!?
-                let (mut default_v4_routes, mut default_v6_routes): (Vec<Route>, Vec<Route>) =
-                    default_routes
-                        .iter()
-                        .cloned()
-                        .partition(|r| r.destination.is_ipv4());
+            // split into v4 and v6, and if there are multiple of one type, tie break by the hints
+            // NOTE: multiple default routes with different metrics can happen, e.g., if there's a WiFI
+            // and wired link at the same time, or a VPN (or probably in other cases)
+            let (default_v4_routes, default_v6_routes): (Vec<Route>, Vec<Route>) = default_routes
+                .iter()
+                .cloned()
+                .partition(|r| r.destination.is_ipv4());
 
-                let mut gateways = Vec::new();
-                SystemTracker::get_gateway_ip_by_lowest_metric_route(
-                    &mut default_v4_routes,
-                    &mut gateways,
-                );
-                SystemTracker::get_gateway_ip_by_lowest_metric_route(
-                    &mut default_v6_routes,
-                    &mut gateways,
-                );
-                Ok(gateways)
-            } else {
-                // On MacOs and Linux (for now), just return all of the gateway IPs and let the GUI print
-                // all possible gatways
-                Ok(default_routes.iter().filter_map(|r| r.gateway).collect())
-            }
+            let mut gateways = Vec::new();
+            SystemTracker::get_gateway_ip_by_broadcast_hints(
+                default_v4_routes,
+                &hints,
+                &mut gateways,
+            );
+            SystemTracker::get_gateway_ip_by_broadcast_hints(
+                default_v6_routes,
+                &hints,
+                &mut gateways,
+            );
+            Ok(gateways)
         })
         .await?
     }
 
-    /// quick helper function to get the active route
-    /// Currently only works on windows because the [`net-route`] crate is braindead: TODO Fix it
-    #[cfg(windows)]
-    fn get_gateway_ip_by_lowest_metric_route(routes: &mut [Route], gateways: &mut Vec<IpAddr>) {
-        routes.sort_by(|a, b| a.metric.cmp(&b.metric));
-        if !routes.is_empty() {
-            if let Some(gateway_ip) = routes.iter().next().map(|r| r.gateway).unwrap() {
-                gateways.push(gateway_ip);
+    /// helper function to best match the default gateways to the active egress interface
+    /// This is a PITA because:
+    /// 1) On Windows, when an interface goes down/becomes unavailable, it's routes are often
+    ///     still in the routing table (!?)
+    /// 2) A link-local IPv6 address has the same valid route on every interface
+    /// 3) We can return gateways that we have no hope of pinging which confuses the UI/users
+    ///
+    /// So, use a sequence of heuristics to find only the gateway IPs that are directly reachable
+    /// from the interface corresponding to the active default route
+    fn get_gateway_ip_by_broadcast_hints(
+        routes: Vec<Route>,
+        hints: &Vec<pcap::Address>,
+        gateways: &mut Vec<IpAddr>,
+    ) {
+        // did we get a hint?
+        let preferred_gws = if hints.is_empty() {
+            //  no hint; just use everything
+            routes
+                .iter()
+                .filter_map(|r| r.gateway)
+                .collect::<Vec<IpAddr>>()
+        } else if let Some(link_local_gateway_ip) = hints.iter().find(|a| match a.addr {
+            // is one of the hint addresses an IPv6 link-local (e.g., starts with 0xfe80)?
+            IpAddr::V4(_) => false,
+            IpAddr::V6(v6) => v6.octets().split_at(2).0 == [0xfe, 0x80],
+        }) {
+            // the interface had a IPv6 link-local address, so we can use that to figure out the ifIndex of that
+            // interface and prefer those routes
+            match link_local_ip_to_interface_index(link_local_gateway_ip.addr) {
+                // found a valid interface_index, select just those routes
+                Ok(if_index) => routes
+                    .iter()
+                    .filter_map(|r| {
+                        if r.ifindex == Some(if_index) {
+                            r.gateway
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<IpAddr>>(),
+                Err(e) => {
+                    warn!(
+                        "Failed to lookup ifIndex for IP {}: returning all gateways: {}",
+                        link_local_gateway_ip.addr, e
+                    );
+                    routes
+                        .iter()
+                        .filter_map(|r| r.gateway)
+                        .collect::<Vec<IpAddr>>()
+                }
             }
         } else {
-            warn!(
-                "Got an empty list of routes back from net_route::list() - will try again later !?"
-            );
-        }
-    }
-    #[cfg(not(windows))]
-    fn get_gateway_ip_by_lowest_metric_route(routes: &mut [Route], gateways: &mut Vec<IpAddr>) {
-        // just put them all in, no 'metric' defined
-        for r in routes {
-            if let Some(gateway_ip) = r.gateway {
-                gateways.push(gateway_ip);
-            }
-        }
+            // got hints; prefer the gateways that match the hints
+            routes
+                .iter()
+                .filter_map(|r| {
+                    // if a route has a gateway, compare it to the list of broadcast hints
+                    // to try to match the gateway IP to the broadcast address we got from
+                    // the egress interface
+                    r.gateway.filter(|&gateway_ip| {
+                        hints
+                            .iter()
+                            .any(|addr| match (addr.broadcast_addr, addr.netmask) {
+                                // if the broadcast and netmask are defined, use them as hints
+                                (Some(br), Some(nm)) => ip_in_broadcast(gateway_ip, br, nm),
+                                _ => false,
+                            })
+                    })
+                })
+                .collect::<Vec<IpAddr>>()
+        };
+        gateways.extend(preferred_gws);
     }
 
     /// Persistent task that waits for various updates from the system and calls the relevant handlers
@@ -725,12 +772,10 @@ impl SystemTracker {
         ConnectionKey::make_icmp_echo_key(*local_ip, *gateway, self.ping_id)
     }
 }
-
 const PING_LISTENER_DESC: &str = "SystemTracker::ping_listener";
 
 #[cfg(test)]
 mod test {
-    #[cfg(windows)]
     use std::vec;
     use std::{collections::HashSet, str::FromStr};
 
@@ -773,7 +818,9 @@ mod test {
      */
     #[tokio::test]
     async fn test_get_default_routes_async() {
-        let gateways = SystemTracker::get_default_gateways_async().await.unwrap();
+        let gateways = SystemTracker::get_default_gateways_async(Vec::new())
+            .await
+            .unwrap();
         for gw in &gateways {
             println!("Found a default gw: {}", gw);
         }
@@ -1108,18 +1155,20 @@ mod test {
 
     #[cfg(windows)]
     #[test]
-    /// Given two routes with different metrics, can we correctly pick the highest priority/lowest
-    /// metric route
-    fn test_route_selection_by_metric() {
-        let ignore_ip = IpAddr::from_str("192.168.1.0").unwrap();
+    /// Given two routes with different gateways, can we correctly pick the best route
+    /// given the hints for which interface to use
+    fn test_route_selection_by_hints() {
+        let ignore_ip = IpAddr::from_str("1.2.3.4").unwrap();
         let gateway_1 = IpAddr::from_str("192.168.1.1").unwrap();
-        let gateway_2 = IpAddr::from_str("192.168.1.2").unwrap();
+        let gateway_2 = IpAddr::from_str("192.168.86.254").unwrap();
+        let broadcast_1 = IpAddr::from_str("192.168.1.0").unwrap();
+        let netmask_1 = IpAddr::from_str("255.255.255.0").unwrap();
         let route1 = Route {
             destination: ignore_ip,
             prefix: 0, // means a 'default' route
             gateway: Some(gateway_1),
             ifindex: None,
-            metric: Some(100),
+            metric: None,
             luid: None,
         };
         let route2 = Route {
@@ -1127,22 +1176,28 @@ mod test {
             prefix: 0, // means a 'default' route
             gateway: Some(gateway_2),
             ifindex: None,
-            metric: Some(200),
+            metric: None,
             luid: None,
         };
 
-        let mut routes = vec![route2, route1];
+        let routes = vec![route2, route1];
+        let hints = vec![pcap::Address {
+            addr: ignore_ip,
+            netmask: Some(netmask_1),
+            broadcast_addr: Some(broadcast_1),
+            dst_addr: None, // only used in point-to-point connections
+        }];
         let mut gateways = Vec::new();
         // do we correctly pick the gateway1 IP?
-        SystemTracker::get_gateway_ip_by_lowest_metric_route(&mut routes, &mut gateways);
+        SystemTracker::get_gateway_ip_by_broadcast_hints(routes, &hints, &mut gateways);
         assert_eq!(gateways, vec![gateway_1]);
     }
 
     #[test]
     fn test_handle_no_routes() {
-        let mut no_routes = Vec::new();
+        let no_routes = Vec::new();
         let mut _ignore = Vec::new();
         // success is not panic!()'ing
-        SystemTracker::get_gateway_ip_by_lowest_metric_route(&mut no_routes, &mut _ignore);
+        SystemTracker::get_gateway_ip_by_broadcast_hints(no_routes, &Vec::new(), &mut _ignore);
     }
 }
