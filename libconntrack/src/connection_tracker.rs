@@ -631,25 +631,32 @@ impl<'a> ConnectionTracker<'a> {
                     self.pcap_to_wall_delay.clone(),
                 );
                 for group in connection.aggregate_groups() {
-                    if let Some(traffic_stats) = self.aggregate_traffic_stats.get_refresh(group) {
-                        traffic_stats.add_packet_with_time(src_is_local, pkt_len, pkt_timestamp);
-                        traffic_stats.add_new_lost_bytes(
-                            !src_is_local, // The side that lost the bytes, is the opposite of the one sending ACKs
-                            conn_update_return.new_lost_bytes,
-                            pkt_timestamp,
-                        );
-                        traffic_stats.add_rtt_sample(
-                            !src_is_local, // The side that has the RTT, is the opposite of the one sending ACKs
-                            conn_update_return.rtt_sample,
-                            pkt_timestamp,
-                        );
-                    } else {
+                    if !self.aggregate_traffic_stats.contains_key(group) {
                         warn!(
                             "Group counters out of sync between connection {} and tracker: missing {:?}", 
                             connection.connection_key(),
                             group
                         );
+                        self.aggregate_traffic_stats.insert(
+                            group.clone(),
+                            BidirectionalStats::new(
+                                std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS),
+                                pkt_timestamp,
+                            ),
+                        );
                     }
+                    let traffic_stats = self.aggregate_traffic_stats.get_refresh(group).unwrap();
+                    traffic_stats.add_packet_with_time(src_is_local, pkt_len, pkt_timestamp);
+                    traffic_stats.add_new_lost_bytes(
+                        !src_is_local, // The side that lost the bytes, is the opposite of the one sending ACKs
+                        conn_update_return.new_lost_bytes,
+                        pkt_timestamp,
+                    );
+                    traffic_stats.add_rtt_sample(
+                        !src_is_local, // The side that has the RTT, is the opposite of the one sending ACKs
+                        conn_update_return.rtt_sample,
+                        pkt_timestamp,
+                    );
                 }
                 if needs_dns_and_process_lookup {
                     // only new connections that we don't immediately tear down need DNS lookups
