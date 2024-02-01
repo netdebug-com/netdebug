@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use crate::utils::PerfMsgCheck;
+use crate::{pcap::PcapMonitorSender, utils::PerfMsgCheck};
 
 use chrono::Utc;
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units};
@@ -124,6 +124,8 @@ pub struct SystemTracker {
     ping_id: u16,
     /// A pointer to our prober task that manages rate limiting, etc.
     prober_tx: ProberSender,
+    /// A pointer to the pcap_monitor so we can alert it to network changes
+    pub pcap_monitor_tx: Option<PcapMonitorSender>,
     /// counter for number of network device changes
     network_device_changes: StatHandle,
     /// counter for number of pings we get with a weird/delayed sequence number, shared across all gateways
@@ -189,6 +191,7 @@ impl SystemTracker {
                 Units::None,
                 [StatType::COUNT],
             ),
+            pcap_monitor_tx: None, // to start with
         }
     }
 
@@ -217,16 +220,18 @@ impl SystemTracker {
         self.network_history.iter_mut().last().unwrap()
     }
 
-    /**
-     * Handle a potential network state update.
-     *
-     * Return true if state was updated, false if no update was needed
-     *
-     * Whether the state has changed or not, send a fresh round of pings to each gateway.
-     *
-     * NOTE: this function is called every ```update_period``` from the ```SystemTracker::network_update_watcher```
-     * task, e.g., every 500ms
-     */
+    ///
+    /// Handle a potential network state update.
+    ///  
+    /// Return true if state was updated, false if no update was needed
+    ///  
+    /// If the state has changed, send a msg to the pcap_monitor to let it know
+    ///  
+    /// Whether the state has changed or not, send a fresh round of pings to each gateway.
+    ///  
+    /// NOTE: this function is called every ```update_period``` from the [`SystemTracker::network_update_watcher`]
+    /// task, e.g., every 500ms
+    ///  
     pub async fn handle_update_network_state(
         &mut self,
         interface_state: NetworkInterfaceState,
@@ -234,6 +239,12 @@ impl SystemTracker {
         let changed = if self.current_network().has_state_changed(&interface_state) {
             self.current_network_mut().end_time = Some(Utc::now());
             let old_state = self.current_network().clone();
+            // update the pcap_monitor_tx, if it's been specified
+            if let Some(pcap_monitor_tx) = &self.pcap_monitor_tx {
+                if let Err(e) = pcap_monitor_tx.try_send(true) {
+                    warn!("Failed to update the pcap_monitor_tx thread: {}", e);
+                }
+            }
             // for each old gateway, tell the connection tracker to stop listening to the ping updates
             for (gateway, ping_state) in &old_state.gateways_ping {
                 send_or_log_sync!(

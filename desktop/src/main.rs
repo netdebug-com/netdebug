@@ -4,6 +4,9 @@ use clap::Parser;
 use common_wasm::timeseries_stats::{SharedExportedStatRegistries, SuperRegistry};
 use desktop_common::get_git_hash_version;
 use libconntrack::dns_tracker::DnsTrackerSender;
+use libconntrack::pcap::{
+    pcap_find_all_local_addrs, spawn_pcap_monitor_all_interfaces, PcapMonitorOptions,
+};
 use libconntrack::system_tracker::SystemTracker;
 use libconntrack::{
     connection_tracker::{ConnectionTracker, ConnectionTrackerMsg, ConnectionTrackerSender},
@@ -13,8 +16,8 @@ use libconntrack::{
     utils::PerfMsgCheck,
 };
 use log::info;
+use std::error::Error;
 use std::sync::Arc;
-use std::{collections::HashSet, error::Error, net::IpAddr};
 use tokio::sync::RwLock;
 
 use libconntrack::topology_client::{TopologyServerConnection, TopologyServerSender};
@@ -86,11 +89,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         PerfMsgCheck<ConnectionTrackerMsg>,
     >(MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
 
-    let devices = libconntrack::pcap::find_interesting_pcap_interfaces(&args.pcap_device)?;
-    let local_addrs = devices
-        .iter()
-        .flat_map(|d| d.addresses.iter().map(|a| a.addr).collect::<Vec<IpAddr>>())
-        .collect::<HashSet<IpAddr>>();
+    let local_addrs = pcap_find_all_local_addrs()?;
     // TODO! Change this logic so that the binding to the interface can change over time
     let raw_sock = libconntrack::pcap::bind_writable_pcap();
     let prober_tx = spawn_raw_prober(raw_sock, MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
@@ -174,22 +173,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         connection_tracker.rx_loop().await;
     });
 
-    for dev in &devices {
-        // launch the pcap grabber as a normal OS thread in the background
-        // pcap on windows doesn't understand tokio/async
-        let tx_clone = connection_tracker_tx.clone();
-        let device_name = dev.name.clone();
-        let _pcap_thread = libconntrack::pcap::run_blocking_pcap_loop_in_thread(
-            device_name,
-            None,
-            tx_clone,
-            NON_DNS_PAYLOAD_LEN,
-            // delay starting the pcap loop for that long to give conn tracker a change to start
-            // up
-            Some(chrono::Duration::milliseconds(150)),
-            None,
-        );
-    }
+    let pcap_options = PcapMonitorOptions {
+        filter_rule: None,
+        connection_tracker_tx,
+        payload_len_for_non_dns: NON_DNS_PAYLOAD_LEN,
+        startup_delay: Some(chrono::Duration::milliseconds(150)),
+        stats_polling_frequency: None,
+    };
+    let pcap_monitor_tx =
+        spawn_pcap_monitor_all_interfaces(MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE, pcap_options);
+    system_tracker.write().await.pcap_monitor_tx = Some(pcap_monitor_tx);
 
     info!("Running desktop version: {}", get_git_hash_version());
     let listen_addr = ("127.0.0.1", args.listen_port);

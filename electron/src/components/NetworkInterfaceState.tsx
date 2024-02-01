@@ -44,6 +44,26 @@ function renderIps(name: string, ip_list: string[]) {
   }
 }
 
+// Take a network interface and return
+// "Active (last <time>)" or
+// "(Old - from <time> to <time>)"
+function make_context_string(state: NetworkInterfaceState): string {
+  if (state.end_time == null) {
+    const seconds = Math.floor(
+      (Date.now() - Date.parse(state.start_time)) / 1000,
+    );
+    return "Active (last " + seconds + " secs) ";
+  } else {
+    return (
+      "(Old - from " +
+      new Date(Date.parse(state.start_time)).toLocaleString("en-US") +
+      " to " +
+      new Date(Date.parse(state.end_time)).toLocaleString("en-US") +
+      " ) "
+    );
+  }
+}
+
 function prettyBool(yes: boolean): string {
   return yes ? "Yes" : "No";
 }
@@ -52,10 +72,13 @@ export const NetworkInterfaceStateComponent: React.FC<
   NetworkInterfaceStateProps
 > = (props) => {
   const should_open = props.state.end_time == null;
+  const context = make_context_string(props.state);
   // let date_str =
   return (
     <details open={should_open}>
-      <summary>Interface {props.state.interface_name}</summary>
+      <summary>
+        {context} :: Interface {props.state.interface_name}
+      </summary>
       <TableContainer component={Paper}>
         <Table sx={{ minWidth: 650 }} aria-label="simple table">
           <TableHead>
