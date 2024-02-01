@@ -6,7 +6,7 @@ import {
 } from "../utils";
 import { fetchAndCheckResult } from "../common/data_loading";
 import { SwitchHelper } from "../components/SwitchHelper";
-import { Box } from "@mui/material";
+import { Alert, Box } from "@mui/material";
 import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
 import {
   getDefaultRateGridColDef as getDefaultGridColDefWithUnits,
@@ -101,6 +101,41 @@ const RttLatency: React.FC = () => {
   const anyInvalidKind = statEntries.some(
     (entry) => entry.kind.tag != "HostIp",
   );
+
+  const dataGrid = (
+    <Box width="100%">
+      <DataGrid
+        aria-label={"Table of remote hosts with their RTT/Ping Latency"}
+        density="compact"
+        columns={columns}
+        rows={statEntries}
+        getRowId={(row: AggregateStatEntry) => getNameFromAggKind(row.kind)}
+        sx={{
+          width: "100%",
+          ...dataGridDefaultSxProp,
+        }}
+        initialState={{
+          sorting: {
+            sortModel: [{ field: "max_rtt", sort: "desc" }],
+          },
+          columns: {
+            // Hide these columns by default.
+            columnVisibilityModel: {},
+          },
+        }}
+        slots={{
+          toolbar: GridToolbar,
+        }}
+        slotProps={{
+          toolbar: { printOptions: { disableToolbarButton: true } },
+        }}
+      />
+    </Box>
+  );
+
+  const shouldDisplayTcpTimestampNote =
+    statEntries.length == 0 &&
+    navigator.platform.toLowerCase().includes("win32");
   return (
     <>
       {anyInvalidKind && (
@@ -113,36 +148,21 @@ const RttLatency: React.FC = () => {
             state={autoRefresh}
             updateFn={setAutoRefresh}
           />
-          <Box width="100%">
-            <DataGrid
-              aria-label={"Table of remote hosts with their RTT/Ping Latency"}
-              density="compact"
-              columns={columns}
-              rows={statEntries}
-              getRowId={(row: AggregateStatEntry) =>
-                getNameFromAggKind(row.kind)
-              }
-              sx={{
-                width: "100%",
-                ...dataGridDefaultSxProp,
-              }}
-              initialState={{
-                sorting: {
-                  sortModel: [{ field: "max_rtt", sort: "desc" }],
-                },
-                columns: {
-                  // Hide these columns by default.
-                  columnVisibilityModel: {},
-                },
-              }}
-              slots={{
-                toolbar: GridToolbar,
-              }}
-              slotProps={{
-                toolbar: { printOptions: { disableToolbarButton: true } },
-              }}
-            />
-          </Box>
+          {shouldDisplayTcpTimestampNote && (
+            <Alert severity="info">
+              Round-Trip Time Latency measurements require TCP timestamps which
+              are disabled by default on Windows. To enable it, open PowerShell
+              as Administrator and run{" "}
+              <p>
+                <code>
+                  PS C:\Windows\system32&gt; Set-NetTCPSetting -timestamps
+                  Enabled
+                </code>
+              </p>
+              This setting is persisted across reboots.
+            </Alert>
+          )}
+          {!shouldDisplayTcpTimestampNote && dataGrid}
         </div>
       )}
     </>
