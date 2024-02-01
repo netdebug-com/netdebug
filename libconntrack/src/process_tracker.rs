@@ -158,7 +158,7 @@ impl ProcessTracker {
                     self.udp_cache.len()
                 ),
                 start,
-                std::time::Duration::from_millis(10)
+                std::time::Duration::from_millis(50)
             );
         }
     }
