@@ -16,7 +16,7 @@ use libconntrack_wasm::topology_server_messages::{
     CongestionSummary, DesktopToTopologyServer, TopologyServerToDesktop,
 };
 use libconntrack_wasm::ConnectionMeasurements;
-use log::{info, warn};
+use log::{debug, info, warn};
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -327,14 +327,16 @@ impl TopologyServerConnection {
                     break;
                 }
             }
-            info!("TopologyServer: ws_writer exiting cleanly (!? should never happen?)");
+            info!(
+                "TopologyServer: ws_writer exiting cleanly (happens on reconnect/network change)"
+            );
         });
         tx
     }
 
     async fn handle_topology_hello(&mut self, client_ip: std::net::IpAddr, user_agent: String) {
         if self.server_hello.is_some() {
-            warn!("Got duplicate!? Hello message for TopologyServer!? Maybe reconnect");
+            debug!("Got duplicate!? Hello message for TopologyServer!? Ok on reconnect");
         }
         for tx in &self.waiting_for_hello {
             send_or_log_async!(tx, "handle_topology_hello", (client_ip, user_agent.clone())).await;
