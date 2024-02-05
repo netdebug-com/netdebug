@@ -399,7 +399,7 @@ fn check_pcap_stats(
  *
  */
 
-pub fn lookup_egress_device() -> Result<pcap::Device, Box<dyn Error>> {
+pub fn lookup_egress_device() -> Result<pcap::Device, PcapError> {
     let addr = crate::utils::remote_ip_to_local(IpAddr::from_str("8.8.8.8").unwrap())?;
     for d in &pcap::Device::list()? {
         if d.addresses.iter().any(|a| a.addr == addr) {
@@ -412,9 +412,9 @@ pub fn lookup_egress_device() -> Result<pcap::Device, Box<dyn Error>> {
     if let Some(device) = pcap::Device::lookup()? {
         Ok(device)
     } else {
-        Err(Box::new(pcap::Error::PcapError(
+        Err(pcap::Error::PcapError(
             "Failed to find any default pcap device".to_string(),
-        )))
+        ))
     }
 }
 
