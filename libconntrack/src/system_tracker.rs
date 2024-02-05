@@ -690,14 +690,15 @@ impl SystemTracker {
             );
         }
         let local_mac = mac_address::get_mac_address_by_ip(&key.local_ip)
-            .unwrap_or_else(|_| {
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| {
                 warn!(
-                    "Failed to lookup MacAddress for local IP {} - failing back to broadcast",
-                    key.local_ip
+                    "Failed to lookup MacAddress for local IP {} (for gateway {}) - failing back to broadcast",
+                    key.local_ip, gateway
                 );
-                Some(mac_address::MacAddress::from(BROADCAST_MAC_ADDR))
-            })
-            .unwrap();
+                mac_address::MacAddress::from(BROADCAST_MAC_ADDR)
+            });
         let state = NetworkGatewayPingState {
             key,
             next_seq: Wrapping(0),

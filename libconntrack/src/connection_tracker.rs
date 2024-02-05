@@ -244,6 +244,8 @@ impl<'a> ConnectionTracker<'a> {
                             warn!("Tried to lookup local mac for {} but didn't find it!?; Failed to send Arp/Ndp", local_ip);
                             return;
                         }
+                        // TODO looking at the code of get_mac_address_by_ip, it never returns Err(...). So maybe we should fold
+                        // this pattern into the one above.
                         Err(e) => {
                             warn!("Tried to lookup local mac for {} but got error {}; Failed to send Arp/Ndp", local_ip, e);
                             return;
