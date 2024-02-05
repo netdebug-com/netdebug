@@ -28,7 +28,7 @@ log = "0.4.19"
 mac_address = { workspace = true }
 mac_oui = { version = "0.4.8", features = ["with-db"] }
 netstat2 = "0.9.1"
-net-route = { git = "https://github.com/gregor-netdebug/net-route", branch = "main" }     # for getting default route
+net-route = { git = "https://github.com/gregor-netdebug/net-route", branch = "fix-ipv6" } # for getting default route
 # PublicSufficeList - but statically includes official list from https://publicsuffix.org/
 psl = "2.1.4"
 rand = "0.8.5"
