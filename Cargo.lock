@@ -2024,7 +2024,7 @@ dependencies = [
 [[package]]
 name = "net-route"
 version = "0.2.11"
-source = "git+https://github.com/gregor-netdebug/net-route?branch=main#20eb78d2fbe9b8dd4af546bcb7a30ea434120b11"
+source = "git+https://github.com/gregor-netdebug/net-route?branch=fix-ipv6#592d26fe7e037edd16864f6d317578514e8d9429"
 dependencies = [
  "async-stream",
  "bindgen 0.69.2",
