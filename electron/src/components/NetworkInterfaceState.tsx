@@ -362,7 +362,7 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
           options={getBoxplotOptions(pingStats, IpVersionSelector.BOTH)}
           series={getBoxplotData(pingStats, IpVersionSelector.BOTH)}
           type="boxPlot"
-          height={2 * boxPlotHeight} // 2* b/c there are two of them
+          height={boxPlotHeight}
         />
       </CustomTabPanel>
     </Box>
