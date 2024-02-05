@@ -496,6 +496,15 @@ pub fn link_local_ip_to_interface_index(link_local_ipv6: IpAddr) -> Result<u32, 
     }
 }
 
+/// Is this IP an Ipv6 Link-Local (starts with fe80::) address?
+pub fn ip_is_ipv6_link_local(ip: IpAddr) -> bool {
+    use IpAddr::*;
+    match ip {
+        V4(_) => false,
+        V6(v6) => v6.octets().split_at(2).0 == [0xfe, 0x80],
+    }
+}
+
 /// Does this IP address match this network address?
 pub fn ip_in_network(ip: IpAddr, network_addr: IpAddr, netmask: IpAddr) -> bool {
     use IpAddr::*;

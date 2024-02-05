@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     pcap::PcapMonitorSender,
-    utils::{ip_in_network, link_local_ip_to_interface_index, PerfMsgCheck},
+    utils::{ip_in_network, ip_is_ipv6_link_local, link_local_ip_to_interface_index, PerfMsgCheck},
 };
 
 use chrono::Utc;
@@ -454,14 +454,11 @@ impl SystemTracker {
         hints: &[pcap::Address],
         gateways: &mut Vec<IpAddr>,
     ) -> bool {
-        if let Some(link_local_gateway_ip) = hints.iter().find(|a| match a.addr {
-            // is one of the hint addresses an IPv6 link-local (e.g., starts with 0xfe80)?
-            IpAddr::V4(_) => false,
-            IpAddr::V6(v6) => v6.octets().split_at(2).0 == [0xfe, 0x80],
-        }) {
+        if let Some(link_local_interface_ip) = hints.iter().find(|a| ip_is_ipv6_link_local(a.addr))
+        {
             // the interface had a IPv6 link-local address, so we can use that to figure out the ifIndex of that
             // interface and prefer those routes
-            match link_local_ip_to_interface_index(link_local_gateway_ip.addr) {
+            match link_local_ip_to_interface_index(link_local_interface_ip.addr) {
                 // found a valid interface_index, select just those routes
                 Ok(if_index) => {
                     let prefered_routes = routes
@@ -480,7 +477,7 @@ impl SystemTracker {
                 Err(e) => {
                     warn!(
                         "Failed to lookup ifIndex for IP {}: returning all gateways: {}",
-                        link_local_gateway_ip.addr, e
+                        link_local_interface_ip.addr, e
                     );
                 }
             }
@@ -683,7 +680,12 @@ impl SystemTracker {
      */
     fn send_next_ping(&mut self, gateway: &IpAddr) {
         if !self.current_network().gateways_ping.contains_key(gateway) {
-            self.make_new_ping_state(gateway);
+            if let Err(e) = self.make_new_ping_state(gateway) {
+                warn!(
+                    "Tried to figure out state for pinging {} - but got {} - will try again",
+                    gateway, e
+                );
+            }
         }
         // outfox the borrow checker
         let max_pings = self.max_pings_per_gateway;
@@ -747,9 +749,9 @@ impl SystemTracker {
     }
 
     /// Called for each new gateway to initialize the state needed to track pings
-    fn make_new_ping_state(&mut self, gateway: &IpAddr) {
+    fn make_new_ping_state(&mut self, gateway: &IpAddr) -> Result<(), pcap::Error> {
         // need to populate first time state and subscribe to ConnectionTracker updates
-        let key = self.make_gateway_ping_key(gateway);
+        let key = self.make_gateway_ping_key(gateway)?;
         // subscribe to ping flow from ConnectionTracker, if it's defined
         if let Some(ping_listener) = &self.ping_listener_tx {
             send_or_log_sync!(
@@ -783,15 +785,40 @@ impl SystemTracker {
         self.current_network_mut()
             .gateways_ping
             .insert(*gateway, state);
+        Ok(())
     }
 
     /**
      * For a given gateway IP, figure out what the corresponding ConnectionKey would be
      * based off of the local routing table ala remote_ip_to_local()
      */
-    fn make_gateway_ping_key(&self, gateway: &IpAddr) -> ConnectionKey {
-        let source_ip = remote_ip_to_local(*gateway).unwrap();
-        ConnectionKey::make_icmp_echo_key(source_ip, *gateway, self.ping_id)
+    fn make_gateway_ping_key(&self, gateway: &IpAddr) -> Result<ConnectionKey, pcap::Error> {
+        let source_ip = if !ip_is_ipv6_link_local(*gateway) {
+            remote_ip_to_local(*gateway)?
+        } else {
+            // need to handle link-local IPs specially because most (all?) OS's have multiple
+            // conflicting fe80::* routes at the same metric, so the above call gets an arbitrary
+            // interface; instead just use the link-local IP of the egress device
+            let egress_device = lookup_egress_device()?;
+            egress_device
+                .addresses
+                .iter()
+                .find_map(|a| {
+                    if ip_is_ipv6_link_local(a.addr) {
+                        Some(a.addr)
+                    } else {
+                        None
+                    }
+                })
+                .ok_or(pcap::Error::PcapError(
+                    "Tried to ping IPv6 LL Gateway but not LL ip on egress!?".to_string(),
+                ))?
+        };
+        Ok(ConnectionKey::make_icmp_echo_key(
+            source_ip,
+            *gateway,
+            self.ping_id,
+        ))
     }
 
     #[cfg(test)]
@@ -1018,7 +1045,7 @@ mod test {
         assert_eq!(system_tracker.duplicate_ping.get_sum(), 1);
 
         // setup ping state
-        system_tracker.make_new_ping_state(&gateway);
+        system_tracker.make_new_ping_state(&gateway).unwrap();
         // force send ping state in to prevent the actual ping from being sent (and simplify test)
         system_tracker
             .current_network_mut()
