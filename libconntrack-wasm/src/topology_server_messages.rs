@@ -1,4 +1,4 @@
-use std::{net::IpAddr, time::Duration};
+use std::{fmt::Display, net::IpAddr, time::Duration};
 
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
@@ -14,6 +14,18 @@ pub enum DesktopLogLevel {
     Warn,
     Info,
     Debug,
+}
+
+impl Display for DesktopLogLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use DesktopLogLevel::*;
+        match self {
+            Error => write!(f, "ERROR"),
+            Warn => write!(f, "WARN"),
+            Info => write!(f, "INFO"),
+            Debug => write!(f, "DEBUG"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]

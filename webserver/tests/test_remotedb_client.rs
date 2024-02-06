@@ -1,7 +1,8 @@
 use chrono::Utc;
 use common_wasm::get_git_hash_version;
 use indexmap::IndexMap;
-use libwebserver::remotedb_client::RemoteDBClient;
+use libconntrack_wasm::topology_server_messages::DesktopLogLevel;
+use libwebserver::remotedb_client::{RemoteDBClient, RemoteDBClientMessages};
 use pg_embed::pg_fetch::{PgFetchSettings, PG_V13};
 use pg_embed::pg_types::PgResult;
 use pg_embed::postgres::{PgEmbed, PgSettings};
@@ -15,6 +16,8 @@ use pg_embed::pg_enums::PgAuthMethod;
 /**
  * Test against FAKE credentials!
  *
+ * Brazenly put the handle_store_counters() and handle_store_logs() tests
+ * into the same #[test] b/c the startup time for this test is quite high
  */
 #[tokio::test]
 async fn test_remotedb_client() {
@@ -27,16 +30,16 @@ async fn test_remotedb_client() {
     remotedb_client
         .handle_store_counters(
             &client,
-            alice_counters,
-            "alice".to_string(),
-            now,
-            "testOS".to_string(),
-            get_git_hash_version(),
+            &alice_counters,
+            &"alice".to_string(),
+            &now,
+            &"testOS".to_string(),
+            &get_git_hash_version(),
         )
         .await
         .unwrap();
     let rows = remotedb_client
-        .count_remote_log_rows(&client)
+        .count_remote_counters_rows(&client)
         .await
         .unwrap();
     assert_eq!(rows, 2);
@@ -44,24 +47,45 @@ async fn test_remotedb_client() {
     remotedb_client
         .handle_store_counters(
             &client,
-            bob_counters,
-            "bob".to_string(),
-            now,
-            "testOS2".to_string(),
-            get_git_hash_version(),
+            &bob_counters,
+            &"bob".to_string(),
+            &now,
+            &"testOS2".to_string(),
+            &get_git_hash_version(),
         )
         .await
         .unwrap();
     let rows = remotedb_client
-        .count_remote_log_rows(&client)
+        .count_remote_counters_rows(&client)
         .await
         .unwrap();
     assert_eq!(rows, 4);
+    // now store a log and make sure it's there
+    remotedb_client
+        .handle_store_log(
+            &client,
+            RemoteDBClientMessages::StoreLog {
+                msg: "Yay logging!".to_string(),
+                level: DesktopLogLevel::Debug,
+                os: "TestOS".to_string(),
+                version: "1".to_string(),
+                client_id: "JOemama".to_string(),
+                time: Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
+    let rows = remotedb_client
+        .count_remote_logs_rows(&client)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
 }
 /**
  * Does the embedded DB thing work?
  * Simple write and read back test with none of our code for sanity
  */
+#[ignore] // skip this test b/c it takes quite a while to run and seems stable
 #[tokio::test]
 async fn test_pm_embed() {
     let (client, _db) = mk_test_db("testdb").await.unwrap();

@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration, StatType, Units};
 use indexmap::IndexMap;
 use libconntrack::utils::PerfMsgCheck;
+use libconntrack_wasm::topology_server_messages::DesktopLogLevel;
 use log::{error, info, warn};
 use tokio::sync::mpsc::channel;
 use tokio_postgres::Client;
@@ -32,6 +33,8 @@ pub struct RemoteDBClient {
     queue_duration: StatHandleDuration,
     /// Name of the table where we store desktop_counters
     counters_table_name: String,
+    /// Name of the table where we store logs from the desktop
+    logs_table_name: String,
 }
 
 /// CREATE TABLE desktop_counters (
@@ -40,6 +43,7 @@ pub struct RemoteDBClient {
 ///     source varchar (256),
 ///     time DATE);
 const COUNTERS_DB_NAME: &str = "desktop_counters";
+const LOGS_DB_NAME: &str = "desktop_logs";
 const INITIAL_RETRY_TIME_MS: u64 = 100;
 // Linux root cert db is /etc/ssl/certs/ca-certificates.crt, at least on Ubuntu
 const LINUX_ROOT_CERT_FILE: &str = "/etc/ssl/certs/ca-certificates.crt";
@@ -47,12 +51,21 @@ const LINUX_ROOT_CERT_FILE: &str = "/etc/ssl/certs/ca-certificates.crt";
 pub type RemoteDBClientSender = tokio::sync::mpsc::Sender<PerfMsgCheck<RemoteDBClientMessages>>;
 pub type RemoteDBClientReceiver = tokio::sync::mpsc::Receiver<PerfMsgCheck<RemoteDBClientMessages>>;
 
+#[derive(Clone, Debug)]
 pub enum RemoteDBClientMessages {
     StoreCounters {
         counters: IndexMap<String, u64>,
         source: String,
         os: String,
         version: String,
+        time: DateTime<Utc>,
+    },
+    StoreLog {
+        msg: String,
+        level: DesktopLogLevel,
+        os: String,
+        version: String,
+        client_id: String,
         time: DateTime<Utc>,
     },
 }
@@ -86,6 +99,7 @@ impl RemoteDBClient {
                 [StatType::AVG, StatType::MAX],
             ),
             counters_table_name: COUNTERS_DB_NAME.to_string(),
+            logs_table_name: LOGS_DB_NAME.to_string(),
         };
         tokio::spawn(async move {
             remote_db_client.rx_loop().await.unwrap();
@@ -142,7 +156,7 @@ impl RemoteDBClient {
             while let Some(msg) = self.rx.recv().await {
                 let msg = msg.perf_check_get_with_stats("RemoteDBClient", &mut self.queue_duration);
                 use RemoteDBClientMessages::*;
-                if let Err(e) = match msg {
+                if let Err(e) = match &msg {
                     StoreCounters {
                         counters,
                         source,
@@ -153,6 +167,7 @@ impl RemoteDBClient {
                         self.handle_store_counters(&client, counters, source, time, os, version)
                             .await
                     }
+                    StoreLog { .. } => self.handle_store_log(&client, msg).await,
                 } {
                     warn!(
                         "RemoteClientDB loop produced error: restarting client: {}",
@@ -183,11 +198,11 @@ impl RemoteDBClient {
     pub async fn handle_store_counters(
         &self,
         client: &Client,
-        counters: IndexMap<String, u64>,
-        source: String,
-        time: DateTime<Utc>,
-        os: String,
-        version: String,
+        counters: &IndexMap<String, u64>,
+        source: &String,
+        time: &DateTime<Utc>,
+        os: &String,
+        version: &String,
     ) -> Result<(), tokio_postgres::error::Error> {
         /* GRRR - the more efficient 'COPY {table} FROM STDIN
          * doesn't compile... can't figure out why
@@ -221,7 +236,7 @@ impl RemoteDBClient {
                 self.counters_table_name
             ))
             .await?;
-        for (c, v) in &counters {
+        for (c, v) in counters {
             let v_i64 = *v as i64; // TODO: change this conversion once we move to i64 counters
                                    // NOTE: converting DateTime<UTC> to postgres requires the magical 'with-chrono-0_4' feature
             client
@@ -250,6 +265,7 @@ impl RemoteDBClient {
         &self,
         client: &Client,
     ) -> Result<(), tokio_postgres::error::Error> {
+        // for the counters
         client
             .query(
                 format!(
@@ -266,9 +282,52 @@ impl RemoteDBClient {
                 &[],
             )
             .await?;
+        // for the logs
+        client
+            .query(
+                format!(
+                    "CREATE TABLE {} ( \
+                        msg TEXT, \
+                        level TEXT, \
+                        os TEXT, \
+                        version TEXT, \
+                        source TEXT, \
+                        time TIMESTAMPTZ)",
+                    self.logs_table_name
+                )
+                .as_str(),
+                &[],
+            )
+            .await?;
         Ok(())
     }
 
+    pub async fn handle_store_log(
+        &self,
+        client: &Client,
+        msg: RemoteDBClientMessages,
+    ) -> Result<(), tokio_postgres::Error> {
+        match msg {
+            RemoteDBClientMessages::StoreLog {
+                msg,
+                level,
+                os,
+                version,
+                client_id,
+                time,
+            } => {
+                client.execute(
+                format!("INSERT INTO {} (msg, level, source, time, os, version) VALUES ($1, $2, $3, $4, $5, $6)",self.logs_table_name).as_str(),
+            &[&msg, &level.to_string(), &client_id, &time, &os, &version  ]
+        ).await?;
+            }
+            _ => panic!(
+                "Called RemoteDBClient::handle_store_log with a non-store_log message {:?}",
+                msg
+            ),
+        }
+        Ok(())
+    }
     //    #[cfg(test)] // do NOT mark this as test only as the integration tests don't compile with 'test' flag (!?)
     pub fn mk_mock(url: &str) -> RemoteDBClient {
         let (tx, rx) = channel(10);
@@ -285,17 +344,35 @@ impl RemoteDBClient {
                 Units::Microseconds,
                 [StatType::AVG],
             ),
-            counters_table_name: "test_db".to_string(),
+            counters_table_name: "test_db_counters".to_string(),
+            logs_table_name: "test_db_logs".to_string(),
         }
     }
 
-    pub async fn count_remote_log_rows(
+    pub async fn count_remote_counters_rows(
         &self,
         client: &Client,
     ) -> Result<i64, tokio_postgres::error::Error> {
         let rows = client
             .query(
                 format!("SELECT COUNT(*) FROM {}", self.counters_table_name).as_str(),
+                &[],
+            )
+            .await?;
+        // NOTE that postgres doesn't seem to have a native u64 type so it uses
+        // int8 which maps to a i64 in rust.
+        // Why allow negative!?
+        let count = rows.first().unwrap().get::<_, i64>(0);
+        Ok(count)
+    }
+
+    pub async fn count_remote_logs_rows(
+        &self,
+        client: &Client,
+    ) -> Result<i64, tokio_postgres::error::Error> {
+        let rows = client
+            .query(
+                format!("SELECT COUNT(*) FROM {}", self.logs_table_name).as_str(),
                 &[],
             )
             .await?;
