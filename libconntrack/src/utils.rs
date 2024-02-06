@@ -649,4 +649,33 @@ mod test {
             );
         }
     }
+    use common::os_abstraction::{list_network_interfaces, pcap_ifname_to_ifindex};
+
+    #[test]
+    // test it here so we don't need pcap stuff in common, e.g., including the build.rs magic
+    // needed for win32
+    fn test_net_ifindex() {
+        // make sure we can get an ifindex for at least one of the devices in our device list?
+        let egress_interfaces = pcap::Device::list().unwrap();
+        let ifindexes = egress_interfaces
+            .iter()
+            .map(|i| (i.name.clone(), pcap_ifname_to_ifindex(i.name.clone())))
+            .collect::<Vec<(String, Result<u32, std::io::Error>)>>();
+        for (ifname, answer) in &ifindexes {
+            println!("ifname {} :: {:?}", ifname, answer);
+        }
+        let good_ifindexes = ifindexes
+            .iter()
+            .filter_map(|(_ifname, ifindex)| ifindex.as_ref().ok())
+            .cloned()
+            .collect::<Vec<u32>>();
+        assert_ne!(good_ifindexes.len(), 0);
+    }
+
+    #[test]
+    fn test_net_list_interfaces() {
+        for interface in list_network_interfaces().unwrap() {
+            println!("{:#?}", interface);
+        }
+    }
 }

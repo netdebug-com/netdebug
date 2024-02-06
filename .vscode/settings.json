@@ -6,5 +6,6 @@
     "prettier.configPath": ".prettierrc",
     "prettier.requireConfig": true,
     "prettier.trailingComma": "all",
-    "rust-analyzer.check.command": "clippy"
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.linkedProjects": ["./common/Cargo.toml"]
 }
