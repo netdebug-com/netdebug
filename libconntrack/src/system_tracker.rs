@@ -830,7 +830,6 @@ const PING_LISTENER_DESC: &str = "SystemTracker::ping_listener";
 
 #[cfg(test)]
 mod test {
-    use std::vec;
     use std::{collections::HashSet, str::FromStr};
 
     use etherparse::{Icmpv4Type, TransportHeader};
@@ -1212,6 +1211,7 @@ mod test {
     /// Given two routes with different gateways, can we correctly pick the best route
     /// given the hints for which interface to use
     fn test_route_selection_by_hints() {
+        use std::vec;
         let ip1 = IpAddr::from_str("192.168.1.42").unwrap();
         let gateway_1 = IpAddr::from_str("192.168.1.1").unwrap();
         let ip2 = IpAddr::from_str("192.168.86.42").unwrap();
