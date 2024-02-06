@@ -64,6 +64,7 @@
         "react-router-dom": "^6.17.0",
         "react-use": "^17.4.3",
         "react-use-websocket": "^4.5.0",
-        "update-electron-app": "^3.0.0"
+        "update-electron-app": "^3.0.0",
+        "ws": "^8.16.0"
     }
 }

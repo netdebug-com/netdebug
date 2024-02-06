@@ -472,3 +472,37 @@ export type ExportedNeighborState = {
     "learn_time": string;
     "vendor_oui": (string | null);
 };
+export type DesktopLogLevel = ("Error" | "Warn" | "Info" | "Debug");
+export type DesktopToTopologyServer = ({
+    "tag": "Hello";
+} | {
+    "tag": "StoreConnectionMeasurement";
+    "data": {
+        "connection_measurements": ConnectionMeasurements;
+    };
+} | {
+    "tag": "InferCongestion";
+    "data": {
+        "connection_measurements": (ConnectionMeasurements)[];
+    };
+} | {
+    "tag": "PushCounters";
+    "data": {
+        "timestamp": string;
+        "counters": Record<string, U64>;
+        "os": string;
+        "version": string;
+        "client_id"?: string;
+    };
+} | {
+    "tag": "PushLog";
+    "data": {
+        "timestamp": string;
+        "level": DesktopLogLevel;
+        "scope": string;
+        "msg": string;
+        "os": string;
+        "version": string;
+        "client_id": string;
+    };
+});
