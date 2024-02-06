@@ -22,7 +22,7 @@ let numRestarts = 0;
 
 // setup config for autoUpdate, following https://github.com/electron/update-electron-app
 import { updateElectronApp, UpdateSourceType } from "update-electron-app";
-import { LogMessage } from "electron-log";
+import { setupNetdebugLogging } from "./logging";
 
 /*** 
  * A set of things I tried (unsuccessfully!) to get local-testing of upgrades with
@@ -57,65 +57,7 @@ if (debug_upgrade) {
 }
 */
 
-// Function used to format log messages.
-function makeLogFormatter(useColor: boolean) {
-  const logFormatter = ({ message }: { message: LogMessage }) => {
-    // if the log originally came from rust, we use the timestamp from
-    // rust and we strip the timestamp (data[0]) and level (data[1]) from
-    // the data to log (since we are going to use the electron-log level)
-    const [dateStr, data, scopeStr] =
-      message.scope === "rust"
-        ? [message.data[0], message.data.slice(2), "[RS]"]
-        : [message.date.toISOString(), message.data, "[JS]"];
-    if (useColor) {
-      let color = "unset"; // the default color
-      switch (message.level) {
-        case "info":
-          color = "green";
-          break;
-        case "warn":
-          color = "yellow";
-          break;
-        case "error":
-          color = "red";
-          break;
-        default:
-          color = "unset";
-      }
-      return [
-        dateStr,
-        `%c${message.level.toUpperCase()}`,
-        `color: ${color}`,
-        `%c${scopeStr}`,
-        `color: ${color}`,
-        ...data,
-      ];
-    } else {
-      return [dateStr, message.level.toUpperCase(), scopeStr, ...data];
-    }
-  };
-  return logFormatter;
-}
-
-// spyRendererConsole will also log any JS console messages from
-// the renderer to our logging backends
-log.initialize({ spyRendererConsole: true });
-
-// "Overwrite all "console.*" functions with the logger equivalent
-Object.assign(console, log.functions);
-
-// Default logfile locations:
-// on Linux: ~/.config/{app name}/logs/netdebug.log
-// on macOS: ~/Library/Logs/{app name}/netdebug.log
-// on Windows: %USERPROFILE%\AppData\Roaming\{app name}\logs\netdebug.log
-// Also, at least on MacOS the logs also show up in the system consiole. Likely the same is true
-// for Windows and possibly Linux (syslog)
-log.transports.file.fileName = "netdebug.log";
-
-// set a custom formatter
-log.transports.console.format = makeLogFormatter(true);
-log.transports.file.format = makeLogFormatter(false);
-log.info("NetDebug GUI starting up.");
+setupNetdebugLogging("ws://localhost:3030/desktop");
 
 updateElectronApp({
   updateSource: {

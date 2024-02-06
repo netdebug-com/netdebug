@@ -416,6 +416,7 @@ impl TopologyServerConnection {
                         counters,
                         os: std::env::consts::OS.to_string(),
                         version: get_git_hash_version(),
+                        client_id: Default::default(),
                     }))
                     .await
                 {

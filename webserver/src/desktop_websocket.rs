@@ -7,7 +7,7 @@ use libconntrack::{
     utils::PerfMsgCheck,
 };
 use libconntrack_wasm::topology_server_messages::{
-    DesktopToTopologyServer, TopologyServerToDesktop,
+    DesktopLogLevel, DesktopToTopologyServer, TopologyServerToDesktop,
 };
 use log::{debug, info, warn};
 use tokio::sync::mpsc::{channel, Sender};
@@ -94,13 +94,36 @@ async fn handle_desktop_message(
             counters,
             os,
             version,
+            .. // TODO: use client_id
         } => handle_push_counters(remotedb_client, timestamp, counters, addr, os, version).await,
+        PushLog {
+            timestamp,
+            msg,
+            level,
+            os,
+            version,
+            .. // TODO: replace the addr.to_string() with the client id from the message
+        } => handle_push_log(timestamp, msg, level, os, version, addr.to_string()).await,
     }
+}
+
+async fn handle_push_log(
+    timestamp: chrono::DateTime<chrono::Utc>,
+    msg: String,
+    level: DesktopLogLevel,
+    _os: String,
+    _version: String,
+    _client_id: String,
+) {
+    info!(
+        "Got Remote log: ts=<{}> lvl=<{:?}> msg=<{}>",
+        timestamp, level, msg
+    );
 }
 
 async fn handle_push_counters(
     remotedb_client: &Option<RemoteDBClientSender>,
-    timestamp: chrono::prelude::DateTime<chrono::prelude::Utc>,
+    timestamp: chrono::DateTime<chrono::Utc>,
     counters: indexmap::IndexMap<String, u64>,
     addr: &SocketAddr,
     os: String,

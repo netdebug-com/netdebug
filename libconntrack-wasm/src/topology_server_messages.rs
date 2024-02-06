@@ -8,7 +8,16 @@ use typescript_type_def::TypeDef;
 
 use crate::{ConnectionKey, ConnectionMeasurements};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, TypeDef)]
+pub enum DesktopLogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
+#[serde(tag = "tag", content = "data")]
 pub enum DesktopToTopologyServer {
     Hello,
     StoreConnectionMeasurement {
@@ -18,10 +27,24 @@ pub enum DesktopToTopologyServer {
         connection_measurements: Vec<ConnectionMeasurements>,
     },
     PushCounters {
+        #[type_def(type_of = "String")]
         timestamp: DateTime<Utc>,
+        #[type_def(type_of = "std::collections::HashMap<String, u64>")]
         counters: IndexMap<String, u64>,
         os: String,
         version: String,
+        #[serde(default)]
+        client_id: String,
+    },
+    PushLog {
+        #[type_def(type_of = "String")]
+        timestamp: DateTime<Utc>,
+        level: DesktopLogLevel,
+        scope: String,
+        msg: String,
+        os: String,
+        version: String,
+        client_id: String,
     },
 }
 
