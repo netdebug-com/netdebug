@@ -103,22 +103,39 @@ async fn handle_desktop_message(
             os,
             version,
             .. // TODO: replace the addr.to_string() with the client id from the message
-        } => handle_push_log(timestamp, msg, level, os, version, addr.to_string()).await,
+        } => handle_push_log(remotedb_client, timestamp, msg, level, os, version, addr.to_string()).await,
     }
 }
 
 async fn handle_push_log(
-    timestamp: chrono::DateTime<chrono::Utc>,
+    remotedb_client: &Option<RemoteDBClientSender>,
+    time: chrono::DateTime<chrono::Utc>,
     msg: String,
     level: DesktopLogLevel,
-    _os: String,
-    _version: String,
-    _client_id: String,
+    os: String,
+    version: String,
+    client_id: String,
 ) {
-    info!(
-        "Got Remote log: ts=<{}> lvl=<{:?}> msg=<{}>",
-        timestamp, level, msg
-    );
+    if let Some(remotedb_client) = remotedb_client {
+        send_or_log_async!(
+            remotedb_client,
+            "handle_push_log",
+            RemoteDBClientMessages::StoreLog {
+                msg,
+                level,
+                os,
+                version,
+                client_id,
+                time,
+            }
+        )
+        .await;
+    } else {
+        debug!(
+            "Storage not configured:: not storing log from {} :: {:?} :: {} :: {} :: {} :: {} :: ",
+            client_id, level, time, os, version, msg
+        );
+    }
 }
 
 async fn handle_push_counters(

@@ -19,19 +19,23 @@
 
 # One time setup/database initialization
 
-1. Create the 'desktop_counters' table with the schema from `RemoteDBClient::create_table_schema()`, e.g., :
+1. Create the 'desktop_counters' and 'desktop_logs' table with the schema from `RemoteDBClient::create_table_schema()`, 
+    e.g., :
     ```
     CREATE TABLE desktop_counters ( counter TEXT, value BIGINT, os TEXT, version TEXT, source TEXT, time TIMESTAMPTZ);
+    CREATE TABLE desktop_logs ( msg TEXT, level TEXT, os TEXT, version TEXT, source TEXT, time TIMESTAMPTZ);
     ```
-2. Mark it as a 'hypertable' which tells the backend to treat it with timeseries optimizations:
+2. Mark them as a 'hypertable' which tells the backend to treat it with timeseries optimizations:
     ```
     SELECT create_hypertable('desktop_counters', by_range('time'));
+    SELECT create_hypertable('desktop_logs', by_range('time'));
     ```
 3. Set a data retention policy for how long we hold on to data.  This will auto-delete data older than 30 days.
     Read more about it here:
     https://docs.timescale.com/use-timescale/latest/data-retention/
     ```
     SELECT add_retention_policy('desktop_counters', INTERVAL '30 days');
+    SELECT add_retention_policy('desktop_logs', INTERVAL '30 days');
     ```
 4. TODO: setup 'continuous aggregates' to continuously downsample our data
     https://docs.timescale.com/use-timescale/latest/data-retention/data-retention-with-continuous-aggregates/
