@@ -11,12 +11,19 @@ import { rendererConfig } from "./webpack.renderer.config";
 
 const config: ForgeConfig = {
   packagerConfig: {
-    asar: true,
-    extraResource: "extra-resources",
-    // see https://www.electronforge.io/guides/create-and-add-icons
-    // extensions is automatically added based on target platform:
-    // .icns for Mac; .ico for Windows. joy
-    icon: "src/images/icon",
+    osxSign: {}, // object needs to exist even if empty
+    osxNotarize: {
+      tool: "notarytool",
+      // TODO: Use Gregor's personal appleId & developer account for now until
+      // we can figure out the corp one.
+      // I've store my credentials in my keychain with:
+      // xcrun notarytool store-credentials "notarytool-credential-personal"
+      //    --apple-id "<AppleID>"
+      //    --team-id <DeveloperTeamID>
+      //    --password <secret_password>
+      // see https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/customizing_the_
+      keychainProfile: "notarytool-credential-personal",
+    },
     osxUniversal: {
       // config options for `@electron/universal`
       // Needed, otherwise I get:
@@ -24,6 +31,12 @@ const config: ForgeConfig = {
       //        x64 and arm64 builds and not covered by the x64ArchFiles rule: "undefined"
       x64ArchFiles: "*",
     },
+    asar: true,
+    extraResource: "extra-resources",
+    // see https://www.electronforge.io/guides/create-and-add-icons
+    // extensions is automatically added based on target platform:
+    // .icns for Mac; .ico for Windows. joy
+    icon: "src/images/icon",
   },
   rebuildConfig: {},
   makers: [
