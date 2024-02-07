@@ -175,7 +175,7 @@ pub struct Args {
     /// Fully qualified path to TLS Certificate (use Certbot!)
     #[arg(
         long,
-        default_value = "/etc/letsencrypt/live/topology.netdebug.com/cert.pem"
+        default_value = "/etc/letsencrypt/live/topology.netdebug.com/fullchain.pem"
     )]
     pub tls_cert: String,
 
