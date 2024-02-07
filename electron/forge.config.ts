@@ -41,7 +41,14 @@ const config: ForgeConfig = {
   rebuildConfig: {},
   makers: [
     new MakerSquirrel({}),
-    new MakerZIP({}, ["darwin"]),
+    //new MakerZIP({}, ["darwin"]),
+    new MakerZIP(
+      {
+        macUpdateManifestBaseUrl:
+          "https://topology.netdebug.com/static/updater_235235/darwin/universal",
+      },
+      ["darwin"],
+    ),
     // disable linux for now
     // new MakerRpm({}),
     // new MakerDeb({}),
