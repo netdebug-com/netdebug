@@ -35,12 +35,12 @@ ChartJS.register(
   Title,
 );
 
-function renderStringData(state: DataLoadingState<string>) {
+function renderIpStringData(state: DataLoadingState<string>) {
   return (
     <>
       {state.isPending && "Loading ..."}
       {state.error && <ErrorMessage msg={"ERROR: " + state.error} />}
-      {state.data && state.data}
+      {state.data && state.data.replace(/^::ffff:/, "")}
     </>
   );
 }
@@ -121,7 +121,7 @@ const Home: React.FC = () => {
               </b>
               <ul>
                 <li>
-                  My external IP Address is <em>{renderStringData(myIp)}</em>.{" "}
+                  My external IP Address is <em>{renderIpStringData(myIp)}</em>.{" "}
                 </li>
               </ul>
             </Item>
