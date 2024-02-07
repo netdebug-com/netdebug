@@ -2,6 +2,8 @@ import WebSocket from "ws";
 import log from "electron-log/main";
 import { LogMessage, Transport } from "electron-log";
 import { DesktopLogLevel, DesktopToTopologyServer } from "./netdebug_types";
+// whether we are in dev-mode or prod
+import isDev from "electron-is-dev";
 
 export function setupNetdebugLogging(url: string) {
   const ws = new WebSocket(url, undefined, {
@@ -110,6 +112,12 @@ export function setupNetdebugLogging(url: string) {
   // set a custom formatter
   log.transports.console.format = makeLogFormatter(true);
   log.transports.file.format = makeLogFormatter(false);
-  log.transports.foo = wsTransport as Transport;
+  if (!isDev) {
+    process.stderr.write("Setting up remote logging\n");
+    log.transports.remote_websocket = wsTransport as Transport;
+  } else {
+    process.stderr.write("Dev Mode -- no remote logging\n");
+  }
+
   log.info("NetDebug GUI starting up.");
 }
