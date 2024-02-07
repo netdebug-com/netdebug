@@ -21,11 +21,13 @@ import FlowsByDnsDomain, {
 } from "./pages/FlowsByDnsDomain";
 
 // layouts
+import AboutLayout from "./layouts/AboutLayout";
 import RootLayout from "./layouts/RootLayout";
 import FlowsLayout from "./layouts/FlowsLayout";
 import RouterDelays, { routerDelayLoader } from "./pages/RouteDelays";
 import { DefaultErrorElement } from "./components/DefaultErrorElement";
 import RttLatency, { rttLatencyLoader } from "./pages/RttLatency";
+import { ReleaseNotes } from "./pages/ReleaseNotes";
 import Webtest from "./pages/Webtest";
 
 const router = createHashRouter(
@@ -93,12 +95,19 @@ const router = createHashRouter(
         loader={routerDelayLoader}
         errorElement={<DefaultErrorElement />}
       />
-      <Route
-        path="counters"
-        element={<Counters />}
-        loader={countersLoader}
-        errorElement={<DefaultErrorElement />}
-      />
+      <Route path="about" element={<AboutLayout />}>
+        <Route
+          index
+          element={<ReleaseNotes />}
+          errorElement={<DefaultErrorElement />}
+        />
+        <Route
+          path="counters"
+          element={<Counters />}
+          loader={countersLoader}
+          errorElement={<DefaultErrorElement />}
+        />
+      </Route>
     </Route>,
   ),
 );

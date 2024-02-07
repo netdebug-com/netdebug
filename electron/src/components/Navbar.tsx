@@ -13,7 +13,7 @@ const TAB_NAV_INFO = [
   { label: "Latency", to: "/rtt_latency" },
   { label: "Webtest", to: "/webtest" },
   { label: "Router Delays", to: "/router_delays" },
-  { label: "Counters", to: "/counters" },
+  { label: "About", to: "/about" },
 ];
 
 export default function Navbar() {
