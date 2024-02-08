@@ -116,7 +116,7 @@ const Home: React.FC = () => {
                 <li>
                   Per-connection <Link to={"/rtt_latency"}> latency</Link> and
                   bi-directional <Link to={"/flows"}> loss information</Link>{" "}
-                  (by <Link to={"/flows/by_dst_domain"}>DNS</Link> and{" "}
+                  (by <Link to={"/flows/by_dest_domain"}>DNS</Link> and{" "}
                   <Link to={"/flows/by_app"}>App</Link>)
                 </li>
                 <li>
