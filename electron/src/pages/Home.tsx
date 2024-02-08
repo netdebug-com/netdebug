@@ -24,6 +24,7 @@ import {
   PingGraph,
 } from "../components/NetworkInterfaceState";
 import { getChartOptions, getChartScale, getChartjsData } from "./Bandwidth";
+import { Link } from "react-router-dom";
 // needed for anything ChartJS to work
 ChartJS.register(
   PointElement,
@@ -107,21 +108,39 @@ const Home: React.FC = () => {
       <Stack spacing={2} useFlexGap>
         <Item>
           <Stack spacing={2} direction="row" useFlexGap>
-            <Item sx={{ width: "45%" }}>
+            <Item sx={{ width: "45%", textAlign: "left" }}>
               <b>
-                <em>What's New</em>{" "}
+                <em>What's New with v0.2.1</em>{" "}
               </b>
               <ul>
-                <li>Coming soon!</li>
+                <li>
+                  Per-connection <Link to={"/rtt_latency"}> latency</Link> and
+                  bi-directional <Link to={"/flows"}> loss information</Link>{" "}
+                  (by <Link to={"/flows/by_dst_domain"}>DNS</Link> and{" "}
+                  <Link to={"/flows/by_app"}>App</Link>)
+                </li>
+                <li>
+                  Local network <Link to={"/devices"}>device</Link>,{" "}
+                  <Link to={"/local_network"}> packet-loss</Link>, and{" "}
+                  <Link to={"/local_network"}>latency </Link>
+                  monitoring
+                </li>
+                <li>
+                  See full <Link to={"/about"}>Release Notes</Link>
+                </li>
               </ul>
             </Item>
-            <Item sx={{ width: "45%" }}>
+            <Item sx={{ width: "45%", textAlign: "left" }}>
               <b>
                 <em>Insights:</em>
               </b>
               <ul>
                 <li>
                   My external IP Address is <em>{renderIpStringData(myIp)}</em>.{" "}
+                </li>
+                <li>
+                  TODO: Insert measurement driven insights, e.g., "local network
+                  is lossy"
                 </li>
               </ul>
             </Item>
