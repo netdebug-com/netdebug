@@ -1,63 +1,27 @@
-import WebSocket from "ws";
 import log from "electron-log/main";
+import { WebSocket } from "@oznu/ws-connect";
 import { LogMessage, Transport } from "electron-log";
 import { DesktopLogLevel, DesktopToTopologyServer } from "./netdebug_types";
 // whether we are in dev-mode or prod
 import isDev from "electron-is-dev";
 
-export function setupNetdebugLogging(url: string) {
-  const ws = new WebSocket(url, undefined, {
-    headers: { "User-Agent": "net-debug-electron" },
+// Set to true to also remote log in dev mode.
+// For debugging/testing the remote logging
+const OVERRIDE_LOG_TO_REMOTE = false;
+
+function setupRemoteLogging(url: string) {
+  const ws = new WebSocket(url, {
+    reconnectInterval: 1000, // in ms
+    pingInterval: 2000, // in ms. Sends keepalive's
+    options: {
+      headers: { "User-Agent": "net-debug-electron" },
+    },
   });
   ws.on("error", console.error);
+  ws.on("websocket-status", (msg: string) =>
+    process.stderr.write("Remote Logging: " + msg + "\n"),
+  );
   ws.on("open", () => log.info("WS connection established"));
-
-  // Function used to format log messages.
-  function makeLogFormatter(useColor: boolean) {
-    const logFormatter = ({ message }: { message: LogMessage }) => {
-      // if the log originally came from rust, we use the timestamp from
-      // rust and we strip the timestamp (data[0]) and level (data[1]) from
-      // the data to log (since we are going to use the electron-log level)
-      const [dateStr, data, scopeStr] =
-        message.scope === "rust"
-          ? [message.data[0], message.data.slice(2), "[RS]"]
-          : [message.date.toISOString(), message.data, "[JS]"];
-      if (useColor) {
-        let color = "unset"; // the default color
-        switch (message.level) {
-          case "info":
-            color = "green";
-            break;
-          case "warn":
-            color = "yellow";
-            break;
-          case "error":
-            color = "red";
-            break;
-          default:
-            color = "unset";
-        }
-        return [
-          dateStr,
-          `%c${message.level.toUpperCase()}`,
-          `color: ${color}`,
-          `%c${scopeStr}`,
-          `color: ${color}`,
-          ...data,
-        ];
-      } else {
-        return [dateStr, message.level.toUpperCase(), scopeStr, ...data];
-      }
-    };
-    return logFormatter;
-  }
-
-  // spyRendererConsole will also log any JS console messages from
-  // the renderer to our logging backends
-  log.initialize({ spyRendererConsole: true });
-
-  // "Overwrite all "console.*" functions with the logger equivalent
-  Object.assign(console, log.functions);
 
   const wsFormatter = makeLogFormatter(false);
   const wsTransport = (msg: LogMessage) => {
@@ -94,13 +58,58 @@ export function setupNetdebugLogging(url: string) {
       },
     };
 
-    if (ws.readyState === ws.OPEN) {
-      ws.send(JSON.stringify(wsMessage));
-    } else if (ws.readyState !== ws.CONNECTING) {
-      // don't use console, otherwise we get the messag right back in an infinte loop :-/
-      process.stderr.write("WARNING: Can't write to logging websocket\n");
+    ws.send(JSON.stringify(wsMessage));
+  };
+  log.transports.remote_websocket = wsTransport as Transport;
+}
+
+// Function used to format log messages.
+function makeLogFormatter(useColor: boolean) {
+  const logFormatter = ({ message }: { message: LogMessage }) => {
+    // if the log originally came from rust, we use the timestamp from
+    // rust and we strip the timestamp (data[0]) and level (data[1]) from
+    // the data to log (since we are going to use the electron-log level)
+    const [dateStr, data, scopeStr] =
+      message.scope === "rust"
+        ? [message.data[0], message.data.slice(2), "[RS]"]
+        : [message.date.toISOString(), message.data, "[JS]"];
+    if (useColor) {
+      let color = "unset"; // the default color
+      switch (message.level) {
+        case "info":
+          color = "green";
+          break;
+        case "warn":
+          color = "yellow";
+          break;
+        case "error":
+          color = "red";
+          break;
+        default:
+          color = "unset";
+      }
+      return [
+        dateStr,
+        `%c${message.level.toUpperCase()}`,
+        `color: ${color}`,
+        `%c${scopeStr}`,
+        `color: ${color}`,
+        ...data,
+      ];
+    } else {
+      return [dateStr, message.level.toUpperCase(), scopeStr, ...data];
     }
   };
+  return logFormatter;
+}
+
+export function setupNetdebugLogging(url: string) {
+  // spyRendererConsole will also log any JS console messages from
+  // the renderer to our logging backends
+  log.initialize({ spyRendererConsole: true });
+
+  // "Overwrite all "console.*" functions with the logger equivalent
+  Object.assign(console, log.functions);
 
   // Default logfile locations:
   // on Linux: ~/.config/{app name}/logs/netdebug.log
@@ -112,9 +121,9 @@ export function setupNetdebugLogging(url: string) {
   // set a custom formatter
   log.transports.console.format = makeLogFormatter(true);
   log.transports.file.format = makeLogFormatter(false);
-  if (!isDev) {
+  if (!isDev || OVERRIDE_LOG_TO_REMOTE) {
     process.stderr.write("Setting up remote logging\n");
-    log.transports.remote_websocket = wsTransport as Transport;
+    setupRemoteLogging(url);
   } else {
     process.stderr.write("Dev Mode -- no remote logging\n");
   }

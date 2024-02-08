@@ -53,6 +53,7 @@
         "@emotion/styled": "^11.11.0",
         "@mui/material": "^5.14.16",
         "@mui/x-data-grid": "^6.18.2",
+        "@oznu/ws-connect": "^2.2.0",
         "apexcharts": "^3.45.2",
         "electron-is-dev": "^2.0.0",
         "electron-log": "^5.1.1",
