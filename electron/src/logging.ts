@@ -69,10 +69,27 @@ function makeLogFormatter(useColor: boolean) {
     // if the log originally came from rust, we use the timestamp from
     // rust and we strip the timestamp (data[0]) and level (data[1]) from
     // the data to log (since we are going to use the electron-log level)
-    const [dateStr, data, scopeStr] =
-      message.scope === "rust"
-        ? [message.data[0], message.data.slice(2), "[RS]"]
-        : [message.date.toISOString(), message.data, "[JS]"];
+    let [dateStr, data, scopeStr] = [
+      message.date.toISOString(),
+      message.data,
+      "[JS]",
+    ];
+    if (message.scope === "rust") {
+      if (!isNaN(Date.parse(message.data[0]))) {
+        // The first part of the message data is a properly formatted date str
+        // ==> we are very likely dealing with someling rust logged.
+        // Use Rust's timestamp and skip over the loglevel from rust
+        dateStr = message.data[0];
+        data = message.data.slice(2);
+        scopeStr = "[RS]";
+      } else {
+        // Not a valid date. That means some other output on stderr
+        // (e.g., panic and/or a stack trace)
+        message.level = "error";
+        scopeStr = "[RS-stderr]";
+      }
+    }
+
     if (useColor) {
       let color = "unset"; // the default color
       switch (message.level) {
