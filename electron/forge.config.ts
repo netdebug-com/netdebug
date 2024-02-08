@@ -1,6 +1,7 @@
 import type { ForgeConfig } from "@electron-forge/shared-types";
 import { MakerSquirrel } from "@electron-forge/maker-squirrel";
 import { MakerZIP } from "@electron-forge/maker-zip";
+import { MakerDMG } from "@electron-forge/maker-dmg";
 //import { MakerDeb } from "@electron-forge/maker-deb";
 //import { MakerRpm } from "@electron-forge/maker-rpm";
 import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
@@ -41,7 +42,6 @@ const config: ForgeConfig = {
   rebuildConfig: {},
   makers: [
     new MakerSquirrel({}),
-    //new MakerZIP({}, ["darwin"]),
     new MakerZIP(
       {
         macUpdateManifestBaseUrl:
@@ -49,6 +49,29 @@ const config: ForgeConfig = {
       },
       ["darwin"],
     ),
+    new MakerDMG({
+      icon: "src/images/icon.icns",
+      iconSize: 100,
+      // should be 658 × 498
+      background: "assets/background.png",
+      debug: true,
+      contents: (opts) => {
+        // TS things opts does not contain `appPath`. But it does. I guess
+        // the type in the lib is busted. Force it as any to make TS
+        // happy.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const appPath = (opts as any).appPath;
+        return [
+          { x: 172, y: 115, type: "file", path: appPath },
+          { x: 468, y: 115, type: "link", path: "/Applications" },
+          // usually these two are hidden, unless ShowAllFiles is enabled
+          // in Finder (like Gregor does), so in this case: move them outside
+          // window
+          { x: 172, y: 600, type: "position", path: ".background" },
+          { x: 468, y: 600, type: "position", path: ".VolumeIcon.icns" },
+        ];
+      },
+    }),
     // disable linux for now
     // new MakerRpm({}),
     // new MakerDeb({}),
