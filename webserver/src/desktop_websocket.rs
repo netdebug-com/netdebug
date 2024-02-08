@@ -42,6 +42,10 @@ pub async fn handle_desktop_websocket(
     while let Some(ws_msg_result) = ws_rx.next().await {
         match ws_msg_result {
             Ok(ws_msg) => {
+                if ws_msg.is_ping() {
+                    // warp handles pong responses internally.
+                    continue;
+                }
                 let json_msg = match ws_msg.to_str() {
                     Ok(text) => text,
                     Err(_) => {
