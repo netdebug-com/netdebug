@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, dialog } from "electron";
 import { ChildProcess, spawn, SpawnOptions } from "child_process";
 import log from "electron-log/main";
 import path from "node:path";
@@ -113,12 +113,14 @@ function spawn_desktop_binary(command: string) {
       // TODO: looks like this exception triggers a dialog for an uncaught exception but doesn't
       // terminate the app. Fine for now but eventually we want to this more nicely: display
       // error and when user clicks "Ok", close the app.
-      throw new Error(
+      dialog.showErrorBox(
+        "Background Process Failed",
         "Desktop background process failed to many times. Giving up: " +
           panicMsg,
       );
+      app.quit();
     } else {
-      console.warn(
+      console.error(
         "Desktop binary exited (crashed?) with: " + code + ". Restarting",
       );
       isInPanicMsg = false;
