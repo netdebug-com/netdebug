@@ -97,6 +97,9 @@ const createWindow = (): void => {
   }
 };
 
+let panicMsg = "";
+let isInPanicMsg = false;
+
 function spawn_desktop_binary(command: string) {
   const args: string[] = [
     // default to connecting to a local webserver/topology server on ws://localhost:3030/desktop
@@ -111,12 +114,15 @@ function spawn_desktop_binary(command: string) {
       // terminate the app. Fine for now but eventually we want to this more nicely: display
       // error and when user clicks "Ok", close the app.
       throw new Error(
-        "Desktop background process failed to many times. Giving up",
+        "Desktop background process failed to many times. Giving up: " +
+          panicMsg,
       );
     } else {
       console.warn(
         "Desktop binary exited (crashed?) with: " + code + ". Restarting",
       );
+      isInPanicMsg = false;
+      panicMsg = "";
       spawn_desktop_binary(command);
     }
   });
@@ -134,6 +140,17 @@ function spawn_desktop_binary(command: string) {
       .replace(/\r?\n$/, "") // remove final newline
       .split(/\r?\n/)
       .forEach((line) => {
+        // Hacky trick to extract the panic messages from everything going on
+        // on stderr
+        if (line === "##PANIC-MSG-END##") {
+          isInPanicMsg = false;
+        }
+        if (isInPanicMsg) {
+          panicMsg += line + "\n";
+        }
+        if (line === "##PANIC-MSG-START##") {
+          isInPanicMsg = true;
+        }
         const parts = line.split(" ");
         switch (parts[1]) {
           case "WARN":

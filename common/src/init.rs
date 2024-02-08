@@ -1,3 +1,5 @@
+use std::io::Write;
+
 /**
  * Init logging framework with useful defaults.
  * Alst sets RUST_BACKTRACE is not explicitly set in the env
@@ -13,7 +15,6 @@ pub fn init_logging() {
     }
     env_logger::Builder::from_default_env()
         .format(|fmt, record| {
-            use std::io::Write;
             let level_style = fmt.default_level_style(record.level());
             let ts = fmt.timestamp_millis();
 
@@ -39,6 +40,15 @@ pub fn set_abort_on_panic() {
     use std::panic;
     let orig_panic_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
+        // TODO:
+        // This is a quick hack to make it easier for the desktop and electron
+        // to figure out what exactly is the panic/error message to display to
+        // the user.
+        // Eventually, we should distinguish between "expected" errors like
+        // address-in-use or no permission for pcap and simply display these
+        // in a nicer way.
+        eprintln!("##PANIC-MSG-START##\n{}\n##PANIC-MSG-END##", panic_info);
+        let _ = std::io::stderr().flush();
         orig_panic_hook(panic_info);
         std::process::abort();
     }));
