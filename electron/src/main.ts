@@ -58,6 +58,8 @@ if (debug_upgrade) {
 */
 
 setupNetdebugLogging("wss://topology.netdebug.com:443/desktop");
+// for local debug:
+// setupNetdebugLogging("ws://localhost:3030/desktop");
 
 updateElectronApp({
   updateSource: {
