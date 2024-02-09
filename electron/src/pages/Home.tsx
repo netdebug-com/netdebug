@@ -1,7 +1,11 @@
 import { desktop_api_url } from "../utils";
 import { useInterval } from "react-use";
 import { useEffect, useState } from "react";
-import { DataLoadingState, loadData as loadData } from "../common/data_loading";
+import {
+  DataLoadingState,
+  loadData as loadData,
+  renderDataLoadingState,
+} from "../common/data_loading";
 import { ErrorMessage } from "../components/ErrorMessage";
 import Stack from "@mui/material/Stack";
 import Box from "@mui/material/Box";
@@ -64,6 +68,7 @@ const Home: React.FC = () => {
   useInterval(() => {
     loadData(desktop_api_url("get_my_ip"), setMyIp);
   }, 5000);
+
   // bandwidth state
   const [bandwidth, setBandwidth] = useState<ChartJsBandwidth | null>(null);
   useEffect(() => {
@@ -75,32 +80,26 @@ const Home: React.FC = () => {
   useInterval(() => {
     loadData(desktop_api_url("get_aggregate_bandwidth"), setPerMinuteBandwidth);
   }, 500);
+
   // network gateway ping state
   const [networkInterfaceState, setNetworkInterfaceState] =
-    useState<NetworkInterfaceState | null>(null);
+    useState<DataLoadingState<Array<NetworkInterfaceState>>>();
   useEffect(() => {
-    loadData<NetworkInterfaceState[]>(
+    loadData(
       desktop_api_url("get_system_network_history"),
-      setFirstNetworkInterfaceState,
+      setNetworkInterfaceState,
     );
   }, []);
   useInterval(() => {
     loadData(
       desktop_api_url("get_system_network_history"),
-      setFirstNetworkInterfaceState,
+      setNetworkInterfaceState,
     );
   }, 1000);
 
   function setPerMinuteBandwidth(bw: DataLoadingState<ChartJsBandwidth[]>) {
     if (bw.data != null) {
       setBandwidth(bw.data[1]); // 0 is 5 second, 1 is OneMinute, 2 is One Hour
-    }
-  }
-  function setFirstNetworkInterfaceState(
-    x: DataLoadingState<NetworkInterfaceState[]>,
-  ) {
-    if (x.data != null) {
-      setNetworkInterfaceState(x.data[0]);
     }
   }
 
@@ -164,13 +163,20 @@ const Home: React.FC = () => {
           </div>
         </Item>
         <Item>
-          {networkInterfaceState && (
-            <PingGraph
-              state={networkInterfaceState}
-              // for the Home page, only show IPv4
-              ip_selector={IpVersionSelector.IPV4_ONLY}
-            />
-          )}
+          {networkInterfaceState &&
+            renderDataLoadingState(
+              networkInterfaceState,
+              (net: Array<NetworkInterfaceState>) => {
+                if (net.length > 0) {
+                  return (
+                    <PingGraph
+                      state={net[net.length - 1]}
+                      ip_selector={IpVersionSelector.IPV4_ONLY}
+                    />
+                  );
+                }
+              },
+            )}
         </Item>
       </Stack>
     </Box>
