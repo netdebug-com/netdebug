@@ -25,6 +25,7 @@ import {
 } from "../components/NetworkInterfaceState";
 import { getChartOptions, getChartScale, getChartjsData } from "./Bandwidth";
 import { Link } from "react-router-dom";
+import { EULA } from "../components/EULA";
 // needed for anything ChartJS to work
 ChartJS.register(
   PointElement,
@@ -105,6 +106,7 @@ const Home: React.FC = () => {
 
   return (
     <Box sx={{ width: "100%" }}>
+      <EULA />
       <Stack spacing={2} useFlexGap>
         <Item>
           <Stack spacing={2} direction="row" useFlexGap>
