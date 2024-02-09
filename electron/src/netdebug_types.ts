@@ -505,4 +505,6 @@ export type DesktopToTopologyServer = ({
         "version": string;
         "client_id": string;
     };
+} | {
+    "tag": "Ping";
 });

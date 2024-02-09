@@ -26,6 +26,8 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 const COUNTER_REMOTE_SYNC_INTERVAL_MS: u64 = 60_000;
+const WS_KEEPALIVE_INTERVAL_MS: u64 = 1_000;
+
 #[allow(dead_code)] // will fix in next PR
 #[derive(Clone, Debug)]
 pub enum TopologyServerMessage {
@@ -191,6 +193,10 @@ impl TopologyServerConnection {
                 tokio::time::Duration::from_millis(COUNTER_REMOTE_SYNC_INTERVAL_MS),
             )
             .await;
+            spawn_periodic_ws_ping(
+                ws_tx.clone(),
+                tokio::time::Duration::from_millis(WS_KEEPALIVE_INTERVAL_MS),
+            );
             // send an initial hello to start the connection
             if let Err(e) = ws_tx
                 .send(PerfMsgCheck::new(DesktopToTopologyServer::Hello))
@@ -199,6 +205,8 @@ impl TopologyServerConnection {
                 warn!("Failed to send hello to TopologyServer: {}", e);
                 continue;
             }
+            let allowed_time_between_pongs =
+                tokio::time::Duration::from_millis(2 * WS_KEEPALIVE_INTERVAL_MS);
             // now wait for internal users to send traffic to us as well as the topology server to send us messages
             loop {
                 tokio::select! {
@@ -214,13 +222,20 @@ impl TopologyServerConnection {
                                 break;
                             }
                         }
-                    }
+                    },
                     desktop_msg = self.rx.recv() => match desktop_msg {
                         Some(desktop_msg) => self.handle_desktop_msg(desktop_msg, &ws_tx).await,
                         None => warn!("Got None back from TopologyServerConnection rx!?"),
-                    }
+                    },
+                    _ = tokio::time::sleep(allowed_time_between_pongs) => {
+                        // We have not received any message in `allowed_time_between_pongs1.
+                        // Assume connection to be dead.
+                        warn!("Timed out waiting for message from websocket. Reconnecting");
+                        break;
+                    },
                 }
             }
+            self.server_hello = None;
         }
     }
 
@@ -238,6 +253,11 @@ impl TopologyServerConnection {
                         return;
                     }
                 }
+            }
+            Message::Pong(_) => {
+                // we can just ignore pongs.
+                debug!("Received pong websocket message");
+                return;
             }
             _other => {
                 warn!("Ignoring non-text Websocket message: {:?}", _other);
@@ -319,7 +339,11 @@ impl TopologyServerConnection {
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 let msg = msg.perf_check_get("TopologyServerConnection::spawn_ws_writer");
-                let outgoing_msg = Message::Text(serde_json::to_string(&msg).unwrap());
+                let outgoing_msg = if msg == DesktopToTopologyServer::Ping {
+                    Message::Ping(Vec::new())
+                } else {
+                    Message::Text(serde_json::to_string(&msg).unwrap())
+                };
                 // count the number and size of messages sent to the topology server
                 desktop2server_stats_clone.add_value(outgoing_msg.len() as u64);
                 if let Err(e) = writer.send(outgoing_msg).await {
@@ -429,6 +453,26 @@ impl TopologyServerConnection {
             }
         });
     }
+}
+
+fn spawn_periodic_ws_ping(
+    ws_tx: Sender<PerfMsgCheck<DesktopToTopologyServer>>,
+    interval: tokio::time::Duration,
+) {
+    tokio::spawn(async move {
+        loop {
+            // use 'tokio::time::sleep' instead of 'tokio::time::interval'
+            // because we don't want multiple to run in parallel if this backsup
+            tokio::time::sleep(interval).await;
+            if ws_tx
+                .send(PerfMsgCheck::new(DesktopToTopologyServer::Ping))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
 }
 
 #[cfg(test)]

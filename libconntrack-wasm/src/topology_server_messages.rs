@@ -28,7 +28,7 @@ impl Display for DesktopLogLevel {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
+#[derive(Clone, Debug, Serialize, Deserialize, TypeDef, PartialEq)]
 #[serde(tag = "tag", content = "data")]
 pub enum DesktopToTopologyServer {
     Hello,
@@ -58,6 +58,7 @@ pub enum DesktopToTopologyServer {
         version: String,
         client_id: String,
     },
+    Ping,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
