@@ -5,7 +5,6 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use std::thread::JoinHandle;
 use std::{collections::HashMap, error::Error};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
@@ -20,6 +19,8 @@ use pcap::Capture;
 
 use crate::owned_packet::OwnedParsedPacket;
 struct PacketParserCodec {}
+
+const PCAP_INTERFACE_MONITOR_INTERVAL_MS: u64 = 1000;
 
 impl pcap::PacketCodec for PacketParserCodec {
     type Item = Box<OwnedParsedPacket>;
@@ -127,31 +128,22 @@ pub struct PcapMonitorOptions {
     pub stats_polling_frequency: Option<chrono::Duration>,
 }
 
-pub type PcapMonitorSender = Sender<bool>;
 /// Start an OS-level thread to spawn pcap threads for all active interfaces
 /// Return a channel, that when someone sends a 'true' message to it, recheck all
 /// of the threads for new/dynamic interfaces
-pub fn spawn_pcap_monitor_all_interfaces(
-    channel_size: usize,
-    options: PcapMonitorOptions,
-) -> PcapMonitorSender {
-    let (tx, rx) = channel(channel_size);
+pub fn spawn_pcap_monitor_all_interfaces(options: PcapMonitorOptions) {
     std::thread::spawn(move || {
-        if let Err(e) = pcap_monitor_all_interfaces(rx, options) {
+        if let Err(e) = pcap_monitor_all_interfaces(options) {
             panic!("pcap_monitor_all_interfaces returned: {}", e);
         }
     });
-    tx
 }
 
 /// Blocking loop to monitor the list of interfaces and keep an active
 /// pcap thread for each one.
 /// Update the list on a channel signal
-fn pcap_monitor_all_interfaces(
-    mut rx: Receiver<bool>,
-    options: PcapMonitorOptions,
-) -> Result<(), pcap::Error> {
-    let mut device_thread_handle_map: HashMap<String, JoinHandle<Result<(), pcap::Error>>> =
+fn pcap_monitor_all_interfaces(options: PcapMonitorOptions) -> Result<(), pcap::Error> {
+    let mut device_thread_handle_map: HashMap<String, JoinHandle<Result<(), PcapLoopError>>> =
         HashMap::new();
     loop {
         // for each previously existing pcap thread, find the ones that have finished
@@ -170,10 +162,21 @@ fn pcap_monitor_all_interfaces(
         for dev in dead_threads {
             // unwrap is ok, b/c we just verified each dev was in the list
             let join_handle = device_thread_handle_map.remove(&dev).unwrap();
-            if let Err(e) = join_handle.join() {
-                warn!("Pcap thread for device {} exited with {:#?}", dev, e);
-            } else {
-                info!("Pcap thread for device {} exited cleanly", dev);
+            // Join only returns an Err() if the child thread panic'ed. That
+            // can't happen in our code since we abort() on panic so we
+            // unwrap the join() and then match on the contained result
+
+            match join_handle.join().unwrap() {
+                Err(PcapLoopError::OpenDevice(e)) => {
+                    // TODO: instead of panic'ing, print error and exit cleanly
+                    panic!("Failed to open pcap device {}: {}. Exiting", dev, e);
+                }
+                Err(PcapLoopError::Loop(e)) => {
+                    warn!("Pcap thread for device {} exited with {}", dev, e);
+                }
+                Ok(()) => {
+                    info!("Pcap thread for device {} exited cleanly", dev);
+                }
             }
         }
         // for each active device, make sure we've launched a pcap thread for it
@@ -194,18 +197,10 @@ fn pcap_monitor_all_interfaces(
                 device_thread_handle_map.insert(dev.name.clone(), join_handle);
             }
         }
-        // wait until the system tracker tells us there's been a change and we should
-        // iterate on the loop; sending 'false' means 'exit cleanly'
-        if let Some(should_continue) = rx.blocking_recv() {
-            if !should_continue {
-                info!("Got should_continue=false, exiting...");
-                break;
-            } else {
-                info!("Refreshing listening pcap threads, by request");
-            }
-        }
+        std::thread::sleep(std::time::Duration::from_millis(
+            PCAP_INTERFACE_MONITOR_INTERVAL_MS,
+        ));
     }
-    Ok(())
 }
 
 pub fn pcap_find_all_local_addrs() -> Result<HashSet<IpAddr>, pcap::Error> {
@@ -221,38 +216,58 @@ pub fn pcap_find_all_local_addrs() -> Result<HashSet<IpAddr>, pcap::Error> {
 // cannot create a const chrono::Duration at compile time, so use seconds instead
 const DEFAULT_STATS_POLLING_FREQUENCY_SECONDS: u64 = 5;
 
+#[derive(thiserror::Error, Debug, Eq, PartialEq)]
+pub enum PcapLoopError {
+    #[error("Error opening and starting capture")]
+    OpenDevice(pcap::Error),
+    #[error("Error during pcap loop capture")]
+    Loop(pcap::Error),
+}
+
 pub fn blocking_pcap_loop(
     device_name: String,
     filter_rule: Option<String>,
     tx: ConnectionTrackerSender,
     payload_len_for_non_dns: usize,
     stats_polling_frequency: Option<chrono::Duration>,
-) -> Result<(), pcap::Error> {
-    let device = lookup_pcap_device_by_name(&device_name)?;
-    info!(
-        "Starting pcap capture on {} ({:?})",
-        &device.name, &device.desc
-    );
-    let mut capture = Capture::from_device(device)?
-        .buffer_size(64_000_000) // try to prevent any packet loss
-        .immediate_mode(true)
-        .open()?;
-    // only capture/probe traffic to the webserver
-    if let Some(filter_rule) = filter_rule {
-        info!("Applying pcap filter '{}'", filter_rule);
-        capture.filter(filter_rule.as_str(), true)?;
-    }
+) -> Result<(), PcapLoopError> {
+    // small hack: create and immediately call a lambda that initializes the
+    // device/capture. We do this since we use `?` in a couple of places
+    // the capture and try-blocks are not yet stable.
+    let capture_res = (|| {
+        let device = lookup_pcap_device_by_name(&device_name)?;
+        info!(
+            "Starting pcap capture on {} ({:?})",
+            &device.name, &device.desc
+        );
+        let mut capture = Capture::from_device(device)?
+            .buffer_size(64_000_000) // try to prevent any packet loss
+            .immediate_mode(true)
+            .open()?;
+        // only capture/probe traffic to the webserver
+        if let Some(filter_rule) = filter_rule {
+            info!("Applying pcap filter '{}'", filter_rule);
+            capture.filter(filter_rule.as_str(), true)?;
+        }
 
-    // panic if not Ethernet for now (see #344)
-    if capture.get_datalink() != pcap::Linktype::ETHERNET {
-        let datalink = capture.get_datalink();
-        return Err(pcap::Error::PcapError(format!(
-            "Unsupported link capture type - only support ethernet:  {:?} ({:?}) - {:?}",
-            datalink.get_name(),
-            datalink,
-            datalink.get_description()
-        )));
-    }
+        // panic if not Ethernet for now (see #344)
+        if capture.get_datalink() != pcap::Linktype::ETHERNET {
+            let datalink = capture.get_datalink();
+            return Err(pcap::Error::PcapError(format!(
+                "Unsupported link capture type - only support ethernet:  {:?} ({:?}) - {:?}",
+                datalink.get_name(),
+                datalink,
+                datalink.get_description()
+            )));
+        }
+        Ok(capture)
+    })();
+    let mut capture = match capture_res {
+        Ok(capture) => capture,
+        Err(e) => {
+            return Err(PcapLoopError::OpenDevice(e));
+        }
+    };
     let mut last_stats: Option<pcap::Stat> = None;
     let mut next_stats_time = 0u64;
     let stats_polling_frequency = match stats_polling_frequency {
@@ -320,7 +335,7 @@ pub fn blocking_pcap_loop(
                     _ => {
                         // die on any other error
                         warn!("start_pcap_stream got error: {} - exiting", e);
-                        return Err(e);
+                        return Err(PcapLoopError::Loop(e));
                     }
                 }
             }
@@ -338,7 +353,7 @@ pub fn run_blocking_pcap_loop_in_thread(
     // before starting the packet capture
     startup_delay: Option<chrono::Duration>,
     stats_polling_frequency: Option<chrono::Duration>,
-) -> std::thread::JoinHandle<Result<(), pcap::Error>> {
+) -> std::thread::JoinHandle<Result<(), PcapLoopError>> {
     std::thread::spawn(move || {
         if let Some(delay) = startup_delay {
             std::thread::sleep(delay.to_std().unwrap());
@@ -505,63 +520,6 @@ impl RawSocketWriter for PcapRawSocketWriter {
 }
 
 /**
- * Used for testing - just capture and buffer anything written to it
- */
-#[cfg(test)]
-pub struct MockRawSocketProber {
-    pub tx: Sender<PerfMsgCheck<crate::prober::ProbeMessage>>,
-    pub rx: Receiver<PerfMsgCheck<crate::prober::ProbeMessage>>,
-    pub captured: Vec<Vec<u8>>,
-}
-
-#[cfg(test)]
-impl Default for MockRawSocketProber {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-impl MockRawSocketProber {
-    pub fn new() -> MockRawSocketProber {
-        let (tx, rx) = channel(1024);
-        MockRawSocketProber {
-            tx,
-            rx,
-            captured: Vec::new(),
-        }
-    }
-
-    /**
-     * Take the messages that were queued to be sent, make the Prober calls to turn them into packets,
-     * and put them into the * connection tracker as if pcap had received them.  Useful in testing.
-     */
-    pub fn redirect_into_connection_tracker(
-        &mut self,
-        connection_tracker: &mut crate::connection_tracker::ConnectionTracker,
-    ) {
-        while let Ok(msg) = self.rx.try_recv() {
-            let msg = msg.skip_perf_check();
-            crate::prober::prober_handle_one_message(self, msg);
-            while let Some(probe) = self.captured.pop() {
-                let parsed_probe = OwnedParsedPacket::try_from_fake_time(probe).unwrap();
-                connection_tracker.add(parsed_probe);
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-impl RawSocketWriter for MockRawSocketProber {
-    /// NOTE: the MockRawSocketProber ignores which interface we try to send on
-    /// and just stores all of the packets sent to it in the same buffer
-    fn sendpacket(&mut self, _interface_ip: IpAddr, buf: &[u8]) -> Result<(), pcap::Error> {
-        self.captured.push(buf.to_vec());
-        Ok(())
-    }
-}
-
-/**
  * Create a RawSocketWriter
  *
  * NOTE: funky implementation issue in Linux: if you pcap::sendpacket() out a pcap instance,
@@ -570,4 +528,67 @@ impl RawSocketWriter for MockRawSocketProber {
  */
 pub fn bind_writable_pcap() -> impl RawSocketWriter {
     PcapRawSocketWriter::new()
+}
+
+#[cfg(test)]
+pub mod test {
+    use super::*;
+    use tokio::sync::mpsc::{channel, Receiver, Sender};
+
+    /**
+     * Used for testing - just capture and buffer anything written to it
+     */
+    #[cfg(test)]
+    pub struct MockRawSocketProber {
+        pub tx: Sender<PerfMsgCheck<crate::prober::ProbeMessage>>,
+        pub rx: Receiver<PerfMsgCheck<crate::prober::ProbeMessage>>,
+        pub captured: Vec<Vec<u8>>,
+    }
+
+    #[cfg(test)]
+    impl Default for MockRawSocketProber {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    #[cfg(test)]
+    impl MockRawSocketProber {
+        pub fn new() -> MockRawSocketProber {
+            let (tx, rx) = channel(1024);
+            MockRawSocketProber {
+                tx,
+                rx,
+                captured: Vec::new(),
+            }
+        }
+
+        /**
+         * Take the messages that were queued to be sent, make the Prober calls to turn them into packets,
+         * and put them into the * connection tracker as if pcap had received them.  Useful in testing.
+         */
+        pub fn redirect_into_connection_tracker(
+            &mut self,
+            connection_tracker: &mut crate::connection_tracker::ConnectionTracker,
+        ) {
+            while let Ok(msg) = self.rx.try_recv() {
+                let msg = msg.skip_perf_check();
+                crate::prober::prober_handle_one_message(self, msg);
+                while let Some(probe) = self.captured.pop() {
+                    let parsed_probe = OwnedParsedPacket::try_from_fake_time(probe).unwrap();
+                    connection_tracker.add(parsed_probe);
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    impl RawSocketWriter for MockRawSocketProber {
+        /// NOTE: the MockRawSocketProber ignores which interface we try to send on
+        /// and just stores all of the packets sent to it in the same buffer
+        fn sendpacket(&mut self, _interface_ip: IpAddr, buf: &[u8]) -> Result<(), pcap::Error> {
+            self.captured.push(buf.to_vec());
+            Ok(())
+        }
+    }
 }
