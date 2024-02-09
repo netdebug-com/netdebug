@@ -192,7 +192,9 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
         // divide by 1e6 to convert from NS to MS
         return (probe.recv_time_utc_ns - probe.sent_time_utc_ns) / 1e6;
       });
-      rtts.sort();
+      // @%$*(&@! javascript; the default sort() is "convert to string and sort by ASCII"
+      // so "100" would come before "3".  FIX: pass an explicit sort function for numbers
+      rtts.sort((a, b) => a - b);
 
       const ping_stats = {
         raw_rtts: rtts,
@@ -220,6 +222,14 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       .filter(([gateway_ip, _]) => matchesSelector(gateway_ip, ip_selector))
       .map(([gateway_ip, ping_stats]) => {
+        if (
+          ping_stats.min > ping_stats.q1 ||
+          ping_stats.q1 > ping_stats.median ||
+          ping_stats.median > ping_stats.q3 ||
+          ping_stats.q3 > ping_stats.max
+        ) {
+          console.error("Busting ping stats: ", ping_stats);
+        }
         return {
           x: gateway_ip,
           y: [
