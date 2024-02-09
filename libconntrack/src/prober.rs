@@ -310,7 +310,7 @@ pub mod test {
 
     use crate::neighbor_cache::{self, ArpOperation, NeighborCache};
     use crate::owned_packet::OwnedParsedPacket;
-    use crate::pcap::MockRawSocketProber;
+    use crate::pcap::test::MockRawSocketProber;
 
     pub fn test_tcp_packet(src_ip: IpAddr, dst_ip: IpAddr) -> Box<OwnedParsedPacket> {
         test_tcp_packet_ports(src_ip, dst_ip, 21, 1234)

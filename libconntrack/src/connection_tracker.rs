@@ -1129,7 +1129,7 @@ pub mod test {
     use crate::dns_tracker::DnsTracker;
     use crate::neighbor_cache::NeighborState;
     use crate::owned_packet::OwnedParsedPacket;
-    use crate::pcap::MockRawSocketProber;
+    use crate::pcap::test::MockRawSocketProber;
 
     pub fn mk_mock_connection_tracker<'a>(local_addrs: HashSet<IpAddr>) -> ConnectionTracker<'a> {
         let mock_prober = MockRawSocketProber::new();

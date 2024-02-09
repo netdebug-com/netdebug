@@ -115,7 +115,7 @@ function spawn_desktop_binary(command: string) {
       // error and when user clicks "Ok", close the app.
       dialog.showErrorBox(
         "Background Process Failed",
-        "Desktop background process failed to many times. Giving up: " +
+        "Desktop background process failed too many times. Giving up: " +
           panicMsg,
       );
       app.quit();

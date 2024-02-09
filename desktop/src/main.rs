@@ -180,9 +180,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         startup_delay: Some(chrono::Duration::milliseconds(150)),
         stats_polling_frequency: None,
     };
-    let pcap_monitor_tx =
-        spawn_pcap_monitor_all_interfaces(MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE, pcap_options);
-    system_tracker.write().await.pcap_monitor_tx = Some(pcap_monitor_tx);
+    spawn_pcap_monitor_all_interfaces(pcap_options);
 
     info!("Running desktop version: {}", get_git_hash_version());
     let listen_addr = ("127.0.0.1", args.listen_port);

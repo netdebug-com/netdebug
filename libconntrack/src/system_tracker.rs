@@ -6,10 +6,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{
-    pcap::PcapMonitorSender,
-    utils::{ip_is_ipv6_link_local, PerfMsgCheck},
-};
+use crate::utils::{ip_is_ipv6_link_local, PerfMsgCheck};
 
 use chrono::Utc;
 use common::os_abstraction::pcap_ifname_to_ifindex;
@@ -127,8 +124,6 @@ pub struct SystemTracker {
     ping_id: u16,
     /// A pointer to our prober task that manages rate limiting, etc.
     prober_tx: ProberSender,
-    /// A pointer to the pcap_monitor so we can alert it to network changes
-    pub pcap_monitor_tx: Option<PcapMonitorSender>,
     /// counter for number of network device changes
     network_device_changes: StatHandle,
     /// counter for number of pings we get with a weird/delayed sequence number, shared across all gateways
@@ -194,7 +189,6 @@ impl SystemTracker {
                 Units::None,
                 [StatType::COUNT],
             ),
-            pcap_monitor_tx: None, // to start with
         }
     }
 
@@ -242,12 +236,6 @@ impl SystemTracker {
         let changed = if self.current_network().has_state_changed(&interface_state) {
             self.current_network_mut().end_time = Some(Utc::now());
             let old_state = self.current_network().clone();
-            // update the pcap_monitor_tx, if it's been specified
-            if let Some(pcap_monitor_tx) = &self.pcap_monitor_tx {
-                if let Err(e) = pcap_monitor_tx.try_send(true) {
-                    warn!("Failed to update the pcap_monitor_tx thread: {}", e);
-                }
-            }
             // for each old gateway, tell the connection tracker to stop listening to the ping updates
             for (gateway, ping_state) in &old_state.gateways_ping {
                 send_or_log_sync!(
@@ -802,7 +790,7 @@ mod test {
 
     use crate::{
         neighbor_cache::NeighborState,
-        pcap::MockRawSocketProber,
+        pcap::test::MockRawSocketProber,
         prober::{make_ping_icmp_echo_reply, make_ping_icmp_echo_request},
     };
 
