@@ -62,13 +62,15 @@ export function renderDataLoadingState<T>(
   state: DataLoadingState<T>,
   renderer: (data: T) => JSX.Element,
 ) {
-  return (
-    <>
-      {state.isPending && <div>Loading ...</div>}
-      {state.error && <ErrorMessage msg={"ERROR: " + state.error} />}
-      {state.data && renderer(state.data)}
-    </>
-  );
+  if (state.isPending) {
+    return <div> Loading... </div>;
+  } else if (state.error) {
+    return <ErrorMessage msg={"ERROR: " + state.error} />;
+  } else if (state.data) {
+    return <div> {renderer(state.data)} </div>;
+  } else {
+    return <div> Loaded (data is null!?)</div>;
+  }
 }
 
 // like loadData(), but delays the actual loading by 1sec. Allows one to
