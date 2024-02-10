@@ -241,29 +241,17 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
           ],
         };
       });
-    /* TODO!
-    const drop_data = Array.from(pingData).map(([gateway_ip, ping_stats]) => {
-      return {
-        x: gateway_ip,
-        y: (100 * ping_stats.drop_count) / ping_stats.total_non_missed_probes,
-      };
-    });
-    */
 
-    const series = [
-      // first, a box and whiskers ('boxPlot') of the rtt data
-      {
-        type: "boxPlot",
-        data: rtt_data,
-      },
-      // second, a bar chart with same x values of the drop counts
-      /*
-      {
-        type: "bar",
-        data: drop_data,
-      },*/
-    ];
-    return series;
+    if (pingData.size != 0) {
+      return [
+        {
+          type: "boxPlot",
+          data: rtt_data,
+        },
+      ];
+    } else {
+      return [];
+    }
   }
 
   function getBoxplotOptions(
@@ -280,8 +268,38 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
         total_packets += pingStats.total_non_missed_probes;
         dropped_packets += pingStats.drop_count;
       });
+    const annotations =
+      pingData.size != 0
+        ? {}
+        : {
+            yaxis: [
+              {
+                x: 1,
+                y: 1,
+                borderColor: "#000",
+                fillColor: "#FEB019",
+                opacity: 0.2,
+                label: {
+                  borderColor: "#333",
+                  style: {
+                    fontSize: "30px",
+                    color: "#333",
+                    background: "#FEB019",
+                  },
+                  text:
+                    "No " +
+                    prettyPrintIpSelector(ip_selector) +
+                    " default routers found!!",
+                },
+              },
+            ],
+          };
     const percent_dropped_packets =
-      total_packets == 0 ? 0 : (100 * dropped_packets) / total_packets;
+      pingData.size == 0
+        ? 100 // no routers means 100% packet loss, not zero
+        : total_packets == 0
+        ? 0
+        : (100 * dropped_packets) / total_packets;
     // is this really how to format to 2 decimal places in javascript?
     const percent_dropped_packets_pretty = (
       Math.round(percent_dropped_packets * 100) / 100
@@ -293,6 +311,7 @@ export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
           enabled: false,
         },
       },
+      annotations: annotations,
       legend: {
         show: true,
       },
@@ -400,4 +419,17 @@ function CustomTabPanel(props: TabPanelProps) {
       {value === index && <Box sx={{ p: 3 }}>{children}</Box>}
     </div>
   );
+}
+
+// Turn an IpSelector into reasonable text
+function prettyPrintIpSelector(ip_selector: IpVersionSelector) {
+  if (ip_selector == IpVersionSelector.BOTH) {
+    return "IPv4 or IPv6";
+  } else if (ip_selector == IpVersionSelector.IPV4_ONLY) {
+    return "IPv4";
+  } else if (ip_selector == IpVersionSelector.IPV6_ONLY) {
+    return "IPv6";
+  } else {
+    return "FIXME: unknown IpSelector!?";
+  }
 }
