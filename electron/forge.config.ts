@@ -6,6 +6,7 @@ import { MakerDMG } from "@electron-forge/maker-dmg";
 //import { MakerRpm } from "@electron-forge/maker-rpm";
 import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
 import { WebpackPlugin } from "@electron-forge/plugin-webpack";
+import path from "path/posix";
 
 import { mainConfig } from "./webpack.main.config";
 import { rendererConfig } from "./webpack.renderer.config";
@@ -61,9 +62,31 @@ const config: ForgeConfig = {
         // happy.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const appPath = (opts as any).appPath;
+        // I couldn't find an way to find the path the to source directory other
+        // than this hack of using the path to the background image and just getting
+        // the basename of it :-(
+        const assetsPath = path.dirname(opts.background || "");
         return [
-          { x: 172, y: 115, type: "file", path: appPath },
-          { x: 468, y: 115, type: "link", path: "/Applications" },
+          { x: 162, y: 115, type: "file", path: appPath },
+          { x: 478, y: 115, type: "link", path: "/Applications" },
+          {
+            x: 162,
+            y: 300,
+            type: "file",
+            path: assetsPath + "/ReadMeFirst.html",
+          },
+          {
+            x: 329,
+            y: 300,
+            type: "file",
+            path: assetsPath + "/Install ChmodBPF.pkg",
+          },
+          {
+            x: 478,
+            y: 300,
+            type: "file",
+            path: assetsPath + "/Uninstall ChmodBPF.pkg",
+          },
           // usually these two are hidden, unless ShowAllFiles is enabled
           // in Finder (like Gregor does), so in this case: move them outside
           // window
