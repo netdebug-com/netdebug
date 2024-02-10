@@ -133,7 +133,9 @@ pub async fn channel_rpc<M, RESP>(
     }
     // TODO: maybe base the timeout on SLA. For now just use something so we get
     // feedback and don't wait forever.
-    let max_wait_time = tokio::time::Duration::from_millis(15_000);
+    // 2sec is the timeout we currently use for the websocket. So lets use the
+    // same here.
+    let max_wait_time = tokio::time::Duration::from_millis(2_000);
     match timeout(max_wait_time, response_rx.recv()).await {
         Ok(resp) => match resp {
             Some(resp) => {

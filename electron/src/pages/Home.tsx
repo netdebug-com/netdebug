@@ -42,13 +42,17 @@ ChartJS.register(
 );
 
 function renderIpStringData(state: DataLoadingState<string>) {
-  return (
-    <>
-      {state.isPending && "Loading ..."}
-      {state.error && <ErrorMessage msg={"ERROR: " + state.error} />}
-      {state.data && state.data.replace(/^::ffff:/, "")}
-    </>
-  );
+  if (state.isPending) {
+    return <em>Loading ...</em>;
+  } else if (state.error) {
+    return <ErrorMessage msg={"ERROR: " + state.error} />;
+  } else if (state.data === "0.0.0.0") {
+    return <ErrorMessage msg={"No public IP"} />;
+  } else if (state.data) {
+    return <em>{state.data.replace(/^::ffff:/, "")}</em>;
+  } else {
+    return "Loaded data is null??";
+  }
 }
 
 const Item = styled(Paper)(({ theme }) => ({

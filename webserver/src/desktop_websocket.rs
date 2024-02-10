@@ -108,6 +108,9 @@ async fn handle_desktop_message(
             version,
             .. // TODO: replace the addr.to_string() with the client id from the message
         } => handle_push_log(remotedb_client, timestamp, msg, level, os, version, addr.to_string()).await,
+        Ping => {
+            warn!("Received a DesktopToTopologyServer::Ping as JSON which should never be sent over the wire");
+        }
     }
 }
 
