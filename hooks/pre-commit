@@ -19,10 +19,11 @@ if [[ ${result} -ne 0 ]] ; then
     exit 1
 fi
 
-npx prettier -c . 
+npx prettier@3.0.0 -c . 
 result=$?
 if [[ ${result} -ne 0 ]] ; then
-    printred ' There are some code style issues, run `npx prettier -w .` first.'
+    printred ' There are some code style issues, run `npx prettier@3.0.0 -w .` first.'
+    printred ' If this prettier run disagrees with the one on github actions, check the version numbers of prettier.'
     exit 1
 fi
 
