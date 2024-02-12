@@ -7,7 +7,7 @@ import subprocess
 RunAsUser = "deploy"
 
 # get list of servers
-req = urllib.request.Request(url="https://netdebug.com/vantages.json",
+req = urllib.request.Request(url="https://topology.netdebug.com/static/vantages.json",
                              headers={'User-Agent': 'Mozilla/5.0'})
 servers = json.load(urllib.request.urlopen(req))
 
