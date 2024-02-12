@@ -14,7 +14,7 @@ export const ReleaseNotes: React.FC = () => {
 
   return (
     <ul style={ul_style}>
-      <b>Release 0.2.1 - Feb 9th, 2024</b>
+      <b>Release 0.2.2 - Feb 9th, 2024</b>
       <li style={li_top_style}> Initial "Technical Preview Release!</li>
       <li style={li_top_style}>
         Supports:

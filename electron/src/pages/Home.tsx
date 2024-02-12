@@ -115,7 +115,7 @@ const Home: React.FC = () => {
           <Stack spacing={2} direction="row" useFlexGap>
             <Item sx={{ width: "45%", textAlign: "left" }}>
               <b>
-                <em>What's New with v0.2.1</em>{" "}
+                <em>What's New with v0.2.2</em>{" "}
               </b>
               <ul>
                 <li>
