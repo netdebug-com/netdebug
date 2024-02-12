@@ -1,16 +1,116 @@
 <!doctype html>
 <html>
   <head>
+    <style>
+      body {
+        width: 800px;
+        margin-left: auto;
+        margin-right: auto;
+        font-family: sans-serif;
+        font-size: large;
+        line-height: 150%;
+      }
+
+      h1 {
+        color: #1045af;
+        text-align: center;
+      }
+      h2 {
+        color: #1045af;
+        text-align: center;
+        padding-top: 30px;
+      }
+      li {
+        padding-bottom: 10px;
+      }
+    </style>
     <meta charset="UTF-8" />
-    <title>NetDebug</title>
+    <title>NetDebug Desktop Application</title>
   </head>
   <body>
+    <h1>NetDebug Desktop Application</h1>
+
     <h2>Installation Instructions</h2>
-    TODO: Need to run Install ChmodBPF.pkg, etc. etc.
+    In order to be able to capture packets (which is required for the NetDebug
+    desktop application), please install the <code>Install ChmodBPF.pdf</code>
+    package first. Then move/copy NetDebug into Applications.
 
-    <h2>License</h2>
-
-    TODO
+    <h2>
+      NetDebug Limited Release “Technical Preview” End-User License Agreement
+    </h2>
+    <ol>
+      <li>
+        A preliminary version of the NetDebug debug software is being made
+        available for a limited time basis as a “technical preview” for testing
+        and evaluation of a small number of individuals. This means that it
+        should not be used in production or at large scale and thus no
+        warranties about the software working or not harming your computer
+        systems are expressed or implied.
+      </li>
+      <li>
+        With this license, End-Users are granted a license to use the NetDebug
+        software on their personal computers at no monetary charge. Users have
+        the right to make personal backups of the software but not to distribute
+        to others. When the production version of NetDebug becomes available,
+        users are expected to upgrade the software to the production version.{"
+        "}
+      </li>
+      <li>
+        While the final production version of NetDebug software will be made
+        available under an open-source license (exact license TBD), the
+        Technical Preview version will only have source code available under
+        Non-Disclosure Agreement (NDA).
+      </li>
+      <li>
+        The final version of NetDebug will employ significant personal-privacy
+        preserving technologies (hashing, data mixing, obfuscation, etc.) that
+        are not yet available/implemented in the Technical Preview. As a result,
+        use of this software implies that
+        <b>
+          <em>
+            {" "} users acknowledge that they will share with NetDebug their
+            personal network performance and network “metadata”{" "}
+          </em>
+        </b>
+        from their systems including but not limited to:
+        <ol type="a">
+          <li>
+            Latency, packet loss, network topology (e.g., traceroute)
+            information{" "}
+          </li>
+          <li>
+            Hosts/Websites visited (but not any packet payload/personally
+            identifiable information besides public IP address){" "}
+          </li>
+          <li>DNS requests/responses</li>
+          <li>
+            Operating system statistics, log messages, and network settings
+          </li>
+        </ol>
+      </li>
+      <li>
+        In return, NetDebug will take all reasonable steps to anonymize user
+        data including:
+        <ol type="a">
+          <li>
+            Not sharing personally identifiable information with third-parties
+          </li>
+          <li>
+            Protecting any potentially private information (e.g., public source
+            IP addresses) on the back-end systems until such time as full
+            privacy guards can be established (e.g., networking mixing)
+          </li>
+        </ol>
+      </li>
+      <li>
+        End-users acknowledge that NetDebug’s business model is selling
+        insights, data, and alerts to third-parties derived from aggregated,
+        anonymized data collected in (4); the NetDebug software is only provided
+        at no charge because of this business model. Users who wish to use the
+        NetDebug software without participating in the data sharing described in
+        (4) will be able to do so by paying a monthly subscription fee.
+      </li>
+    </ol>
 
     <h2>Install ChmodBPF.pkg / Uninstall ChmodBPF.pkg</h2>
     Install ChmodBPF.pkg / Uninstall ChmodBPF.pkg are from
