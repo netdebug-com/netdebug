@@ -1,6 +1,24 @@
 import Dialog from "@mui/material/Dialog";
 import { Button } from "@mui/material";
 
+// HACK: if a user has accepted the v2 EULA with the previous flow
+// (browser local storage), lets accept it right back.
+const EULA_STORAGE_KEY = "SIGNED_EULA_VERSION";
+function eulaSignedWithLocalStorage() {
+  const last_signed = localStorage.getItem(EULA_STORAGE_KEY);
+  if (last_signed === null) {
+    return false;
+  }
+  // will return NaN if not parsable
+  const old_version = parseInt(last_signed, 10);
+  if (Number.isNaN(old_version) || old_version < 2) {
+    return false;
+  } else {
+    console.log("User previously already accepted EULA version: ", old_version);
+    return true;
+  }
+}
+
 function eula_v2() {
   // manually included from resources/EULA.html and editted
   return (
@@ -168,6 +186,9 @@ function eula_v2() {
 
 export const EULA: React.FC = () => {
   // TODO: fixup styling
+  if (eulaSignedWithLocalStorage()) {
+    window.netdebugApi.eulaAccepted();
+  }
   return (
     <center>
       <Dialog fullScreen open={true} sx={{ align: "center", width: "100%" }}>
