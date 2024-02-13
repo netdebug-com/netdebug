@@ -678,7 +678,7 @@ fn run_intf_test(args: IntfTestCmd) -> ExitCode {
 }
 
 /// Compare a list of ```pcap::Device```s and return 'true' if they are different
-fn compare_devices(old_devices: &Vec<pcap::Device>, new_devices: &Vec<pcap::Device>) -> bool {
+fn compare_devices(old_devices: &[pcap::Device], new_devices: &[pcap::Device]) -> bool {
     if old_devices.len() != new_devices.len() {
         return true;
     }
