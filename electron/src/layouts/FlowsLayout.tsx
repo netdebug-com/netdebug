@@ -4,9 +4,10 @@ import { Link, Outlet } from "react-router-dom";
 import { NavInfo, useMatchNavInfo } from "../router_utils";
 
 const FLOW_ROUTE_INFOS: NavInfo[] = [
-  { label: "By Flows", to: "", exactMatch: true },
-  { label: "By DNS Domain", to: "by_dest_domain" },
+  { label: "By DNS Domain", to: "", exactMatch: true },
   { label: "By App", to: "by_app" },
+  { label: "By Host / Latency", to: "by_host_latency" },
+  { label: "By Flows", to: "by_flow", exactMatch: true },
 ];
 
 const FlowsNav: React.FC = () => {

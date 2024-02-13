@@ -10,7 +10,6 @@ const TAB_NAV_INFO = [
   { label: "DNS", to: "/dns" },
   { label: "Devices", to: "/devices" },
   { label: "Flows", to: "/flows" },
-  { label: "Latency", to: "/rtt_latency" },
   { label: "Webtest", to: "/webtest" },
   { label: "Router Delays", to: "/router_delays" },
   { label: "About", to: "/about" },

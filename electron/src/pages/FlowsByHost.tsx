@@ -14,7 +14,7 @@ import { usePeriodicRefresh } from "../usePeriodicRefresh";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { AggregateStatEntry } from "../netdebug_types";
 
-export const rttLatencyLoader = async () => {
+export const flowsByHostLatencyLoader = async () => {
   const res = await fetchAndCheckResult(desktop_api_url("get_host_flows"));
   return res
     .json()
@@ -59,7 +59,7 @@ columns[0].valueGetter = (params) => {
   return value;
 };
 
-const RttLatency: React.FC = () => {
+const FlowsByHostLatency: React.FC = () => {
   const statEntries = useLoaderData() as AggregateStatEntry[];
   const [autoRefresh, setAutoRefresh] = useState(true);
 
@@ -152,4 +152,4 @@ const RttLatency: React.FC = () => {
   );
 };
 
-export default RttLatency;
+export default FlowsByHostLatency;
