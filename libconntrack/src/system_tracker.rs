@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use crate::utils::{ip_is_ipv6_link_local, PerfMsgCheck};
+use crate::utils::PerfMsgCheck;
 
 use chrono::Utc;
 use common::os_abstraction::pcap_ifname_to_ifindex;
@@ -746,27 +746,7 @@ impl SystemTracker {
      * based off of the local routing table ala remote_ip_to_local()
      */
     fn make_gateway_ping_key(&self, gateway: &IpAddr) -> Result<ConnectionKey, pcap::Error> {
-        let source_ip = if !ip_is_ipv6_link_local(*gateway) {
-            remote_ip_to_local(*gateway)?
-        } else {
-            // need to handle link-local IPs specially because most (all?) OS's have multiple
-            // conflicting fe80::* routes at the same metric, so the above call gets an arbitrary
-            // interface; instead just use the link-local IP of the egress device
-            let egress_device = lookup_egress_device()?;
-            egress_device
-                .addresses
-                .iter()
-                .find_map(|a| {
-                    if ip_is_ipv6_link_local(a.addr) {
-                        Some(a.addr)
-                    } else {
-                        None
-                    }
-                })
-                .ok_or(pcap::Error::PcapError(
-                    "Tried to ping IPv6 LL Gateway but not LL ip on egress!?".to_string(),
-                ))?
-        };
+        let source_ip = remote_ip_to_local(*gateway)?;
         Ok(ConnectionKey::make_icmp_echo_key(
             source_ip,
             *gateway,

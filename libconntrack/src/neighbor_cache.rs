@@ -14,7 +14,6 @@ use mac_address::MacAddress;
 
 use crate::owned_packet::OwnedParsedPacket;
 use crate::system_tracker::BROADCAST_MAC_ADDR;
-use crate::utils::link_local_ipv6_to_mac_address;
 
 /**
  * A cache of all of the information we've learned about our neighbors
@@ -72,20 +71,12 @@ impl<'a> NeighborCache<'a> {
         }
     }
 
+    /// Lookup this IP in our cache; no magic
+    ///
     /// Reminder: internally EvictHashMap is modifying its state to track
     /// LRU info, so this function needs to be mutable even though the
     /// returned value is immutable
-    ///
-    /// HACK!  Some routers don't seem to want to respond to NeighborDiscovery messages
-    /// for IPv6 link local addresses (e.g., fe80::..), which is annoying but somewhat fair
-    /// because those addresses do encode the MAC Address already.  In those cases,
-    /// just short-cut the process and send the reply
     pub fn lookup_mac_by_ip(&mut self, ip: &IpAddr) -> Option<MacAddress> {
-        // ipv6 link-local hack
-        if let Some(mac) = link_local_ipv6_to_mac_address(*ip) {
-            return Some(mac);
-        }
-        // else check our cache
         self.ip2mac
             .get_mut(ip)
             .map(|neighbor_state| neighbor_state.mac)

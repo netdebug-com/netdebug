@@ -4,15 +4,14 @@ use std::{
     net::IpAddr,
 };
 
+use byteorder::WriteBytesExt;
 use common_wasm::PROBE_MAX_TTL;
 use etherparse::{icmpv6::TYPE_NEIGHBOR_SOLICITATION, PacketHeaders, TcpHeader, TransportHeader};
 use log::{debug, warn};
 use tokio::sync::mpsc::{channel, Sender};
 
 use crate::{
-    neighbor_cache::{ArpPacket, MIN_NDP_SIZE},
-    owned_packet::OwnedParsedPacket,
-    pcap::RawSocketWriter,
+    neighbor_cache::ArpPacket, owned_packet::OwnedParsedPacket, pcap::RawSocketWriter,
     utils::PerfMsgCheck,
 };
 
@@ -110,29 +109,80 @@ fn send_neighbor_discovery(
 
 const ICMP6_NDP_MULTICAST_MAC_ADDR: [u8; 6] = [0x33, 0x33, 0xff, 0x00, 0x00, 0x53];
 const ICMP6_NDP_MULTICAST_IP_ADDR: [u8; 16] = [
-    0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xff, 0x00, 0x00, 0x53,
+    0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xff, 0x00, 0x00, 0x00,
 ];
+
+const NDP_SOLICIT_PAYLOAD_LEN: usize = 16 // target IPv6 addr
+    + 2  // type and length of Source-link-layer option
+    + 6; // payload of Source-link-layer option, i.e., a 6-byte MAC address
+const NDP_SOURCE_LINK_LAYER_TYPE: u8 = 1;
+const NDP_SOURCE_LINK_LAYER_LEN: u8 = 1;
 
 fn make_icmp6_neighbor_discovery_solicit(
     local_ip: IpAddr,
     local_mac: [u8; 6],
     target_ip: IpAddr,
 ) -> Vec<u8> {
-    let mut cursor = Cursor::new([0; MIN_NDP_SIZE]); // just the size of the target IPv6 addr
+    let mut cursor = Cursor::new([0; NDP_SOLICIT_PAYLOAD_LEN]);
     let (local_ip_buf, target_ip_buf) = match (local_ip, target_ip) {
         (IpAddr::V6(local), IpAddr::V6(target)) => (local.octets(), target.octets()),
         _ => panic!("Called make_icmp6_neighbor_discovery with a v4 target adddress"),
     };
+    // target address
     cursor
         .write_all(&target_ip_buf)
         .expect("Bad length for icmp6 ndp!?");
+    // type 1 = Source-Link-Layer Option
+    cursor
+        .write_u8(NDP_SOURCE_LINK_LAYER_TYPE)
+        .expect("Bad LL Type?");
+    // len= 1 = Source-Link-Layer Option
+    cursor
+        .write_u8(NDP_SOURCE_LINK_LAYER_LEN)
+        .expect("Bad LL Type?");
+    // Source-Link-Layer MAC Address
+    cursor
+        .write_all(&local_mac)
+        .expect("Failed to write MAC Addr to NDP Solicit!?");
     let payload = cursor.into_inner();
-    let builder = etherparse::PacketBuilder::ethernet2(local_mac, ICMP6_NDP_MULTICAST_MAC_ADDR)
-        .ipv6(local_ip_buf, ICMP6_NDP_MULTICAST_IP_ADDR, 64)
+    // build the Solicited-Node Multicast address
+    let mut dst_ip_addr = [0u8; 16];
+    let mut dst_mac_addr = [0u8; 6];
+    make_icmp6_neighbor_discovery_solicited_node_address(
+        &mut dst_ip_addr,
+        &mut dst_mac_addr,
+        target_ip_buf,
+    );
+    let builder = etherparse::PacketBuilder::ethernet2(local_mac, dst_mac_addr)
+        // NOTE: hop_limit must be 255 to avoid spoofing; PITA to find...
+        // https://datatracker.ietf.org/doc/html/rfc4861#section-4.3
+        .ipv6(local_ip_buf, dst_ip_addr, 255)
         .icmpv6_raw(TYPE_NEIGHBOR_SOLICITATION, 0, [0, 0, 0, 0]);
     let mut pkt = Vec::with_capacity(builder.size(payload.len()));
     builder.write(&mut pkt, &payload).unwrap(); // unwrap ok; unless our math is bad
     pkt
+}
+
+/// See https://datatracker.ietf.org/doc/html/rfc4861#section-7.2.2 but the dst address of a NDP
+/// Neighbor solcitation is supposed start with ff02:0000:0000:0000:0000:0001:ff and end with
+/// the last 3 bytes/24 bits of the target address
+///
+/// This encoding also happens for the dst mac address
+///
+/// Also explained at :https://en.wikipedia.org/wiki/Solicited-node_multicast_address
+fn make_icmp6_neighbor_discovery_solicited_node_address(
+    dst_ip_addr: &mut [u8; 16],
+    dst_mac_addr: &mut [u8; 6],
+    target_addr: [u8; 16],
+) {
+    // starts with ff02::01::ff
+    *dst_ip_addr = ICMP6_NDP_MULTICAST_IP_ADDR;
+    *dst_mac_addr = ICMP6_NDP_MULTICAST_MAC_ADDR;
+    // copy last three bytes of target
+    (13..=15).for_each(|i| {
+        dst_ip_addr[i] = target_addr[i];
+        dst_mac_addr[i - 10] = target_addr[i];
+    });
 }
 
 pub fn make_ping_icmp_echo_request(
