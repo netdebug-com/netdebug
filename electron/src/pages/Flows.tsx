@@ -19,7 +19,7 @@ import { FlowSummary } from "../components/FlowSummary";
 import {
   calculateLossPercentage,
   getDefaultPercentageGridColDef,
-  getDefaultRateGridColDef,
+  getDefaultGridColDefWithUnits,
   getDefaultRttGridColDef,
 } from "../common/flow_common";
 import { useLoaderData, useRevalidator } from "react-router";
@@ -62,7 +62,7 @@ const columns: GridColDef[] = [
     headerName: "Send B/W",
     valueGetter: (params: GridValueGetterParams<ConnectionMeasurements>) =>
       params.row.tx_stats?.last_min_byte_rate,
-    ...getDefaultRateGridColDef("B/s"),
+    ...getDefaultGridColDefWithUnits("B/s"),
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurements
@@ -70,49 +70,49 @@ const columns: GridColDef[] = [
     headerName: "Recv B/W",
     valueGetter: (params: GridValueGetterParams<ConnectionMeasurements>) =>
       params.row.rx_stats?.last_min_byte_rate,
-    ...getDefaultRateGridColDef("B/s"),
+    ...getDefaultGridColDefWithUnits("B/s"),
   },
   {
     field: "send_burst_bw",
     headerName: "Send Burst B/W",
     valueGetter: (params: GridValueGetterParams<ConnectionMeasurements>) =>
       params.row.tx_stats?.burst_byte_rate,
-    ...getDefaultRateGridColDef("B/s"),
+    ...getDefaultGridColDefWithUnits("B/s"),
   },
   {
     field: "recv_burst_bw",
     headerName: "Recv Burst B/W",
     valueGetter: (params: GridValueGetterParams<ConnectionMeasurements>) =>
       params.row.rx_stats?.burst_byte_rate,
-    ...getDefaultRateGridColDef("B/s"),
+    ...getDefaultGridColDefWithUnits("B/s"),
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
     field: "send_bytes",
     headerName: "Send Bytes",
     valueGetter: (params) => params.row.tx_stats?.bytes,
-    ...getDefaultRateGridColDef("B"),
+    ...getDefaultGridColDefWithUnits("B"),
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
     field: "recv_bytes",
     headerName: "Recv Bytes",
     valueGetter: (params) => params.row.rx_stats?.bytes,
-    ...getDefaultRateGridColDef("B"),
+    ...getDefaultGridColDefWithUnits("B"),
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
     field: "send_lost_bytes",
     headerName: "Send Lost Bytes",
     valueGetter: (params) => params.row.tx_stats?.lost_bytes,
-    ...getDefaultRateGridColDef("B"),
+    ...getDefaultGridColDefWithUnits("B"),
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
     field: "recv_lost_bytes",
     headerName: "Recv Lost Bytes",
     valueGetter: (params) => params.row.rx_stats?.lost_bytes,
-    ...getDefaultRateGridColDef("B"),
+    ...getDefaultGridColDefWithUnits("B"),
   },
   {
     // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`

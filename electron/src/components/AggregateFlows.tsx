@@ -3,97 +3,25 @@ import { AggregateStatEntry, AggregateStatKind } from "../netdebug_types";
 import { dataGridDefaultSxProp } from "../utils";
 import { SwitchHelper } from "../components/SwitchHelper";
 import { Box } from "@mui/material";
-import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
-import {
-  calculateLossPercentage,
-  getDefaultPercentageGridColDef,
-  getDefaultRateGridColDef as getDefaultGridColDefWithUnits,
-  getNameFromAggKind,
-} from "../common/flow_common";
+import { DataGrid, GridToolbar } from "@mui/x-data-grid";
+import { getColumns, getNameFromAggKind } from "../common/flow_common";
 import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../usePeriodicRefresh";
 import { ErrorMessage } from "./ErrorMessage";
 
-const columns: GridColDef[] = [
-  {
-    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
-    field: "id",
-    headerName: "Name",
-    hideable: false,
-    flex: 60,
-    valueGetter: (params) => getNameFromAggKind(params.row.kind),
-  },
-  {
-    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
-    field: "send_bw",
-    headerName: "Send B/W",
-    valueGetter: (params) => params.row.summary.tx?.last_min_byte_rate,
-    ...getDefaultGridColDefWithUnits("B/s"),
-  },
-  {
-    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
-    field: "recv_bw",
-    headerName: "Recv B/W",
-    valueGetter: (params) => params.row.summary.rx?.last_min_byte_rate,
-    ...getDefaultGridColDefWithUnits("B/s"),
-  },
-  {
-    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
-    field: "send_burst_bw",
-    headerName: "Send Burst B/W",
-    valueGetter: (params) => params.row.summary.tx?.burst_byte_rate,
-    ...getDefaultGridColDefWithUnits("B/s"),
-  },
-  {
-    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
-    field: "recv_burst_bw",
-    headerName: "Recv Burst B/W",
-    valueGetter: (params) => params.row.summary.rx?.burst_byte_rate,
-    ...getDefaultGridColDefWithUnits("B/s"),
-  },
-  {
-    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
-    field: "send_bytes",
-    headerName: "Send Bytes",
-    valueGetter: (params) => params.row.summary.tx?.bytes,
-    ...getDefaultGridColDefWithUnits("B"),
-  },
-  {
-    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
-    field: "recv_bytes",
-    headerName: "Recv Bytes",
-    valueGetter: (params) => params.row.summary.rx?.bytes,
-    ...getDefaultGridColDefWithUnits("B"),
-  },
-  {
-    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
-    field: "send_lost_bytes",
-    headerName: "Send Lost Bytes",
-    valueGetter: (params) => params.row.summary.tx?.lost_bytes,
-    ...getDefaultGridColDefWithUnits("B"),
-  },
-  {
-    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
-    field: "recv_lost_bytes",
-    headerName: "Recv Lost Bytes",
-    valueGetter: (params) => params.row.summary.rx?.lost_bytes,
-    ...getDefaultGridColDefWithUnits("B"),
-  },
-  {
-    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
-    field: "send_loss",
-    headerName: "Send Loss",
-    valueGetter: (params) => calculateLossPercentage(params.row.summary.tx),
-    ...getDefaultPercentageGridColDef(),
-  },
-  {
-    // Note, this field doesn't actually exist in ConnectionMeasurement. We use `valueGetter`
-    field: "recv_loss",
-    headerName: "Recv Loss",
-    valueGetter: (params) => calculateLossPercentage(params.row.summary.rx),
-    ...getDefaultPercentageGridColDef(),
-  },
-];
+const columns = getColumns([
+  "id",
+  "send_bw",
+  "recv_bw",
+  "send_burst_bw",
+  "recv_burst_bw",
+  "send_bytes",
+  "recv_bytes",
+  "send_lost_bytes",
+  "recv_lost_bytes",
+  "send_loss",
+  "recv_loss",
+]);
 
 export interface AggregatedFlowsProps {
   headerName: string;
