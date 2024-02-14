@@ -25,7 +25,7 @@ import {
 } from "chart.js";
 import {
   IpVersionSelector,
-  PingGraph,
+  PingGraphHistogram,
 } from "../components/NetworkInterfaceState";
 import { getChartOptions, getChartScale, getChartjsData } from "./Bandwidth";
 import { Link } from "react-router-dom";
@@ -171,7 +171,7 @@ const Home: React.FC = () => {
               (net: Array<NetworkInterfaceState>) => {
                 if (net.length > 0) {
                   return (
-                    <PingGraph
+                    <PingGraphHistogram
                       state={net[net.length - 1]}
                       ip_selector={IpVersionSelector.IPV4_ONLY}
                     />

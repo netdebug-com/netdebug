@@ -94,3 +94,5 @@ out/
 # Desktop tmp stuff
 desktop
 desktop.exe
+netdebug-desktop
+netdebug-desktop.exe
