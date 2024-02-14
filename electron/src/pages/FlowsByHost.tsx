@@ -7,17 +7,12 @@ import {
 import { fetchAndCheckResult } from "../common/data_loading";
 import { SwitchHelper } from "../components/SwitchHelper";
 import { Alert, Box } from "@mui/material";
-import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
-import {
-  getColumns,
-  getDefaultGridColDefWithUnits as getDefaultGridColDefWithUnits,
-  getDefaultRttGridColDef,
-  getNameFromAggKind,
-} from "../common/flow_common";
+import { DataGrid, GridToolbar } from "@mui/x-data-grid";
+import { getColumns, getNameFromAggKind } from "../common/flow_common";
 import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../usePeriodicRefresh";
 import { ErrorMessage } from "../components/ErrorMessage";
-import { AggregateStatEntry } from "..//netdebug_types";
+import { AggregateStatEntry } from "../netdebug_types";
 
 export const rttLatencyLoader = async () => {
   const res = await fetchAndCheckResult(desktop_api_url("get_host_flows"));
