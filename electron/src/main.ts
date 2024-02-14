@@ -101,7 +101,11 @@ const initalBackgroundProcessSpawn = () => {
   if (isDev) {
     resourcePath = path.join(__dirname, "..", "..");
   }
-  const desktop_binary = path.join(resourcePath, "extra-resources", "desktop");
+  const desktop_binary = path.join(
+    resourcePath,
+    "extra-resources",
+    "netdebug-desktop",
+  );
   console.log("EULA has been accepted. Spawning background process");
   console.log("Using desktop rust binary", desktop_binary);
   spawn_desktop_binary(desktop_binary);

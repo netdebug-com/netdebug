@@ -19,20 +19,22 @@ mkdir -p $UNIVERSAL_DESKTOP_OUTDIR
 # if one of these fail, make sure you have the target installed: 
 #    rustup target add x86_64-apple-darwin
 #    rustup target add aarch64-apple-darwin
-cargo build --release --bin desktop --target=x86_64-apple-darwin
-cargo build --release --bin desktop --target=aarch64-apple-darwin
+cargo build --release --bin netdebug-desktop --target=x86_64-apple-darwin
+cargo build --release --bin netdebug-desktop --target=aarch64-apple-darwin
 
 # This is a MacOSX utility that creates the universal binary from 
 # target specific ones. 
 # TODO: apparently xcframeworks is the preferred new way to do this on 
 # Mac but I didn't find easy instructions. So lets use lipo since it works. 
 lipo -create \
-    target/aarch64-apple-darwin/release/desktop \
-    target/x86_64-apple-darwin/release/desktop \
-    -output $UNIVERSAL_DESKTOP_OUTDIR/desktop
+    target/aarch64-apple-darwin/release/netdebug-desktop \
+    target/x86_64-apple-darwin/release/netdebug-desktop \
+    -output $UNIVERSAL_DESKTOP_OUTDIR/netdebug-desktop
 
+# delete the old name if it's there
+rm -f electron/extra-resources/desktop
 # Now copy the universal binary into electron
-cp $UNIVERSAL_DESKTOP_OUTDIR/desktop electron/extra-resources
+cp $UNIVERSAL_DESKTOP_OUTDIR/netdebug-desktop electron/extra-resources/
 
 # Finally use electron-forge to build the universal .app bundle of the GUI
 cd electron 

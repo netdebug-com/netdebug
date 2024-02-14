@@ -1,5 +1,5 @@
 [package]
-name = "desktop"
+name = "netdebug-desktop"
 version = "0.2.2"
 edition = "2021"
 
@@ -34,8 +34,6 @@ tokio-tungstenite = { version = "0.20.1", features = ["connect"] }
 tower-http = { version = "0.5.1", features = ["cors", "trace"] }
 tracing = "0.1"
 typescript-type-def = { workspace = true }
-warp = "0.3.5"
-webserver = { path = "../webserver" }
 
 # needed by build.rs
 [build-dependencies]
