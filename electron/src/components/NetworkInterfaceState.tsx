@@ -1,18 +1,23 @@
 import { ApexOptions } from "apexcharts";
 import { NetworkInterfaceState } from "../netdebug_types";
 import ReactApexChart from "react-apexcharts";
+import TimeAgo from "timeago-react";
 import { useTheme } from "@mui/material/styles";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
 import TableContainer from "@mui/material/TableContainer";
-import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Paper from "@mui/material/Paper";
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
 import Box from "@mui/material/Box";
 import { useState } from "react";
+import Accordion from "@mui/material/Accordion";
+import AccordionSummary from "@mui/material/AccordionSummary";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import AccordionDetails from "@mui/material/AccordionDetails";
+import Stack from "@mui/material/Stack";
 
 // Re-usable components to show the detailed information in a flow
 // Assumes we already have the corresponding connection measurement
@@ -33,11 +38,11 @@ function renderIps(name: string, ip_list: string[]) {
           {" "}
           {name}s: {ip_list.length} addresses
         </summary>
-        <ol>
+        <ul>
           {ip_list.map((ip) => (
             <li key={ip}> {ip} </li>
           ))}
-        </ol>
+        </ul>
       </details>
     );
   }
@@ -46,19 +51,21 @@ function renderIps(name: string, ip_list: string[]) {
 // Take a network interface and return
 // "Active (last <time>)" or
 // "(Old - from <time> to <time>)"
-function make_context_string(state: NetworkInterfaceState): string {
+function make_context_string(state: NetworkInterfaceState): JSX.Element {
   if (state.end_time == null) {
-    const seconds = Math.floor(
-      (Date.now() - Date.parse(state.start_time)) / 1000,
+    return (
+      <span>
+        <b>Current Uplink State</b> (started{" "}
+        <TimeAgo datetime={state.start_time} />)
+      </span>
     );
-    return "Active (last " + seconds + " secs) ";
   } else {
     return (
-      "(Old - from " +
-      new Date(Date.parse(state.start_time)).toLocaleString() +
-      " to " +
-      new Date(Date.parse(state.end_time)).toLocaleString() +
-      " ) "
+      <span>
+        <b>Previous State</b> - from{" "}
+        {new Date(Date.parse(state.start_time)).toLocaleString()} to{" "}
+        {new Date(Date.parse(state.end_time)).toLocaleString()}
+      </span>
     );
   }
 }
@@ -70,46 +77,129 @@ function prettyBool(yes: boolean): string {
 export const NetworkInterfaceStateComponent: React.FC<
   NetworkInterfaceStateProps
 > = (props) => {
-  const should_open = props.state.end_time == null;
   const context = make_context_string(props.state);
   // let date_str =
   return (
-    <details open={should_open}>
-      <summary>
-        {context} :: Interface {props.state.interface_name}
-      </summary>
-      <TableContainer component={Paper}>
-        <Table sx={{ minWidth: 650 }} aria-label="simple table">
-          <TableHead>
-            <TableRow>
-              <TableCell>Interface IPs</TableCell>
-              <TableCell align="right">Gateway IPs</TableCell>
-              <TableCell align="right">Link?</TableCell>
-              <TableCell align="right">Wireless?</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            <TableRow
-              sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
-            >
-              <TableCell component="th" scope="row">
-                {renderIps("IP", props.state.interface_ips)}
-              </TableCell>
-              <TableCell align="right" component="th" scope="row">
-                {renderIps("IP", props.state.gateways)}
-              </TableCell>
-              <TableCell align="right">
-                {prettyBool(props.state.has_link)}
-              </TableCell>
-              <TableCell align="right">
-                {prettyBool(props.state.is_wireless)}
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-      </TableContainer>
-      <PingGraph state={props.state} ip_selector={IpVersionSelector.BOTH} />
-    </details>
+    <Accordion expanded={props.isExpanded} onChange={props.expandedChangeCb}>
+      <AccordionSummary
+        expandIcon={<ExpandMoreIcon />}
+        style={{ backgroundColor: "#f8f8f8" }}
+      >
+        {context} :: Interface {props.state.interface_name || "None"}
+      </AccordionSummary>
+      <AccordionDetails style={{ backgroundColor: "#f8f8f8" }}>
+        <Stack spacing={1}>
+          <TableContainer component={Paper}>
+            <Table sx={{ minWidth: 650 }} aria-label="simple table">
+              <TableBody>
+                <TableRow
+                  sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                >
+                  <TableCell
+                    component="th"
+                    variant="head"
+                    scope="row"
+                    style={{ verticalAlign: "top" }}
+                  >
+                    <b>Interface&nbsp;IPs</b>
+                  </TableCell>
+                  <TableCell sx={{ width: 1 }}>
+                    {renderIps("IP", props.state.interface_ips)}
+                  </TableCell>
+                </TableRow>
+                <TableRow
+                  sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                >
+                  <TableCell
+                    component="th"
+                    variant="head"
+                    scope="row"
+                    style={{ verticalAlign: "top" }}
+                  >
+                    <b>Default&nbsp;Gateways</b>
+                  </TableCell>
+                  <TableCell sx={{ width: 1 }}>
+                    {renderIps("IP", props.state.gateways)}
+                  </TableCell>
+                </TableRow>
+                <TableRow
+                  sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                >
+                  <TableCell
+                    component="th"
+                    variant="head"
+                    scope="row"
+                    style={{ verticalAlign: "top" }}
+                  >
+                    <b>Has&nbsp;Link?</b>
+                  </TableCell>
+                  <TableCell sx={{ width: 1 }}>
+                    {prettyBool(props.state.has_link)}
+                  </TableCell>
+                </TableRow>
+                <TableRow
+                  sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                >
+                  <TableCell
+                    component="th"
+                    variant="head"
+                    scope="row"
+                    style={{ verticalAlign: "top" }}
+                  >
+                    <b>Is&nbsp;Wireless?</b>
+                  </TableCell>
+                  <TableCell sx={{ width: 1 }}>
+                    {prettyBool(props.state.is_wireless)}
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+              {/*
+              <TableHead>
+                <TableRow style={headerStyleLight}>
+                  <TableCell sx={headerStyleWithWidthLight(0.4)}>
+                    Interface IPs
+                  </TableCell>
+                  <TableCell sx={headerStyleWithWidthLight(0.4)}>
+                    Gateway IPs
+                  </TableCell>
+                  <TableCell sx={headerStyleWithWidthLight(0.1)} align="center">
+                    Link?
+                  </TableCell>
+                  <TableCell sx={headerStyleWithWidthLight(0.1)} align="center">
+                    Wireless?
+                  </TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                <TableRow
+                  sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                >
+                  <TableCell component="th" scope="row">
+                    {renderIps("IP", props.state.interface_ips)}
+                  </TableCell>
+                  <TableCell component="th" scope="row">
+                    {renderIps("IP", props.state.gateways)}
+                  </TableCell>
+                  <TableCell align="right">
+                    {prettyBool(props.state.has_link)}
+                  </TableCell>
+                  <TableCell align="right">
+                    {prettyBool(props.state.is_wireless)}
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+  */}
+            </Table>
+          </TableContainer>
+          <Paper>
+            <PingGraph
+              state={props.state}
+              ip_selector={IpVersionSelector.BOTH}
+            />
+          </Paper>
+        </Stack>
+      </AccordionDetails>
+    </Accordion>
   );
 };
 
@@ -120,6 +210,13 @@ export enum IpVersionSelector {
 }
 
 export interface NetworkInterfaceStateProps {
+  state: NetworkInterfaceState;
+  isExpanded: boolean;
+  expandedChangeCb: (event: React.SyntheticEvent, isExpanded: boolean) => void;
+  ip_selector: IpVersionSelector;
+}
+
+export interface PingGraphProps {
   state: NetworkInterfaceState;
   ip_selector: IpVersionSelector;
 }
@@ -152,7 +249,7 @@ function matchesSelector(ip: string, ip_selector: IpVersionSelector): boolean {
   }
 }
 
-export const PingGraph: React.FC<NetworkInterfaceStateProps> = (props) => {
+export const PingGraph: React.FC<PingGraphProps> = (props) => {
   const theme = useTheme();
   const [value, setValue] = useState(0);
 

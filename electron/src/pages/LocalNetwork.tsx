@@ -20,9 +20,16 @@ export const localNetworkLoader = async () => {
 const RELOAD_INTERVAL_MS = 200;
 const MAX_RELOAD_TIME = 1000;
 
+function getCurrentState(states: NetworkInterfaceState[]) {
+  return states.find((s) => s.end_time === null) || null;
+}
+
 const LocalNetwork: React.FC = () => {
   const networkInterfaceStates = useLoaderData() as NetworkInterfaceState[];
-  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [expandedState, setExpandedState] = useState<string | null>(
+    getCurrentState(networkInterfaceStates)?.start_time,
+  );
 
   // lets us re-fetch the data.
   const revalidator = useRevalidator();
@@ -42,15 +49,23 @@ const LocalNetwork: React.FC = () => {
         updateFn={setAutoRefresh}
       />
       <div>
-        {networkInterfaceStates.map((state) => {
-          return (
-            <NetworkInterfaceStateComponent
-              key={state.start_time}
-              state={state}
-              ip_selector={IpVersionSelector.BOTH}
-            />
-          );
-        })}
+        {networkInterfaceStates
+          .map((state) => {
+            return (
+              <NetworkInterfaceStateComponent
+                key={state.start_time}
+                state={state}
+                isExpanded={expandedState === state.start_time}
+                expandedChangeCb={(event: React.SyntheticEvent, isExpanded) => {
+                  isExpanded
+                    ? setExpandedState(state.start_time)
+                    : setExpandedState(null);
+                }}
+                ip_selector={IpVersionSelector.BOTH}
+              />
+            );
+          })
+          .reverse()}
       </div>
     </>
   );
