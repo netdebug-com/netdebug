@@ -1,28 +1,6 @@
 import Dialog from "@mui/material/Dialog";
 import { Button } from "@mui/material";
 
-const EULA_STORAGE_KEY = "SIGNED_EULA_VERSION";
-function need_to_sign_eula_version(need_version: number): boolean {
-  const last_signed = localStorage.getItem(EULA_STORAGE_KEY);
-  if (last_signed === null) {
-    return true;
-  }
-  // will return NaN if not parsable
-  const old_version = parseInt(last_signed, 10);
-  if (Number.isNaN(old_version) || old_version < need_version) {
-    return true;
-  } else {
-    // signed the current (or future!?) version
-    // console.log("User already accepted EULA version: ", old_version);
-    return false;
-  }
-}
-
-function accept_eula(signed_version: number) {
-  console.log("User accepted EULA version: ", signed_version);
-  localStorage.setItem(EULA_STORAGE_KEY, signed_version.toString());
-}
-
 function eula_v2() {
   // manually included from resources/EULA.html and editted
   return (
@@ -189,24 +167,19 @@ function eula_v2() {
 }
 
 export const EULA: React.FC = () => {
-  const eula_version = 2; // BUMP me when we change the text
   // TODO: fixup styling
-  if (need_to_sign_eula_version(eula_version)) {
-    return (
-      <center>
-        <Dialog fullScreen open={true} sx={{ align: "center", width: "100%" }}>
-          {eula_v2()}
-          <Button
-            variant={"contained"}
-            onClick={() => accept_eula(eula_version)}
-            sx={{ align: "center" }}
-          >
-            I Accept
-          </Button>
-        </Dialog>
-      </center>
-    );
-  } else {
-    return;
-  }
+  return (
+    <center>
+      <Dialog fullScreen open={true} sx={{ align: "center", width: "100%" }}>
+        {eula_v2()}
+        <Button
+          variant={"contained"}
+          onClick={() => window.netdebugApi.eulaAccepted()}
+          sx={{ align: "center" }}
+        >
+          I Accept
+        </Button>
+      </Dialog>
+    </center>
+  );
 };

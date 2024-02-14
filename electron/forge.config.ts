@@ -122,6 +122,14 @@ const config: ForgeConfig = {
               js: "./src/preload.ts",
             },
           },
+          {
+            html: "./src/index.html",
+            js: "./src/eula-renderer.tsx",
+            name: "eula_window",
+            preload: {
+              js: "./src/preload.ts",
+            },
+          },
         ],
       },
     }),
