@@ -9,7 +9,7 @@ use tokio::{
     time::timeout,
 };
 
-use crate::owned_packet::OwnedParsedPacket;
+use crate::{owned_packet::OwnedParsedPacket, pcap::lookup_egress_device};
 
 /***
  * Given a remote IP address, figure out which local ip the local host
@@ -18,18 +18,46 @@ use crate::owned_packet::OwnedParsedPacket;
  * NOTE: this doesn't actually put any packets on the network and should
  * be reasonably cheap to run - just a local route table lookup
  *
+ * If the IP is a global/non-Link-local, just use the UDP connect trick
+ * to use the OS routing table to map it to the source interface.
+ *
+ * Else (i.e., the IP is a IPv6 LinkLocal), then most OS's have multiple
+ * conflicting route table entries for fe80:: in their routing table so
+ * let's use the IPv6 Link-Local address of the current egress interface.
+ *
  * NOTE: At least on MacOs with SLAAC IPv6 config, the OS will prefer a
  * temporary v6 address as src address, which has a limited lifetime
  * (couple of days).
  */
 
-pub fn remote_ip_to_local(remote_ip: IpAddr) -> std::io::Result<IpAddr> {
-    let udp_sock = match remote_ip {
-        IpAddr::V4(_) => std::net::UdpSocket::bind(("0.0.0.0", 0))?,
-        IpAddr::V6(_) => std::net::UdpSocket::bind(("::", 0))?,
-    };
-    udp_sock.connect((remote_ip, 53))?;
-    Ok(udp_sock.local_addr()?.ip())
+pub fn remote_ip_to_local(remote_ip: IpAddr) -> Result<IpAddr, pcap::Error> {
+    if !ip_is_ipv6_link_local(remote_ip) {
+        let udp_sock = match remote_ip {
+            IpAddr::V4(_) => std::net::UdpSocket::bind(("0.0.0.0", 0))
+                .map_err(|op| pcap::Error::IoError(op.kind()))?,
+            IpAddr::V6(_) => std::net::UdpSocket::bind(("::", 0))?,
+        };
+        udp_sock.connect((remote_ip, 53))?;
+        Ok(udp_sock.local_addr()?.ip())
+    } else {
+        // need to handle link-local IPs specially because most (all?) OS's have multiple
+        // conflicting fe80::* routes at the same metric, so the above call gets an arbitrary
+        // interface; instead just use the link-local IP of the egress device
+        let egress_device = lookup_egress_device()?;
+        Ok(egress_device
+            .addresses
+            .iter()
+            .find_map(|a| {
+                if ip_is_ipv6_link_local(a.addr) {
+                    Some(a.addr)
+                } else {
+                    None
+                }
+            })
+            .ok_or(pcap::Error::PcapError(
+                "Tried to ping IPv6 LL Gateway but not LL ip on egress!?".to_string(),
+            ))?)
+    }
 }
 
 /**
