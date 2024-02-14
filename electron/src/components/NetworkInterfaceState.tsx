@@ -367,7 +367,7 @@ export const PingGraph: React.FC<PingGraphProps> = (props) => {
       });
     const annotations =
       pingData.size != 0
-        ? {}
+        ? { yaxis: [] }
         : {
             yaxis: [
               {
