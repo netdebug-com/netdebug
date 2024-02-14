@@ -51,6 +51,7 @@
         "@electron-forge/maker-dmg": "^7.2.0",
         "@emotion/react": "^11.11.1",
         "@emotion/styled": "^11.11.0",
+        "@mui/icons-material": "^5.15.10",
         "@mui/material": "^5.14.16",
         "@mui/x-data-grid": "^6.18.2",
         "@oznu/ws-connect": "^2.2.0",
@@ -67,6 +68,7 @@
         "react-router-dom": "^6.17.0",
         "react-use": "^17.4.3",
         "react-use-websocket": "^4.5.0",
+        "timeago-react": "^3.0.6",
         "update-electron-app": "^3.0.0",
         "ws": "^8.16.0"
     }

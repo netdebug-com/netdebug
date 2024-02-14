@@ -187,6 +187,24 @@ export function headerStyleWithWidth(width: number) {
   return { ...headerStyle, width: width, minWidth: width };
 }
 
+// External style sheets are for loser...
+export const headerStyleLight = {
+  // Looks like MUI has a color palette and we can refer to these
+  // colors :-)
+  // https://mui.com/material-ui/customization/palette/
+  color: "primary.dark",
+  fontWeight: "bold",
+};
+
+// Re-use the header style but a width
+// See https://mui.com/system/getting-started/the-sx-prop/#sizing
+// For an explanation of what the width means exactly.
+// But values < 1.0 are translated into percent (0.5 -> 50%)
+// Otherwise the unit is `px`
+export function headerStyleWithWidthLight(width: number) {
+  return { ...headerStyleLight, width: width, minWidth: width };
+}
+
 // build a connection key for displaying in the table
 // This key might not be unique. E.g., two different local IPs could
 // have the same local port and remote pair.
