@@ -1,0 +1,5 @@
+# Needed for various rust tokio internal metrics and 
+# tokio console (https://github.com/tokio-rs/console)
+# See : https://docs.rs/tokio/latest/tokio/index.html#unstable-features
+[build]
+rustflags = ["--cfg", "tokio_unstable"]

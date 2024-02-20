@@ -76,10 +76,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let system_epoch = std::time::Instant::now();
 
+    // Getting tokio RuntimeMetrics only works if we have tokio_unstable defined
+    let metrics = tokio::runtime::Handle::current().metrics();
     // are we really, really running the multi-threaded runtime?
     info!(
-        "Current tokio scheduler flavor is: {:?}",
-        tokio::runtime::Handle::current().runtime_flavor()
+        "Current tokio scheduler flavor is: {:?} with {} workers",
+        tokio::runtime::Handle::current().runtime_flavor(),
+        metrics.num_workers()
     );
     let mut trackers = Trackers::empty();
 
