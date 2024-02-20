@@ -27,7 +27,7 @@ jobs:
         # TODO: add artifacts from the electron build
         run: |
           tar czf  $OUTFILE \
-          ./target/release/desktop \
+          ./target/release/netdebug-desktop \
           ./target/release/webserver \
           ./target/release/router-graph \
           ./scripts \
