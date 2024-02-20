@@ -192,7 +192,7 @@ export const NetworkInterfaceStateComponent: React.FC<
             </Table>
           </TableContainer>
           <Paper>
-            <PingGraph
+            <PingGraphHistogram
               state={props.state}
               ip_selector={IpVersionSelector.BOTH}
             />
@@ -234,6 +234,10 @@ interface PingStats {
   total_probes: number;
 }
 
+interface Coordinate {
+  y: number;
+  x: number;
+}
 /* Does this IP match the version specified ? */
 function matchesSelector(ip: string, ip_selector: IpVersionSelector): boolean {
   if (ip_selector == IpVersionSelector.BOTH) {
@@ -249,7 +253,263 @@ function matchesSelector(ip: string, ip_selector: IpVersionSelector): boolean {
   }
 }
 
-export const PingGraph: React.FC<PingGraphProps> = (props) => {
+interface RttHistogram {
+  rttDataPercents: Array<Coordinate>; // numBucket's percents of RTT's in a given range
+  dropPercent: number;
+  histogramParams: HistogramParams;
+}
+
+interface HistogramParams {
+  bucketSize: number;
+  bucketStart: number;
+  numBuckets: number;
+}
+// Calculate the Histogram parameters including
+// * bucketSize : how big of a range does one bar chart include
+// * bucketStart : what is the start of the first bucket?
+// * numBuckets: how many bars do we have in the chart?
+export function calcHistogramParams(
+  min_ns: number, // in nanoseconds
+  max_ns: number, // in nanoseconds
+  numBuckets: number,
+): HistogramParams {
+  const delta = max_ns - min_ns;
+  if (numBuckets != 100) {
+    throw new Error("Only accepts numBuckets=100 for now");
+  }
+  const scale = Math.floor(Math.log10(delta)) - 1; // how many digits do we have?
+  // floor() -1 is "look at the top 2 most significant digits" if numBuckets is 100
+  // won't work for numbers < 1 but we're dealing with nanoseconds so should be ok
+  const bucketSize = Math.pow(10, scale);
+  // this is the start of the bucket that the 'min' sample would fall into
+  const bucketStart = min_ns - (min_ns % bucketSize);
+  const params = {
+    bucketSize: bucketSize,
+    bucketStart: bucketStart,
+    numBuckets: numBuckets,
+  };
+  // console.log("calcHistogramParams(", min_ns, ", ", max_ns,") = ", params);
+  return params;
+}
+
+// Given a data point and a histogramParams, map this data point to
+// a bucket index
+export function calcBucketIndex(
+  value_ns: number,
+  histogramParams: HistogramParams,
+): number {
+  const offset = value_ns - histogramParams.bucketStart;
+  const index = Math.floor(offset / histogramParams.bucketSize);
+  return index;
+}
+
+export const PingGraphHistogram: React.FC<PingGraphProps> = (props) => {
+  const theme = useTheme();
+  const [value, setValue] = useState(0);
+  const numBuckets = 100;
+
+  // copied from https://mui.com/material-ui/react-tabs/
+  const handleChange = (event: React.SyntheticEvent, newValue: number) => {
+    setValue(newValue);
+  };
+  function a11yProps(index: number) {
+    return {
+      id: `simple-tab-${index}`,
+      "aria-controls": `simple-tabpanel-${index}`,
+    };
+  }
+
+  /* return a map from ip to an Array of histogram coordinates
+   * try to auto-figure out bucket size to look nice
+   */
+  function calcHistogram(
+    state: NetworkInterfaceState,
+  ): Map<string, RttHistogram> {
+    const stats = new Map<string, RttHistogram>();
+    Object.entries(state.gateways_ping).forEach(([gateway_ip, ping_info]) => {
+      // which probes do we have both a valid sent and recv time?
+      const good_replies = ping_info.historical_probes.filter(
+        (probe) => !probe.dropped,
+      );
+      const good_replies_data = good_replies.map((probe) => {
+        return probe.recv_time_utc_ns - probe.sent_time_utc_ns;
+      });
+      if (good_replies_data.length < 3) {
+        // if we got too little valid ping data, just skip this IP
+        return;
+      }
+      good_replies_data.sort((a: number, b: number) => a - b);
+      const min = good_replies_data[0];
+      const max = good_replies_data[good_replies_data.length - 1];
+      const histogramParams = calcHistogramParams(min, max, numBuckets);
+      const histogramData = Array(numBuckets).fill(0);
+      // the startBucketRange is the low value of our first bucket, e.g.,
+      // if min = 33 and bucketSize = 10, startBucketRange should be 30
+      good_replies_data.forEach((rtt_ns) => {
+        const index = calcBucketIndex(rtt_ns, histogramParams);
+        histogramData[index] += 1;
+      });
+      // now walk the histogram data and normalize the counts into percentages
+      const histogramPercents = histogramData
+        // don't plot zero values
+        .filter((count) => count > 0)
+        .map((count, index) => {
+          return {
+            y: (100 * count) / good_replies_data.length,
+            // 1e6 --> convert from ns to ms
+            // WHY IS THIS FORCING TO AN INTEGER AND NOT A FLOAT!?
+            x:
+              (histogramParams.bucketStart +
+                index * histogramParams.bucketSize) /
+              1e6,
+          };
+        });
+      // TODO: this assumes that a missing recv_time is a 'dropped' probe; think about it...
+      const drop_count =
+        ping_info.historical_probes.length - good_replies.length;
+      stats.set(gateway_ip, {
+        rttDataPercents: histogramPercents,
+        dropPercent: (100 * drop_count) / ping_info.historical_probes.length,
+        histogramParams: histogramParams,
+      });
+    });
+    // console.log("calcHistogram() = ", stats);
+    return stats;
+  }
+
+  function getHistogramData(
+    stats: Map<string, RttHistogram>,
+    ip_selector: IpVersionSelector,
+  ): ApexAxisChartSeries {
+    const series = Array.from(stats)
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      .filter(([ip, ping_stats]) => matchesSelector(ip, ip_selector))
+      .map(([ip, ping_stats]) => {
+        return {
+          name: ip,
+          data: ping_stats.rttDataPercents,
+        };
+      });
+    // console.log("getHistogramData(", ip_selector, ")=", series);
+    return series;
+  }
+
+  function getHistogramOptions(
+    stats: Map<string, RttHistogram>,
+    ip_selector: IpVersionSelector,
+  ): ApexOptions {
+    let ip_count = 0;
+    let dropped_sum = 0;
+    Array.from(stats).forEach(([ip, ping_stats]) => {
+      if (matchesSelector(ip, ip_selector)) {
+        ip_count += 1;
+        dropped_sum += ping_stats.dropPercent;
+      }
+    });
+    const dropped = ip_count == 0 ? 100 : dropped_sum / ip_count;
+    return {
+      chart: {
+        type: "line",
+        zoom: {
+          enabled: false,
+        },
+      },
+      xaxis: {
+        labels: {
+          formatter: function (val) {
+            // take the 'string' xlabel and convert to 2 decimals
+            return parseFloat(val).toFixed(2);
+          },
+        },
+        title: {
+          text: "Round-Trip Time (milliseconds)",
+          style: {
+            fontSize: "10px",
+          },
+        },
+      },
+      yaxis: {
+        labels: {
+          formatter: function (val) {
+            // take the 'number' (why diff than xaxis!?) and convert to 1 decimals
+            return val.toFixed(1);
+          },
+        },
+        title: {
+          text: "% of Probes",
+          style: {
+            fontSize: "10px",
+          },
+        },
+      },
+      legend: {
+        // always show the series name, even if there's only one
+        showForSingleSeries: true,
+      },
+      dataLabels: {
+        enabled: false,
+      },
+      stroke: {
+        curve: "smooth",
+        width: 2,
+      },
+      title: {
+        text: "RTT to First Hop Router: " + dropped + "% packet loss",
+        align: "left",
+      },
+      grid: {
+        row: {
+          colors: [theme.palette.background.default, "transparent"], // takes an array which will be repeated on columns
+          opacity: 0.1,
+        },
+      },
+    };
+  }
+
+  const pingStats = calcHistogram(props.state);
+  const graphHeight = 200;
+  return (
+    <Box sx={{ width: "100%" }}>
+      <Box sx={{ borderBottom: 1, borderColor: "divider" }}>
+        <Tabs
+          value={value}
+          onChange={handleChange}
+          aria-label="basic tabs example"
+        >
+          <Tab label="IPv4" {...a11yProps(0)} />
+          <Tab label="IPv6" {...a11yProps(1)} />
+          <Tab label="Both" {...a11yProps(2)} />
+        </Tabs>
+      </Box>
+      <CustomTabPanel value={value} index={0}>
+        <ReactApexChart
+          options={getHistogramOptions(pingStats, IpVersionSelector.IPV4_ONLY)}
+          series={getHistogramData(pingStats, IpVersionSelector.IPV4_ONLY)}
+          type="line"
+          height={graphHeight}
+        />
+      </CustomTabPanel>
+      <CustomTabPanel value={value} index={1}>
+        <ReactApexChart
+          options={getHistogramOptions(pingStats, IpVersionSelector.IPV6_ONLY)}
+          series={getHistogramData(pingStats, IpVersionSelector.IPV6_ONLY)}
+          type="line"
+          height={graphHeight}
+        />
+      </CustomTabPanel>
+      <CustomTabPanel value={value} index={2}>
+        <ReactApexChart
+          options={getHistogramOptions(pingStats, IpVersionSelector.BOTH)}
+          series={getHistogramData(pingStats, IpVersionSelector.BOTH)}
+          type="line"
+          height={graphHeight}
+        />
+      </CustomTabPanel>
+    </Box>
+  );
+};
+
+export const PingGraphBoxPlot: React.FC<PingGraphProps> = (props) => {
   const theme = useTheme();
   const [value, setValue] = useState(0);
 
@@ -325,7 +585,7 @@ export const PingGraph: React.FC<PingGraphProps> = (props) => {
           ping_stats.median > ping_stats.q3 ||
           ping_stats.q3 > ping_stats.max
         ) {
-          console.error("Busting ping stats: ", ping_stats);
+          console.error("Busted ping stats: ", ping_stats);
         }
         return {
           x: gateway_ip,
