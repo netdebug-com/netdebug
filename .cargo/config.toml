@@ -1,0 +1,7 @@
+# Enable tokio_unstable as compile time flag
+# Needed for tokio Metrics and 
+# tokio console support (https://github.com/tokio-rs/console)
+#
+# See https://docs.rs/tokio/latest/tokio/index.html#unstable-features for details
+[build]
+rustflags = ["--cfg", "tokio_unstable"]
