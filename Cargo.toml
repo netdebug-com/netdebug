@@ -20,6 +20,7 @@ resolver = "2"
 [workspace.dependencies]
 approx = { version = "0.5.1" }
 axum = { version = "0.7" }
+console-subscriber = "*"
 clap = { version = "4", features = ["derive"] }
 derive-getters = "0.3"
 indexmap = { version = "2", features = ["serde"] }
