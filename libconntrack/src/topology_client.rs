@@ -16,8 +16,11 @@ use libconntrack_wasm::topology_server_messages::{
     CongestionSummary, DesktopToTopologyServer, TopologyServerToDesktop,
 };
 use libconntrack_wasm::ConnectionMeasurements;
+#[cfg(not(test))]
 use log::{debug, info, warn};
-// use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(test)]
+use std::{println as debug, println as info, println as warn}; // Workaround to use prinltn! for logs.
+                                                               // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio_tungstenite::tungstenite::handshake::client::generate_key;
@@ -144,99 +147,105 @@ impl TopologyServerConnection {
         tx_clone
     }
 
+    /// Loop indefinitely over our inputs from the desktop and the
+    /// remote server
     async fn rx_loop(mut self) {
-        // connect ala https://github.com/snapview/tokio-tungstenite/blob/master/examples/client.rs
-
         loop {
-            // Intentionally panic here if we got a bad URL
-            let url =
-                url::Url::parse(&self.url).unwrap_or_else(|_| panic!("Bad url! {}", &self.url));
-            // need to generate a custom request because we need to set the User-Agent for our webserver
-            let req = Request::builder()
-                .method("GET")
-                .header("Host", url.authority())
-                .header("User-Agent", "NetDebug Desktop version x.y.z")
-                .header("Connection", "Upgrade")
-                .header("Upgrade", "websocket")
-                .header("Sec-WebSocket-Version", "13")
-                .header("Sec-WebSocket-Key", generate_key())
-                .uri(self.url.clone())
-                .body(())
-                .unwrap();
-            let (ws_write, mut ws_read) = match connect_async(req).await {
-                Ok((ws_stream, response)) => {
-                    info!(
-                        "Connected to the topology server {} :: {:?}",
-                        self.url, response
-                    );
-                    self.retry_time = Duration::from_millis(DEFAULT_FIRST_RETRY_TIME_MS);
-                    ws_stream.split()
-                }
-                // From https://docs.rs/tungstenite/latest/tungstenite/error/enum.Error.html
-                // none of the error types we can get back from this connection attempt are fatal, so
-                // always retry.
-                Err(e) => {
-                    self.retry_time = std::cmp::min(self.retry_time * 2, self.max_retry_time); // capped exponential backoff
-                    warn!(
-                        "Failed to connect to TopologyServer {} : retrying in {:?} :: {}",
-                        self.url, self.retry_time, e
-                    );
-                    self.retry_stat.bump();
-                    tokio::time::sleep(self.retry_time).await;
-                    continue;
-                }
-            };
-            let ws_tx = self.spawn_ws_writer(ws_write).await;
-            // respawn this with each new topology server connection
-            self.spawn_periodic_write_counters_to_remote(
-                ws_tx.clone(),
-                tokio::time::Duration::from_millis(COUNTER_REMOTE_SYNC_INTERVAL_MS),
-            )
-            .await;
-            spawn_periodic_ws_ping(
-                ws_tx.clone(),
-                tokio::time::Duration::from_millis(WS_KEEPALIVE_INTERVAL_MS),
-            );
-            // send an initial hello to start the connection
-            if let Err(e) = ws_tx
-                .send(PerfMsgCheck::new(DesktopToTopologyServer::Hello))
-                .await
-            {
-                warn!("Failed to send hello to TopologyServer: {}", e);
-                continue;
-            }
-            let allowed_time_between_pongs =
-                tokio::time::Duration::from_millis(2 * WS_KEEPALIVE_INTERVAL_MS);
-            // now wait for internal users to send traffic to us as well as the topology server to send us messages
-            loop {
-                tokio::select! {
-                    ws_msg = ws_read.next() => {
-                        match ws_msg {
-                            Some(Ok(ws_msg)) => self.handle_ws_msg(ws_msg).await,
-                            Some(Err(e)) => {
-                                warn!("Got an error from the TopologyServer: reconnecting {}", e);
-                                break;
-                            },
-                            None => {
-                                warn!("Got None back from TopologyServer (connection dead?): reconnecting");
-                                break;
-                            }
-                        }
-                    },
-                    desktop_msg = self.rx.recv() => match desktop_msg {
-                        Some(desktop_msg) => self.handle_desktop_msg(desktop_msg, &ws_tx).await,
-                        None => warn!("Got None back from TopologyServerConnection rx!?"),
-                    },
-                    _ = tokio::time::sleep(allowed_time_between_pongs) => {
-                        // We have not received any message in `allowed_time_between_pongs1.
-                        // Assume connection to be dead.
-                        warn!("Timed out waiting for message from websocket. Reconnecting");
-                        break;
-                    },
-                }
-            }
-            self.server_hello = None;
+            self.rx_loop_one_connection().await;
         }
+    }
+
+    /// Connect to the topology server just one time and return when it fails/ends
+    /// Split out from rx_loop() to simplify testing
+    async fn rx_loop_one_connection(&mut self) {
+        // connect ala https://github.com/snapview/tokio-tungstenite/blob/master/examples/client.rs
+        // Intentionally panic here if we got a bad URL
+        let url = url::Url::parse(&self.url).unwrap_or_else(|_| panic!("Bad url! {}", &self.url));
+        // need to generate a custom request because we need to set the User-Agent for our webserver
+        let req = Request::builder()
+            .method("GET")
+            .header("Host", url.authority())
+            .header("User-Agent", "NetDebug Desktop version x.y.z")
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", generate_key())
+            .uri(self.url.clone())
+            .body(())
+            .unwrap();
+        let (ws_write, mut ws_read) = match connect_async(req).await {
+            Ok((ws_stream, response)) => {
+                info!(
+                    "Connected to the topology server {} :: {:?}",
+                    self.url, response
+                );
+                self.retry_time = Duration::from_millis(DEFAULT_FIRST_RETRY_TIME_MS);
+                ws_stream.split()
+            }
+            // From https://docs.rs/tungstenite/latest/tungstenite/error/enum.Error.html
+            // none of the error types we can get back from this connection attempt are fatal, so
+            // always retry.
+            Err(e) => {
+                self.retry_time = std::cmp::min(self.retry_time * 2, self.max_retry_time); // capped exponential backoff
+                warn!(
+                    "Failed to connect to TopologyServer {} : retrying in {:?} :: {}",
+                    self.url, self.retry_time, e
+                );
+                self.retry_stat.bump();
+                tokio::time::sleep(self.retry_time).await;
+                return;
+            }
+        };
+        let ws_tx = self.spawn_ws_writer(ws_write).await;
+        // respawn this with each new topology server connection
+        self.spawn_periodic_write_counters_to_remote(
+            ws_tx.clone(),
+            tokio::time::Duration::from_millis(COUNTER_REMOTE_SYNC_INTERVAL_MS),
+        )
+        .await;
+        spawn_periodic_ws_ping(
+            ws_tx.clone(),
+            tokio::time::Duration::from_millis(WS_KEEPALIVE_INTERVAL_MS),
+        );
+        // send an initial hello to start the connection
+        if let Err(e) = ws_tx
+            .send(PerfMsgCheck::new(DesktopToTopologyServer::Hello))
+            .await
+        {
+            warn!("Failed to send hello to TopologyServer: {}", e);
+            return;
+        }
+        let allowed_time_between_pongs =
+            tokio::time::Duration::from_millis(2 * WS_KEEPALIVE_INTERVAL_MS);
+        // now wait for internal users to send traffic to us as well as the topology server to send us messages
+        loop {
+            tokio::select! {
+                ws_msg = ws_read.next() => {
+                    match ws_msg {
+                        Some(Ok(ws_msg)) => self.handle_ws_msg(ws_msg).await,
+                        Some(Err(e)) => {
+                            warn!("Got an error from the TopologyServer: reconnecting {}", e);
+                            break;
+                        },
+                        None => {
+                            warn!("Got None back from TopologyServer (connection dead?): reconnecting");
+                            break;
+                        }
+                    }
+                },
+                desktop_msg = self.rx.recv() => match desktop_msg {
+                    Some(desktop_msg) => self.handle_desktop_msg(desktop_msg, &ws_tx).await,
+                    None => warn!("Got None back from TopologyServerConnection rx!?"),
+                },
+                _ = tokio::time::sleep(allowed_time_between_pongs) => {
+                    // We have not received any message in `allowed_time_between_pongs1.
+                    // Assume connection to be dead.
+                    warn!("Timed out waiting for message from websocket. Reconnecting");
+                    break;
+                },
+            }
+        }
+        self.server_hello = None;
     }
 
     pub async fn handle_ws_msg(&mut self, ws_msg: Message) {
@@ -477,7 +486,17 @@ fn spawn_periodic_ws_ping(
 
 #[cfg(test)]
 mod test {
+    use axum::{
+        extract::ws::{
+            // Message as AxumMessage,
+            WebSocket,
+            WebSocketUpgrade,
+        },
+        routing::get,
+        Router,
+    };
     use common_wasm::timeseries_stats::SuperRegistry;
+    use std::future::ready;
 
     use super::*;
     use std::{str::FromStr, time::Instant};
@@ -541,5 +560,142 @@ mod test {
 
         // this passed on first try!! add a panic() to make sure the test ran!?
         // panic!("If at first you do succeed, try not to look surprised");
+    }
+
+    #[tokio::test]
+    async fn test_websocket_timeout_reconnect_nice_close() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ephemeral_port = listener.local_addr().unwrap().port();
+        println!("listening on {}", ephemeral_port);
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/test",
+                    get(|ws: WebSocketUpgrade| {
+                        ready(ws.on_upgrade(test_ws_handler_nice_close_on_ping))
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        println!("listening on {}", ephemeral_port);
+        let url = format!("ws://127.0.0.1:{}/test", ephemeral_port);
+        let (tx, rx) = channel::<PerfMsgCheck<TopologyServerMessage>>(10);
+        let super_counters_registry = SuperRegistry::new(Instant::now()).registries(); // for testing
+        let mut topology_client = TopologyServerConnection::new(
+            url,
+            tx,
+            rx,
+            1024,
+            Duration::from_millis(10),
+            super_counters_registry,
+            ExportedStatRegistry::new("topo_server_conn", Instant::now()),
+        );
+        // make sure we timeout in under 2 seconds
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            topology_client.rx_loop_one_connection(),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_websocket_timeout_reconnect_silent_close() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ephemeral_port = listener.local_addr().unwrap().port();
+        println!("listening on {}", ephemeral_port);
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/test",
+                    get(|ws: WebSocketUpgrade| ready(ws.on_upgrade(test_ws_handler_silent_close))),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        println!("listening on {}", ephemeral_port);
+        let url = format!("ws://127.0.0.1:{}/test", ephemeral_port);
+        let (tx, rx) = channel::<PerfMsgCheck<TopologyServerMessage>>(10);
+        let super_counters_registry = SuperRegistry::new(Instant::now()).registries(); // for testing
+        let mut topology_client = TopologyServerConnection::new(
+            url,
+            tx,
+            rx,
+            1024,
+            Duration::from_millis(10),
+            super_counters_registry,
+            ExportedStatRegistry::new("topo_server_conn", Instant::now()),
+        );
+        // make sure we timeout in under 2 seconds
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            topology_client.rx_loop_one_connection(),
+        )
+        .await
+        .unwrap();
+    }
+
+    /* SO close to working... just give up and copy the code...
+    async fn spawn_test_websocket_server<C, Fut>(handler: C) -> u16
+    where
+        C: FnOnce(WebSocket) -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ephemeral_port = listener.local_addr().unwrap().port();
+        println!("listening on {}", ephemeral_port);
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/test",
+                    get(|ws: WebSocketUpgrade| {
+                        ready(ws.on_upgrade(test_ws_handler_nice_close_on_ping))
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        ephemeral_port
+    }
+    */
+
+    // Used for testing; don't send Pong's  if we get a Ping
+    async fn test_ws_handler_nice_close_on_ping(mut socket: WebSocket) {
+        while let Some(Ok(msg)) = socket.recv().await {
+            use axum::extract::ws::Message::*;
+            match msg {
+                Ping(_payload) => {
+                    // NOTE: if we don't handle explicitly pings like this, the underlying library STILL sends
+                    // PONG messages.. which is annoying and complicates testing...
+                    info!("Got ping request, closing...");
+                    break;
+                }
+                _msg => println!("Ignoring msg {:?}", _msg),
+            }
+        }
+        socket.close().await.unwrap();
+    }
+    // Used for testing; do send Pong's  if we get a Ping
+    async fn test_ws_handler_silent_close(mut socket: WebSocket) {
+        while let Some(Ok(msg)) = socket.recv().await {
+            use axum::extract::ws::Message::*;
+            match msg {
+                Ping(_payload) => {
+                    // NOTE: if we don't handle explicitly pings like this, the underlying library STILL sends
+                    // PONG messages.. which is annoying and complicates testing...
+                    info!("Got ping request, closing...");
+                    break;
+                }
+                _msg => println!("Ignoring msg {:?}", _msg),
+            }
+        }
+        // silently close
     }
 }
