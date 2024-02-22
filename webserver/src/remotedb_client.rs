@@ -46,7 +46,6 @@ const COUNTERS_DB_NAME: &str = "desktop_counters";
 const LOGS_DB_NAME: &str = "desktop_logs";
 const INITIAL_RETRY_TIME_MS: u64 = 100;
 // Linux root cert db is /etc/ssl/certs/ca-certificates.crt, at least on Ubuntu
-const LINUX_ROOT_CERT_FILE: &str = "/etc/ssl/certs/ca-certificates.crt";
 
 pub type RemoteDBClientSender = tokio::sync::mpsc::Sender<PerfMsgCheck<RemoteDBClientMessages>>;
 pub type RemoteDBClientReceiver = tokio::sync::mpsc::Receiver<PerfMsgCheck<RemoteDBClientMessages>>;
@@ -114,16 +113,7 @@ impl RemoteDBClient {
     async fn rx_loop(mut self) -> Result<(), Box<dyn Error>> {
         loop {
             info!("Trying to connect to database server: {}", self.url_no_auth);
-            let cert = std::fs::read(LINUX_ROOT_CERT_FILE).map_err(|e| {
-                format!(
-                    "Couldn't find Tls Root Cert file {} :: {}",
-                    LINUX_ROOT_CERT_FILE, e
-                )
-            })?;
-            let cert = native_tls::Certificate::from_pem(&cert)?;
-            let connector = native_tls::TlsConnector::builder()
-                .add_root_certificate(cert)
-                .build()?;
+            let connector = native_tls::TlsConnector::new()?;
             let connector = postgres_native_tls::MakeTlsConnector::new(connector);
 
             let (client, connection) = match tokio_postgres::connect(&self.url, connector).await {
