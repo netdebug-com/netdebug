@@ -241,18 +241,19 @@ impl Connection {
                     use etherparse::Icmpv4Type::*;
                     match icmp4.icmp_type {
                         Unknown { .. }
-                        | DestinationUnreachable(_)
                         | Redirect(_)
                         | TimeExceeded(_)
                         | ParameterProblem(_)
                         | TimestampRequest(_)
                         | TimestampReply(_) => {
+                            // TODO: should we really warn here? Esp. if the machien is running VMs these could be
+                            // legitimate packets
                             warn!(
                                 "Ignoring weird ICMP4 from our selves but for this connection: {} : {:?}",
                                 key, packet
                             );
                         }
-                        EchoRequest(_) | EchoReply(_) => (), // do nothing for echo request/reply
+                        DestinationUnreachable(_) | EchoRequest(_) | EchoReply(_) => (), // do nothing for echo request/reply
                     }
                 } else {
                     self.update_icmp4_remote(&packet, icmp4);
@@ -266,7 +267,9 @@ impl Connection {
                             if type_u8 == TYPE_NEIGHBOR_ADVERTISEMENT
                                 || type_u8 == TYPE_NEIGHBOR_SOLICITATION => {}
 
-                        EchoRequest(_) | EchoReply(_) => {} // we expect these; don't warn
+                        DestinationUnreachable(_) | EchoRequest(_) | EchoReply(_) => {} // we expect these; don't warn
+                        // TODO: should we really warn here? Esp. if the machine is running VMs these could be
+                        // legitimate packets
                         _ => warn!(
                             "Ignoring ICMP6 from our selves but for this connection: {} : {:?}",
                             key, packet
