@@ -18,6 +18,7 @@ use libconntrack_wasm::{
     ExportedNeighborState,
 };
 use linked_hash_map::LinkedHashMap;
+use log::info;
 #[cfg(not(test))]
 use log::{debug, warn};
 
@@ -387,6 +388,10 @@ impl<'a> ConnectionTracker<'a> {
         unlimited_probes: bool,
     ) -> ConnectionTracker<'a> {
         let (tx, rx) = tokio::sync::mpsc::channel(max_queue_size);
+        info!(
+            "Instantiating ConnectionTracker with local addresses: {:?}",
+            local_addrs
+        );
         ConnectionTracker {
             connections: EvictingHashMap::new(
                 // we are not actually using the EvictingHashmap's eviction. We manually handle evictions in

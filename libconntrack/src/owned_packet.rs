@@ -388,25 +388,17 @@ impl OwnedParsedPacket {
                 Err(ConnectionKeyError::IcmpInnerPacketError)
             }
             Ok((owned, _full_packet)) => {
+                use ConnectionKeyError::*;
                 // ignore if we parsed the full packet - doesn't matter for key
                 match owned.to_connection_key(local_addrs) {
-                    Ok((key, _src_is_local)) => {
-                        // TODO: I can't convince myself there isn't a bug
-                        // here if the src actually sources an ICMP message
-                        // rather than just receives it.. maybe add a test?
-                        // For now, just hard code the common case where an
-                        // ICMP reply seen at the src should be either from
-                        // the remote or for a connection we're not tracking
-                        // e.g., like a locally running `ping`
-                        Ok((key, false))
-                    }
-                    Err(_) => {
-                        warn!(
-                            "Failed to parse a key out of an embedded ICMP pkt: {:?}",
-                            self
-                        );
-                        Err(ConnectionKeyError::IcmpInnerPacketError)
-                    }
+                    // Need to invert src_is_local, since the src of the inner packet is the
+                    // destination of the outer ICMP packet
+                    Ok((key, src_is_local)) => Ok((key, !src_is_local)),
+                    Err(NoLocalAddr) => Err(NoLocalAddr), // Could happen if we e.g., have VMs running
+                    Err(IgnoredPacket) => Err(IcmpInnerPacketError),
+                    Err(IcmpInnerPacketError) => Err(IcmpInnerPacketError),
+                    Err(Arp) => Err(IcmpInnerPacketError), // really can't happen
+                    Err(NdpNeighbor) => Err(IcmpInnerPacketError), // don't think this can happen
                 }
             }
         }
