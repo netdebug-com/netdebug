@@ -22,7 +22,8 @@ use log::{debug, info, warn};
 use std::{println as debug, println as info, println as warn}; // Workaround to use prinltn! for logs.
                                                                // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{channel, Receiver, Sender, WeakSender};
+use tokio_tungstenite::tungstenite::error::Error as TungsteniteError;
 use tokio_tungstenite::tungstenite::handshake::client::generate_key;
 use tokio_tungstenite::tungstenite::http::Request;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
@@ -77,6 +78,8 @@ pub struct TopologyServerConnection {
     server2desktop_msgs_stat: StatHandle,
     /// Maintain a pointer to the whole counters registry for remote export
     super_counters_registries: SharedExportedStatRegistries,
+    /// Send a keepalive (ping) to the WS sender periodically
+    ws_keepalive_interval: tokio::time::Duration,
 }
 
 impl TopologyServerConnection {
@@ -120,6 +123,7 @@ impl TopologyServerConnection {
                 vec![StatType::SUM, StatType::COUNT, StatType::RATE],
             ),
             super_counters_registries: super_counters_registry,
+            ws_keepalive_interval: tokio::time::Duration::from_millis(WS_KEEPALIVE_INTERVAL_MS),
         }
     }
 
@@ -196,16 +200,14 @@ impl TopologyServerConnection {
                 return;
             }
         };
+        // the writer task will exit once the writer is closed
         let ws_tx = self.spawn_ws_writer(ws_write).await;
         // respawn this with each new topology server connection
         self.spawn_periodic_write_counters_to_remote(
-            ws_tx.clone(),
+            // Only pass a WeakSender. This way the periodic writer task will exit once we drop `ws_tx`
+            // in this function.
+            ws_tx.clone().downgrade(),
             tokio::time::Duration::from_millis(COUNTER_REMOTE_SYNC_INTERVAL_MS),
-        )
-        .await;
-        spawn_periodic_ws_ping(
-            ws_tx.clone(),
-            tokio::time::Duration::from_millis(WS_KEEPALIVE_INTERVAL_MS),
         );
         // send an initial hello to start the connection
         if let Err(e) = ws_tx
@@ -215,37 +217,54 @@ impl TopologyServerConnection {
             warn!("Failed to send hello to TopologyServer: {}", e);
             return;
         }
-        let allowed_time_between_pongs =
-            tokio::time::Duration::from_millis(2 * WS_KEEPALIVE_INTERVAL_MS);
+        let allowed_time_between_pongs = self.ws_keepalive_interval * 2;
+        let mut last_ws_received_time = tokio::time::Instant::now();
+        let mut keepalive_ticks = tokio::time::interval(self.ws_keepalive_interval);
+        // if we are missing ticks (i.e., sending ping messages) skip over the missed ones.
+        keepalive_ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // now wait for internal users to send traffic to us as well as the topology server to send us messages
         loop {
             tokio::select! {
-                ws_msg = ws_read.next() => {
-                    match ws_msg {
-                        Some(Ok(ws_msg)) => self.handle_ws_msg(ws_msg).await,
-                        Some(Err(e)) => {
-                            warn!("Got an error from the TopologyServer: reconnecting {}", e);
-                            break;
-                        },
-                        None => {
-                            warn!("Got None back from TopologyServer (connection dead?): reconnecting");
-                            break;
-                        }
-                    }
-                },
+                wrapped_ws_msg = ws_read.next() => {
+                    if !self.handle_wrapped_ws_msg(wrapped_ws_msg).await {
+                        break;
+                    };
+                    last_ws_received_time = tokio::time::Instant::now();
+                }
                 desktop_msg = self.rx.recv() => match desktop_msg {
                     Some(desktop_msg) => self.handle_desktop_msg(desktop_msg, &ws_tx).await,
                     None => warn!("Got None back from TopologyServerConnection rx!?"),
                 },
-                _ = tokio::time::sleep(allowed_time_between_pongs) => {
-                    // We have not received any message in `allowed_time_between_pongs1.
-                    // Assume connection to be dead.
-                    warn!("Timed out waiting for message from websocket. Reconnecting");
-                    break;
-                },
+                _ = keepalive_ticks.tick() => {
+                    let _ = ws_tx.try_send(PerfMsgCheck::new(DesktopToTopologyServer::Ping));
+                    if last_ws_received_time.elapsed() > allowed_time_between_pongs {
+                        warn!("Timed out waiting for keepalive message from websocket. Reconnecting");
+                        break;
+                    }
+                }
             }
         }
         self.server_hello = None;
+    }
+
+    // Helper function to deal with the convoluted type we get when trying to read from the
+    // websocket reader with a timeout.
+    async fn handle_wrapped_ws_msg(
+        &mut self,
+        wrapped_ws_msg: Option<Result<Message, TungsteniteError>>,
+    ) -> bool {
+        match wrapped_ws_msg {
+            Some(Ok(ws_msg)) => self.handle_ws_msg(ws_msg).await,
+            Some(Err(e)) => {
+                warn!("Got an error from the TopologyServer: reconnecting {}", e);
+                return false;
+            }
+            None => {
+                warn!("Got None back from TopologyServer (connection dead?): reconnecting");
+                return false;
+            }
+        }
+        true
     }
 
     pub async fn handle_ws_msg(&mut self, ws_msg: Message) {
@@ -425,9 +444,9 @@ impl TopologyServerConnection {
         }
     }
 
-    async fn spawn_periodic_write_counters_to_remote(
+    fn spawn_periodic_write_counters_to_remote(
         &self,
-        ws_tx: Sender<PerfMsgCheck<DesktopToTopologyServer>>,
+        ws_tx: WeakSender<PerfMsgCheck<DesktopToTopologyServer>>,
         interval: tokio::time::Duration,
     ) {
         let super_counter_registery = self.super_counters_registries.clone();
@@ -442,46 +461,29 @@ impl TopologyServerConnection {
                     lock.update_time();
                     lock.append_counters(&mut counters);
                 }
-                // don't use send_or_log!() macro here b/c we want to break on error
-                if let Err(e) = ws_tx
-                    .send(PerfMsgCheck::new(DesktopToTopologyServer::PushCounters {
-                        timestamp: Utc::now(),
-                        counters,
-                        os: std::env::consts::OS.to_string(),
-                        version: get_git_hash_version(),
-                        client_id: Default::default(),
-                    }))
-                    .await
-                {
-                    warn!(
-                        "Error in sending periodic counters to topology server: exiting task {}",
-                        e
-                    );
+                // need to (temporarily) upgrade to a full Sender so we can actually send.
+                if let Some(ws_tx) = ws_tx.upgrade() {
+                    // don't use send_or_log!() macro here b/c we want to break on error
+                    if let Err(e) = ws_tx
+                        .send(PerfMsgCheck::new(DesktopToTopologyServer::PushCounters {
+                            timestamp: Utc::now(),
+                            counters,
+                            os: std::env::consts::OS.to_string(),
+                            version: get_git_hash_version(),
+                            client_id: Default::default(),
+                        }))
+                        .await
+                    {
+                        info!( "Error in sending periodic counters to topology server: exiting periodic counter writer task {}", e);
+                        break;
+                    }
+                } else {
+                    debug!("Webscoket to topology server apparently closed. Exiting periodic counter writer task");
                     break;
                 }
             }
         });
     }
-}
-
-fn spawn_periodic_ws_ping(
-    ws_tx: Sender<PerfMsgCheck<DesktopToTopologyServer>>,
-    interval: tokio::time::Duration,
-) {
-    tokio::spawn(async move {
-        loop {
-            // use 'tokio::time::sleep' instead of 'tokio::time::interval'
-            // because we don't want multiple to run in parallel if this backsup
-            tokio::time::sleep(interval).await;
-            if ws_tx
-                .send(PerfMsgCheck::new(DesktopToTopologyServer::Ping))
-                .await
-                .is_err()
-            {
-                break;
-            }
-        }
-    });
 }
 
 #[cfg(test)]
