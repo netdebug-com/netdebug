@@ -32,3 +32,20 @@ in React and many of the GUI <--> webserver interactions will need to be public 
 
 NOTE: we could have the admins instead generate a per-device signed key, but I think distributing a unique file to each device will be too much work.  I think clicking through (likely in bulk) through the admin console to approve devices is likely easier.  Yes, there's a chance that someone could steal the company pub key and try to get their device added to the list of devices in the company's view, but that seems of dubious value except perhaps DoS.
 
+
+
+# Single-Sign On / OAuth Magic
+
+We use Clerk.com for authentication.  They handle a lot of the backend magic for us ... and it's a lot.
+
+For Google, I had to (following directions at https://clerk.com/docs/authentication/social-connections/google):
+1. Create an OAuth consent form (TODO: still need to "Verify" our App -wtf is that?)
+2. Create OAuth token
+3. Register our domains
+4. Create a callback to https://clerk.netdebug.com 
+5. the DNS to point this back to Clerk's servers (frontend-api.clerk.services) 
+    and four more cnames for clerk!
+6. Have Clerk issue an SSL cert for clerk.netdebug.com (after DNS has propagated)
+7. Have Clerk test the email in the support listed in the OAuth portal 
+
+TODO: repeat the above steps for each auth provider we want to use (with what ever variants they want)
