@@ -12,3 +12,4 @@ target
 **/.webpack
 **/netdebug_types.ts
 electron/out
+**/dist
