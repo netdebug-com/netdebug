@@ -34,8 +34,20 @@ pub async fn make_webserver_http_routes(
         make_webclient_ws_route(&context).with(warp_log(|i| custom_logger1("websocket", i)));
     let desktop_ws =
         make_desktop_ws_route(&context).with(warp_log(|i| custom_logger1("desktop_ws", i)));
-    let static_path = warp::path("static")
-        .and(warp::fs::dir(format!("{}/static", html_root)))
+    let web_console = warp::path("console")
+        .and(warp::fs::dir(
+            // HACK! Assume the webui directory is always relative to the HTML one
+            format!("{}/../netdebug_webui/dist", html_root),
+        ))
+        .with(warp_log(|i| custom_logger1("console", i)));
+    let web_assets = warp::path("assets")
+        .and(warp::fs::dir(
+            // HACK! Assume the webui directory is always relative to the HTML one
+            format!("{}/../netdebug_webui/dist/assets", html_root),
+        ))
+        .with(warp_log(|i| custom_logger1("console", i)));
+    let static_path = warp::path("webtest_static")
+        .and(warp::fs::dir(format!("{}/webtest_static", html_root)))
         .with(warp_log(|i| custom_logger1("static", i)));
 
     // can only access if there's an auth cookie
@@ -53,6 +65,8 @@ pub async fn make_webserver_http_routes(
 
     webtest
         .or(webtest_no_auth)
+        .or(web_console)
+        .or(web_assets)
         .or(desktop_ws)
         .or(webclient_ws)
         .or(counters)
