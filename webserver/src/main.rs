@@ -1,9 +1,12 @@
-use libwebserver::context::{Args, WebServerContext};
-use std::error::Error;
+use axum_server::tls_rustls::RustlsConfig;
+use libwebserver::{
+    context::{Args, WebServerContext},
+    http_routes::setup_axum_http_routes,
+};
 use std::sync::Arc;
+use std::{error::Error, net::SocketAddr};
 
 use clap::Parser;
-use libwebserver::http_routes::make_webserver_http_routes;
 use log::{info, warn};
 use tokio::sync::RwLock;
 
@@ -53,7 +56,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .parse()?;
     let listen_addr = std::net::SocketAddr::new(ip, args.listen_port);
 
-    let server = warp::serve(make_webserver_http_routes(context).await);
     let run_encrypted = if args.production {
         if !args.force_unencrypted {
             info!("Running with TLS/Encypted mode");
@@ -65,15 +67,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         false // dev mode is ok to be unencrypted
     };
+
+    // info_make_service_with_connect_info is needed so that we can extract the remote
+    // socket addr
+    let routes = setup_axum_http_routes(context)
+        .await
+        .into_make_service_with_connect_info::<SocketAddr>();
     if run_encrypted {
-        server
-            .tls()
-            .cert_path(args.tls_cert)
-            .key_path(args.tls_key)
-            .run(listen_addr)
+        let tls_config = RustlsConfig::from_pem_file(args.tls_cert, args.tls_key)
             .await
+            .expect("Error reading SSL cert and/or key");
+        axum_server::bind_rustls(listen_addr, tls_config)
+            .serve(routes)
+            .await
+            .unwrap();
     } else {
-        server.run(listen_addr).await;
+        axum_server::bind(listen_addr).serve(routes).await.unwrap();
     }
     Ok(())
 }

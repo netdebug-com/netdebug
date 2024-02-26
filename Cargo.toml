@@ -20,9 +20,12 @@ resolver = "2"
 [workspace.dependencies]
 approx = { version = "0.5.1" }
 axum = { version = "0.7" }
+axum-extra = { version = "0.9" }
+axum-server = { version = "0.6" }
 console-subscriber = "*"
 clap = { version = "4", features = ["derive"] }
 derive-getters = "0.3"
+headers = "0.4"
 indexmap = { version = "2", features = ["serde"] }
 linked-hash-map = "0.5.6"
 # Use our private fork from main until #42 is merged
@@ -32,4 +35,6 @@ serde = "1"
 thiserror = "1"
 typescript-type-def = { git = "https://github.com/gregor-netdebug/rust-typescript-type-def", branch = "ipaddr-support" }
 # NOTE: tokio_unstable is a compile-time flag, not a feature
-tokio = { version = "*", features = ["full"]}
+tokio = { version = "*", features = ["full"] }
+tower-http = { version = "0.5.1", features = ["cors", "trace"] }
+tracing = "0.1"

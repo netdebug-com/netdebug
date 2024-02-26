@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 
+use axum::extract::ws::{self, WebSocket};
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
 use libconntrack::{
     send_or_log_async,
@@ -11,7 +12,6 @@ use libconntrack_wasm::topology_server_messages::{
 };
 use log::{debug, info, warn};
 use tokio::sync::mpsc::{channel, Sender};
-use warp::filters::ws::{self, Message, WebSocket};
 
 use crate::{
     context::Context,
@@ -20,12 +20,11 @@ use crate::{
 
 const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 4096;
 pub async fn handle_desktop_websocket(
+    websocket: WebSocket,
     context: Context,
     user_agent: String,
-    websocket: warp::ws::WebSocket,
-    addr: Option<SocketAddr>,
+    addr: SocketAddr,
 ) {
-    let addr = addr.expect("Missing connection!?");
     info!("DesktopWebsocket connection from {}", addr);
     let (ws_tx, mut ws_rx) = websocket.split();
     let ws_tx = spawn_websocket_writer(ws_tx, DEFAULT_CHANNEL_BUFFER_SIZE, addr.to_string()).await;
@@ -41,24 +40,13 @@ pub async fn handle_desktop_websocket(
      */
     while let Some(ws_msg_result) = ws_rx.next().await {
         match ws_msg_result {
-            Ok(ws_msg) => {
-                if ws_msg.is_ping() {
-                    // warp handles pong responses internally.
-                    continue;
-                }
-                let json_msg = match ws_msg.to_str() {
-                    Ok(text) => text,
-                    Err(_) => {
-                        warn!("Got non-text message from websocket!? {:?}", ws_msg);
-                        break;
-                    }
-                };
-                match serde_json::from_str(json_msg) {
-                    Ok(msg) => {
+            Ok(ws_msg) => match ws_msg {
+                ws::Message::Text(text) => match serde_json::from_str(&text) {
+                    Ok(desktop_to_topo_msg) => {
                         handle_desktop_message(
                             &topology_server,
                             &remotedb_client,
-                            msg,
+                            desktop_to_topo_msg,
                             &ws_tx,
                             &user_agent,
                             &addr,
@@ -66,10 +54,17 @@ pub async fn handle_desktop_websocket(
                         .await;
                     }
                     Err(e) => {
-                        warn!("Failed to parse json message {}", e);
+                        warn!("Cannot parse text message from websocket. Error: {}", e);
+                        break;
                     }
+                },
+                ws::Message::Binary(_) => {
+                    warn!("Got non-text message from websocket!? {:?}", ws_msg);
                 }
-            }
+                ws::Message::Ping(_) | ws::Message::Pong(_) | ws::Message::Close(_) => {
+                    // ignore
+                }
+            },
             Err(e) => warn!("Error processing connection {} :: {}", e, addr),
         }
     }
@@ -259,7 +254,7 @@ async fn handle_hello(
  * messages to it via the standard tokio::sync::mpsc::channel method.
  */
 pub async fn spawn_websocket_writer(
-    mut ws_tx: SplitSink<WebSocket, Message>,
+    mut ws_tx: SplitSink<WebSocket, ws::Message>,
     channel_buffer_size: usize,
     addr_str: String,
 ) -> Sender<TopologyServerToDesktop> {
@@ -269,9 +264,7 @@ pub async fn spawn_websocket_writer(
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let Err(e) = ws_tx
-                .send(ws::Message::text(
-                    serde_json::to_string(&msg).unwrap().as_str(),
-                ))
+                .send(ws::Message::Text(serde_json::to_string(&msg).unwrap()))
                 .await
             {
                 warn!("Error sending on websocket {} : {}", &addr_str, e);

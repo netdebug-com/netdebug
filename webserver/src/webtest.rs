@@ -1,3 +1,4 @@
+use axum::extract::ws::{self, WebSocket};
 /**
  * This is the main test logic.  Currently the WASM client connects
  * to the server with a websocket and we setup a ping/pong message
@@ -25,7 +26,6 @@ use std::{
     time::Duration,
 };
 use tokio::sync::mpsc::{self, UnboundedSender};
-use warp::ws::{self, WebSocket};
 
 use crate::context::Context;
 use futures_util::{stream::SplitStream, SinkExt, StreamExt};
@@ -51,40 +51,18 @@ fn unmap_mapped_v4(addr: &SocketAddr) -> SocketAddr {
 }
 
 pub async fn handle_websocket(
+    websocket: axum::extract::ws::WebSocket,
     context: Context,
     user_agent: String,
-    websocket: warp::ws::WebSocket,
-    addr: Option<SocketAddr>,
+    addr: SocketAddr,
 ) {
+    let addr = unmap_mapped_v4(&addr);
     let local_l4_port = context.read().await.local_tcp_listen_port;
-    let (addr_str, connection_key) = match &addr {
-        None => {
-            if cfg!(tests) {
-                ("unknown  - but ok for tests".to_string(), None)
-            } else {
-                warn!("Rejecting websocket from client where remote addr=None");
-                return;
-            }
-        }
-        Some(a) => {
-            let a = unmap_mapped_v4(a);
-            (
-                a.to_string(),
-                Some(
-                    connection_key_from_remote_sockaddr(
-                        local_l4_port,
-                        &a,
-                        etherparse::ip_number::TCP,
-                    )
-                    .await,
-                ),
-            )
-        }
-    };
-    let _addr = addr.expect("We weren't passed a valid SocketAddr!?");
+    let connection_key =
+        connection_key_from_remote_sockaddr(local_l4_port, &addr, etherparse::ip_number::TCP).await;
     info!(
         "New websocket connection from {} ; user agent {} ",
-        &addr_str, &user_agent
+        addr, user_agent
     );
     let (mut ws_tx, ws_rx) = websocket.split();
 
@@ -97,57 +75,51 @@ pub async fn handle_websocket(
     let (tx, mut rx) = mpsc::unbounded_channel::<common_wasm::Message>();
     let (barrier_tx, mut barrier_rx) = mpsc::unbounded_channel::<f64>();
     let tx_clone = tx.clone();
-    let addr_str_clone = addr_str.clone();
     let _sender_wrapper_handle = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let Err(e) = ws_tx
-                .send(ws::Message::text(
-                    serde_json::to_string(&msg).unwrap().as_str(),
-                ))
+                .send(ws::Message::Text(serde_json::to_string(&msg).unwrap()))
                 .await
             {
-                warn!("Error sending on websocket {} : {}", &addr_str_clone, e);
+                warn!("Error sending on websocket {} : {}", &addr, e);
             }
         }
     });
-    let key_clone = connection_key.clone().unwrap();
+    let key_clone = connection_key.clone();
     let _ws_msg_handler_handle = tokio::spawn(async move {
         handle_ws_message(context, ws_rx, tx_clone, barrier_tx, key_clone).await
     });
     // set the user agent
-    if let Some(key) = &connection_key {
-        if let Err(e) =
-            connection_tracker.try_send(PerfMsgCheck::new(ConnectionTrackerMsg::SetUserAgent {
-                user_agent,
-                key: key.clone(),
-            }))
-        {
-            warn!("SetUserAgent failed for {}: {}", key, e);
-        }
+    if let Err(e) =
+        connection_tracker.try_send(PerfMsgCheck::new(ConnectionTrackerMsg::SetUserAgent {
+            user_agent,
+            key: connection_key.clone(),
+        }))
+    {
+        warn!("SetUserAgent failed for {}: {}", connection_key, e);
     }
     // Version check - is the client build from the same git hash as the server?
     tx.send(common_wasm::Message::make_version_check())
         .unwrap_or_else(|e| {
-            warn!("Sending version check: {} got {}", addr_str, e);
+            warn!("Sending version check: {} got {}", addr, e);
         });
 
     // send 100 rounds of pings to the client
     let max_rounds = 100;
+    let connection_key_option = Some(connection_key.clone());
     for probe_round in 1..=max_rounds {
         run_probe_round(
             probe_round,
             &tx,
             &mut barrier_rx,
-            &connection_key,
+            &connection_key_option,
             &connection_tracker,
-            &addr_str,
+            &addr.to_string(),
             max_rounds,
         )
         .await;
     }
-    if let Some(connection_key) = connection_key {
-        send_insights(connection_key, tx, connection_tracker).await;
-    }
+    send_insights(connection_key, tx, connection_tracker).await;
 }
 
 async fn send_insights(
@@ -296,14 +268,18 @@ async fn handle_ws_message(
     while let Some(raw_msg) = rx.next().await {
         match raw_msg {
             Ok(msg) => {
-                let msg = match msg.to_str() {
-                    Ok(text) => text,
-                    Err(_) => {
+                let msg_str = match msg {
+                    ws::Message::Text(text) => text,
+                    ws::Message::Binary(_) => {
                         warn!("Got non-text message from websocket!? {:?}", msg);
                         break;
                     }
+                    ws::Message::Ping(_) | ws::Message::Pong(_) | ws::Message::Close(_) => {
+                        // ignore
+                        continue;
+                    }
                 };
-                match serde_json::from_str(msg) {
+                match serde_json::from_str(&msg_str) {
                     Ok(msg) => {
                         handle_message(&context, msg, &tx, &barrier_tx, &connection_key).await;
                     }
