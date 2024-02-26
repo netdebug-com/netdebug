@@ -2,6 +2,7 @@ use chrono::Utc;
 use common_wasm::get_git_hash_version;
 use indexmap::IndexMap;
 use libconntrack_wasm::topology_server_messages::DesktopLogLevel;
+use libconntrack_wasm::ConnectionMeasurements;
 use libwebserver::remotedb_client::{RemoteDBClient, RemoteDBClientMessages};
 use pg_embed::pg_fetch::{PgFetchSettings, PG_V13};
 use pg_embed::pg_types::PgResult;
@@ -16,7 +17,7 @@ use pg_embed::pg_enums::PgAuthMethod;
 /**
  * Test against FAKE credentials!
  *
- * Brazenly put the handle_store_counters() and handle_store_logs() tests
+ * Brazenly put the handle_store_counters() and handle_store_logs() and connection tests
  * into the same #[test] b/c the startup time for this test is quite high
  */
 #[tokio::test]
@@ -77,6 +78,16 @@ async fn test_remotedb_client() {
         .unwrap();
     let rows = remotedb_client
         .count_remote_logs_rows(&client)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+    // now store a connection measurement and make sure it's there
+    remotedb_client
+        .handle_store_connection_measurement(&client, &ConnectionMeasurements::make_mock())
+        .await
+        .unwrap();
+    let rows = remotedb_client
+        .count_remote_connection_rows(&client)
         .await
         .unwrap();
     assert_eq!(rows, 1);

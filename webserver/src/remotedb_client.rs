@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration, StatType, Units};
 use indexmap::IndexMap;
 use libconntrack::utils::PerfMsgCheck;
-use libconntrack_wasm::topology_server_messages::DesktopLogLevel;
+use libconntrack_wasm::{topology_server_messages::DesktopLogLevel, ConnectionMeasurements};
 use log::{error, info, warn};
 use tokio::sync::mpsc::channel;
 use tokio_postgres::Client;
@@ -35,6 +35,8 @@ pub struct RemoteDBClient {
     counters_table_name: String,
     /// Name of the table where we store logs from the desktop
     logs_table_name: String,
+    /// Basename of the table where we store the connection measurements, e.g., "connection_$company"
+    connections_table_name: String,
 }
 
 /// CREATE TABLE desktop_counters (
@@ -44,6 +46,7 @@ pub struct RemoteDBClient {
 ///     time DATE);
 const COUNTERS_DB_NAME: &str = "desktop_counters";
 const LOGS_DB_NAME: &str = "desktop_logs";
+const CONNECTIONS_DB_NAME: &str = "desktop_connections";
 const INITIAL_RETRY_TIME_MS: u64 = 100;
 // Linux root cert db is /etc/ssl/certs/ca-certificates.crt, at least on Ubuntu
 
@@ -52,6 +55,9 @@ pub type RemoteDBClientReceiver = tokio::sync::mpsc::Receiver<PerfMsgCheck<Remot
 
 #[derive(Clone, Debug)]
 pub enum RemoteDBClientMessages {
+    StoreConnectionMeasurements {
+        connection_measurements: Box<ConnectionMeasurements>,
+    },
     StoreCounters {
         counters: IndexMap<String, u64>,
         source: String,
@@ -99,6 +105,7 @@ impl RemoteDBClient {
             ),
             counters_table_name: COUNTERS_DB_NAME.to_string(),
             logs_table_name: LOGS_DB_NAME.to_string(),
+            connections_table_name: CONNECTIONS_DB_NAME.to_string(),
         };
         tokio::spawn(async move {
             remote_db_client.rx_loop().await.unwrap();
@@ -158,6 +165,12 @@ impl RemoteDBClient {
                             .await
                     }
                     StoreLog { .. } => self.handle_store_log(&client, msg).await,
+                    StoreConnectionMeasurements {
+                        connection_measurements,
+                    } => {
+                        self.handle_store_connection_measurement(&client, connection_measurements)
+                            .await
+                    }
                 } {
                     warn!(
                         "RemoteClientDB loop produced error: restarting client: {}",
@@ -289,6 +302,38 @@ impl RemoteDBClient {
                 &[],
             )
             .await?;
+        // for the connections
+        // TODO: we really need to think about how much of this we really want to store and what has value
+        //      ... this is going to be a lot of data...
+        // TODO: expand the top-level struct but many subcomponents are still in JSON blobs
+        // TODO: add client ID here to make (client_id, connection_key) the primary key
+        // TODO: add company here to make the table name a function of the company
+        client
+            .query(
+                format!(
+                    "CREATE TABLE {} ( 
+                        connection_key TEXT, 
+                        local_hostname TEXT, 
+                        remote_hostname TEXT, 
+                        probe_report_summary TEXT, 
+                        user_annotation TEXT,
+                        user_agent TEXT,
+                        associated_apps TEXT,
+                        close_has_started BOOLEAN,
+                        four_way_close_done BOOLEAN,
+                        start_tracking_time TIMESTAMPTZ,
+                        last_packet_time TIMESTAMPTZ,
+                        tx_loss BIGINT,
+                        rx_loss BIGINT,
+                        tx_stats TEXT,
+                        rx_stats TEXT,
+                        time TIMESTAMPTZ)",
+                    self.connections_table_name
+                )
+                .as_str(),
+                &[],
+            )
+            .await?;
         Ok(())
     }
 
@@ -318,6 +363,78 @@ impl RemoteDBClient {
         }
         Ok(())
     }
+
+    /// Store a connection measurements struct to the remote db client
+    /// NOTE: similar to the other stores, this info is coming directly from the client
+    /// So we should assume this data might be malicious and should be checked for integrity
+    /// TODO: DoS is probably ok for now, just make sure there can't be SQL injection attacks by
+    /// using the right quoted insert.
+
+    pub async fn handle_store_connection_measurement(
+        &self,
+        client: &Client,
+        m: &ConnectionMeasurements,
+    ) -> Result<(), tokio_postgres::Error> {
+        // store a bunch of more complex members as JSON blobs, for now
+        // NOTE: these .unwrap()s are all safe b/c to get here all of the data needs to be
+        //  already encoded this way
+        let key = serde_json::to_string(&m.key).unwrap();
+        let probe_report_summary = serde_json::to_string(&m.probe_report_summary).unwrap();
+        let associated_apps = serde_json::to_string(&m.associated_apps).unwrap();
+        // annoying; postgresql_tokio doesn't map u64 to BIGINT
+        let tx_loss = m.tx_stats.lost_bytes.map(|b| b as i64);
+        let rx_loss = m.tx_stats.lost_bytes.map(|b| b as i64);
+        let tx_stats = serde_json::to_string(&m.tx_stats).unwrap();
+        let rx_stats = serde_json::to_string(&m.rx_stats).unwrap();
+        let now = Utc::now();
+        client
+            .execute(
+                format!(
+                    r#"INSERT INTO {} (
+                    connection_key, 
+                    local_hostname, 
+                    remote_hostname, 
+                    probe_report_summary, 
+                    user_annotation, 
+                    user_agent, 
+                    associated_apps, 
+                    close_has_started, 
+                    four_way_close_done, 
+                    start_tracking_time, 
+                    last_packet_time, 
+                    tx_loss, 
+                    rx_loss, 
+                    tx_stats, 
+                    rx_stats, 
+                    time
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)"#,
+                    self.connections_table_name
+                )
+                .as_str(),
+                // annoying - formatter is confused by this... hand format
+                &[
+                    &key,
+                    &m.local_hostname,
+                    &m.remote_hostname,
+                    &probe_report_summary,
+                    &m.user_annotation,
+                    &m.user_agent,
+                    &associated_apps,
+                    &m.close_has_started,
+                    &m.four_way_close_done,
+                    &m.start_tracking_time,
+                    &m.last_packet_time,
+                    &tx_loss,
+                    &rx_loss,
+                    &tx_stats,
+                    &rx_stats,
+                    &now,
+                ],
+            )
+            .await?;
+        Ok(())
+    }
+
     //    #[cfg(test)] // do NOT mark this as test only as the integration tests don't compile with 'test' flag (!?)
     pub fn mk_mock(url: &str) -> RemoteDBClient {
         let (tx, rx) = channel(10);
@@ -336,6 +453,7 @@ impl RemoteDBClient {
             ),
             counters_table_name: "test_db_counters".to_string(),
             logs_table_name: "test_db_logs".to_string(),
+            connections_table_name: "test_db_connections".to_string(),
         }
     }
 
@@ -363,6 +481,22 @@ impl RemoteDBClient {
         let rows = client
             .query(
                 format!("SELECT COUNT(*) FROM {}", self.logs_table_name).as_str(),
+                &[],
+            )
+            .await?;
+        // NOTE that postgres doesn't seem to have a native u64 type so it uses
+        // int8 which maps to a i64 in rust.
+        // Why allow negative!?
+        let count = rows.first().unwrap().get::<_, i64>(0);
+        Ok(count)
+    }
+    pub async fn count_remote_connection_rows(
+        &self,
+        client: &Client,
+    ) -> Result<i64, tokio_postgres::error::Error> {
+        let rows = client
+            .query(
+                format!("SELECT COUNT(*) FROM {}", self.connections_table_name).as_str(),
                 &[],
             )
             .await?;
