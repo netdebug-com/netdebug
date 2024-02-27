@@ -319,7 +319,11 @@ impl RemoteDBClient {
             .query(
                 format!(
                     "CREATE TABLE {} ( 
-                        connection_key TEXT, 
+                        key_local_ip TEXT, 
+                        key_remote_ip TEXT, 
+                        key_local_port SMALLINT, 
+                        key_remote_port SMALLINT, 
+                        key_protocol TEXT, 
                         local_hostname TEXT, 
                         remote_hostname TEXT, 
                         probe_report_summary TEXT, 
@@ -388,7 +392,6 @@ impl RemoteDBClient {
         // store a bunch of more complex members as JSON blobs, for now
         // NOTE: these .unwrap()s are all safe b/c to get here all of the data needs to be
         //  already encoded this way
-        let key = serde_json::to_string(&m.key).unwrap();
         let probe_report_summary = serde_json::to_string(&m.probe_report_summary).unwrap();
         let associated_apps = serde_json::to_string(&m.associated_apps).unwrap();
         // annoying; postgresql_tokio doesn't map u64 to BIGINT
@@ -401,7 +404,11 @@ impl RemoteDBClient {
             .execute(
                 format!(
                     r#"INSERT INTO {} (
-                    connection_key, 
+                    key_local_ip, 
+                    key_remote_ip, 
+                    key_local_port, 
+                    key_remote_port, 
+                    key_protocol, 
                     local_hostname, 
                     remote_hostname, 
                     probe_report_summary, 
@@ -418,13 +425,17 @@ impl RemoteDBClient {
                     rx_stats, 
                     time,
                     client_uuid
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)"#,
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19 , $20, $21)"#,
                     self.connections_table_name
                 )
                 .as_str(),
                 // annoying - formatter is confused by this... hand format
                 &[
-                    &key,
+                    &m.key.local_ip.to_string(),
+                    &m.key.remote_ip.to_string(),
+                    &(m.key.local_l4_port as i16),
+                    &(m.key.remote_l4_port as i16),
+                    &m.key.ip_proto.to_string(),
                     &m.local_hostname,
                     &m.remote_hostname,
                     &probe_report_summary,
