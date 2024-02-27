@@ -24,45 +24,29 @@ use libconntrack_wasm::ConnectionMeasurements;
 use log::{debug, warn};
 use tokio::sync::mpsc::{channel, Sender};
 
-use tokio_rusqlite::Connection as DbConnection;
-
 use crate::congestion_analysis::congestion_summary_from_measurements;
 pub struct TopologyServer {
     tx: TopologyServerSender,
     rx: TopologyServerReceiver,
-    /// rustsql path identifier
-    db_path: String,
-    db: DbConnection,
 }
 
 impl TopologyServer {
     async fn new(
         tx: TopologyServerSender,
         rx: TopologyServerReceiver,
-        db_path: String,
     ) -> tokio_rusqlite::Result<TopologyServer> {
-        let db = init_db(&db_path).await?;
-        Ok(TopologyServer {
-            tx,
-            rx,
-            db_path,
-            db,
-        })
+        Ok(TopologyServer { tx, rx })
     }
-    pub async fn spawn(
-        db_path: &str,
-        buffer_size: usize,
-    ) -> tokio_rusqlite::Result<TopologyServerSender> {
+    pub async fn spawn(buffer_size: usize) -> tokio_rusqlite::Result<TopologyServerSender> {
         let (tx, rx) = channel(buffer_size);
-        TopologyServer::spawn_with_tx_rx(db_path, tx, rx).await
+        TopologyServer::spawn_with_tx_rx(tx, rx).await
     }
 
     pub async fn spawn_with_tx_rx(
-        db_path: &str,
         tx: TopologyServerSender,
         rx: TopologyServerReceiver,
     ) -> tokio_rusqlite::Result<TopologyServerSender> {
-        let topology_server = TopologyServer::new(tx.clone(), rx, db_path.to_string()).await?;
+        let topology_server = TopologyServer::new(tx.clone(), rx).await?;
         tokio::spawn(async move {
             topology_server.rx_loop().await;
         });
@@ -84,16 +68,14 @@ impl TopologyServer {
             use libconntrack::topology_client::TopologyServerMessage::*;
             match msg {
                 GetMyIpAndUserAgent { reply_tx } => self.handle_get_my_ip(reply_tx).await,
-                StoreConnectionMeasurements {
-                    connection_measurements,
-                } => self.handle_store_measurement(connection_measurements).await,
                 InferCongestion {
                     connection_measurements,
                     reply_tx,
                 } => {
                     self.handle_infer_congestion(connection_measurements, reply_tx)
                         .await
-                }
+                },
+                StoreConnectionMeasurements { ..} => panic!("Should never try to store ConnectionMeasurements to the topology_server on webserver; use remotedbclient instead"),
             }
         }
         warn!("Exiting TopologyServer:rx_loop()");
@@ -114,36 +96,6 @@ impl TopologyServer {
             (my_ip, fake_user_agent)
         )
         .await;
-    }
-
-    async fn handle_store_measurement(&self, entry: Box<ConnectionMeasurements>) {
-        debug!("{:?}", entry);
-        let db_res = self
-            .db
-            .call(move |conn| {
-                conn.execute(
-                    "INSERT INTO connections (saved_at, measurements) 
-                         VALUES (
-                            datetime('now'),
-                            ?1
-                        )",
-                    // store as a JSON blob for now
-                    // TODO: do someting less braindead once it becomes a problem :-)
-                    // unwrap() should be ok here b/c it was just serialized before
-                    rusqlite::params![serde_json::to_string(&entry).unwrap()],
-                )
-            })
-            .await;
-        match db_res {
-            Err(e) => {
-                // what can we do about errors writing to the DB?  I guess just warn() for now...
-                warn!(
-                    "Error writing to topology server db {} :: {}",
-                    self.db_path, e
-                );
-            }
-            Ok(_rows_updated) => (),
-        }
     }
 
     pub fn get_tx(&self) -> TopologyServerSender {
@@ -169,29 +121,11 @@ impl TopologyServer {
     }
 }
 
-async fn init_db(db_path: &str) -> tokio_rusqlite::Result<DbConnection> {
-    let db = DbConnection::open(db_path).await?;
-    db.call(|conn| {
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS connections (
-                    id INTEGER PRIMARY KEY,
-                    saved_at DATETIME, 
-                    measurements TEXT
-                )",
-            [],
-        )
-    })
-    .await?;
-    Ok(db)
-}
-
 #[cfg(test)]
 mod test {
     // Appropriated from the original storage-server code
-    type TestRes = Result<(), Box<dyn std::error::Error>>;
-    use chrono::Utc;
-    use libconntrack_wasm::{traffic_stats::TrafficStatsSummary, ConnectionKey};
 
+    /*
     use super::*;
 
     fn fake_measurement_data() -> ConnectionMeasurements {
@@ -219,6 +153,7 @@ mod test {
             rx_stats: TrafficStatsSummary::default(),
         }
     }
+
     #[tokio::test]
     async fn very_basic() -> TestRes {
         let (tx, rx) = channel(10);
@@ -250,4 +185,5 @@ mod test {
         assert_eq!(measurements, actual_vec[0]);
         Ok(())
     }
+    */
 }

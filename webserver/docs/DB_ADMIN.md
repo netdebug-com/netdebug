@@ -24,11 +24,17 @@
     ```
     CREATE TABLE desktop_counters ( counter TEXT, value BIGINT, os TEXT, version TEXT, source TEXT, time TIMESTAMPTZ);
     CREATE TABLE desktop_logs ( msg TEXT, level TEXT, os TEXT, version TEXT, source TEXT, time TIMESTAMPTZ);
+
+    CREATE TABLE desktop_connections ( connection_key TEXT,  local_hostname TEXT,  remote_hostname TEXT,  
+            probe_report_summary TEXT,  user_annotation TEXT, user_agent TEXT, associated_apps TEXT, 
+            close_has_started BOOLEAN, four_way_close_done BOOLEAN, start_tracking_time TIMESTAMPTZ, 
+            last_packet_time TIMESTAMPTZ, tx_loss BIGINT, rx_loss BIGINT, tx_stats TEXT, rx_stats TEXT, time TIMESTAMPTZ);
     ```
 2. Mark them as a 'hypertable' which tells the backend to treat it with timeseries optimizations:
     ```
     SELECT create_hypertable('desktop_counters', by_range('time'));
     SELECT create_hypertable('desktop_logs', by_range('time'));
+    SELECT create_hypertable('desktop_connections', by_range('time'));
     ```
 3. Set a data retention policy for how long we hold on to data.  This will auto-delete data older than 30 days.
     Read more about it here:
@@ -36,6 +42,7 @@
     ```
     SELECT add_retention_policy('desktop_counters', INTERVAL '30 days');
     SELECT add_retention_policy('desktop_logs', INTERVAL '30 days');
+    SELECT add_retention_policy('desktop_connections', INTERVAL '30 days');
     ```
 4. TODO: setup 'continuous aggregates' to continuously downsample our data
     https://docs.timescale.com/use-timescale/latest/data-retention/data-retention-with-continuous-aggregates/

@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::str::FromStr;
 
 use chrono::serde::ts_nanoseconds;
 use chrono::{DateTime, Utc};
@@ -56,5 +58,29 @@ impl ConnectionMeasurements {
             self.key.remote_ip,
             self.key.remote_l4_port
         )
+    }
+
+    pub fn make_mock() -> ConnectionMeasurements {
+        ConnectionMeasurements {
+            key: ConnectionKey {
+                local_ip: IpAddr::from_str("127.0.0.1").unwrap(),
+                remote_ip: IpAddr::from_str("128.8.128.38").unwrap(),
+                local_l4_port: 12345,
+                remote_l4_port: 443,
+                ip_proto: crate::IpProtocol::TCP,
+            },
+            local_hostname: Some("localhost".to_string()),
+            remote_hostname: Some("www.example.com".to_string()),
+            probe_report_summary: ProbeReportSummary::new(), // don't fill in any data for now
+            user_annotation: Some("mock annotation".to_string()),
+            user_agent: Some("mock user agent".to_string()),
+            associated_apps: Some(HashMap::from([(4, Some("SuperApp".to_string()))])),
+            close_has_started: true,
+            four_way_close_done: false,
+            start_tracking_time: Utc::now(),
+            last_packet_time: Utc::now(),
+            rx_stats: TrafficStatsSummary::make_mock(),
+            tx_stats: TrafficStatsSummary::make_mock(),
+        }
     }
 }

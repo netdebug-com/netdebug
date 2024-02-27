@@ -84,7 +84,8 @@ async fn handle_desktop_message(
         Hello => handle_hello(ws_tx, user_agent, addr).await,
         StoreConnectionMeasurement {
             connection_measurements: connection_measurement,
-        } => handle_store_measurements(connection_measurement, topology_server).await,
+            // TODO: put client Info (OS, version, etc.) in the message
+        } => handle_store_measurements(connection_measurement, remotedb_client).await,
         InferCongestion {
             connection_measurements,
         } => handle_infer_congestion(ws_tx, connection_measurements, topology_server).await,
@@ -215,20 +216,27 @@ async fn handle_infer_congestion(
 }
 
 /**
- * Just forward on to the TopologyServer for storage
+ * Just forward on to the RemoteDBClient for storage
  */
 async fn handle_store_measurements(
     connection_measurements: Box<libconntrack_wasm::ConnectionMeasurements>,
-    topology_server: &TopologyServerSender,
+    remotedb_client: &Option<RemoteDBClientSender>,
 ) {
-    send_or_log_async!(
-        topology_server,
-        "handle_store",
-        TopologyServerMessage::StoreConnectionMeasurements {
+    if let Some(remotedb_client) = remotedb_client {
+        send_or_log_async!(
+            remotedb_client,
+            "handle_store",
+            RemoteDBClientMessages::StoreConnectionMeasurements {
+                connection_measurements
+            }
+        )
+        .await
+    } else {
+        debug!(
+            "Would have stored connection_measurement, but no remotedb_client specified: {:?}",
             connection_measurements
-        }
-    )
-    .await
+        );
+    }
 }
 
 async fn handle_hello(

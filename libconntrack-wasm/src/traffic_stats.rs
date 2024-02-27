@@ -126,6 +126,21 @@ pub struct TrafficStatsSummary {
     pub rtt_stats_ms: Option<ExportedSimpleStats>,
 }
 
+impl TrafficStatsSummary {
+    pub fn make_mock() -> TrafficStatsSummary {
+        TrafficStatsSummary {
+            bytes: 6000,
+            pkts: 4,
+            burst_pkt_rate: None,
+            burst_byte_rate: None,
+            last_min_pkt_rate: None,
+            last_min_byte_rate: None,
+            lost_bytes: Some(1500),
+            rtt_stats_ms: None,
+        }
+    }
+}
+
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
 pub struct BidirTrafficStatsSummary {
     pub rx: TrafficStatsSummary,

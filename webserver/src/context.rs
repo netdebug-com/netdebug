@@ -131,7 +131,6 @@ impl WebServerContext {
             tokio::spawn(async move {
                 info!("Launching the topology server now with db_path={}", db_path);
                 topology_server::TopologyServer::spawn_with_tx_rx(
-                    &db_path,
                     topology_server_tx.clone(),
                     topology_server_rx,
                 )
