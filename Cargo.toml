@@ -38,3 +38,4 @@ typescript-type-def = { git = "https://github.com/gregor-netdebug/rust-typescrip
 tokio = { version = "*", features = ["full"] }
 tower-http = { version = "0.5.1", features = ["cors", "trace"] }
 tracing = "0.1"
+uuid = "1"
