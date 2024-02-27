@@ -18,9 +18,10 @@ use libconntrack_wasm::topology_server_messages::{
 use libconntrack_wasm::ConnectionMeasurements;
 #[cfg(not(test))]
 use log::{debug, info, warn};
+// Workaround to use printnl! for logs.
 #[cfg(test)]
-use std::{println as debug, println as info, println as warn}; // Workaround to use prinltn! for logs.
-                                                               // use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::{println as debug, println as info, println as warn};
+
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Receiver, Sender, WeakSender};
 use tokio_tungstenite::tungstenite::error::Error as TungsteniteError;
@@ -80,6 +81,8 @@ pub struct TopologyServerConnection {
     super_counters_registries: SharedExportedStatRegistries,
     /// Send a keepalive (ping) to the WS sender periodically
     ws_keepalive_interval: tokio::time::Duration,
+    // The UUID of the client for identifying it to the server
+    // client_uuid: Uuid, TODO(Gregor): add this
 }
 
 impl TopologyServerConnection {
@@ -124,6 +127,7 @@ impl TopologyServerConnection {
             ),
             super_counters_registries: super_counters_registry,
             ws_keepalive_interval: tokio::time::Duration::from_millis(WS_KEEPALIVE_INTERVAL_MS),
+            // client_uuid: Uuid::new_v4(), // just random, for now : TODO(Gregor) - persist this
         }
     }
 
@@ -333,7 +337,7 @@ impl TopologyServerConnection {
                     ws_tx,
                     "handle_desktop_msg::StoreConnectionMeasurement",
                     DesktopToTopologyServer::StoreConnectionMeasurement {
-                        connection_measurements
+                        connection_measurements,
                     },
                     self.desktop2server_store_msgs_stat
                 )

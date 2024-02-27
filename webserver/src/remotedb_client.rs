@@ -8,6 +8,7 @@ use libconntrack_wasm::{topology_server_messages::DesktopLogLevel, ConnectionMea
 use log::{error, info, warn};
 use tokio::sync::mpsc::channel;
 use tokio_postgres::Client;
+use uuid::Uuid;
 
 /// An agent to manage the connection to the remote database service
 /// Currently we're using timescaledb.com b/c it supports both
@@ -57,6 +58,7 @@ pub type RemoteDBClientReceiver = tokio::sync::mpsc::Receiver<PerfMsgCheck<Remot
 pub enum RemoteDBClientMessages {
     StoreConnectionMeasurements {
         connection_measurements: Box<ConnectionMeasurements>,
+        client_uuid: Uuid,
     },
     StoreCounters {
         counters: IndexMap<String, u64>,
@@ -167,9 +169,14 @@ impl RemoteDBClient {
                     StoreLog { .. } => self.handle_store_log(&client, msg).await,
                     StoreConnectionMeasurements {
                         connection_measurements,
+                        client_uuid,
                     } => {
-                        self.handle_store_connection_measurement(&client, connection_measurements)
-                            .await
+                        self.handle_store_connection_measurement(
+                            &client,
+                            connection_measurements,
+                            client_uuid,
+                        )
+                        .await
                     }
                 } {
                     warn!(
@@ -327,7 +334,9 @@ impl RemoteDBClient {
                         rx_loss BIGINT,
                         tx_stats TEXT,
                         rx_stats TEXT,
-                        time TIMESTAMPTZ)",
+                        time TIMESTAMPTZ,
+                        client_uuid UUID
+                    )",
                     self.connections_table_name
                 )
                 .as_str(),
@@ -374,6 +383,7 @@ impl RemoteDBClient {
         &self,
         client: &Client,
         m: &ConnectionMeasurements,
+        client_uuid: &Uuid,
     ) -> Result<(), tokio_postgres::Error> {
         // store a bunch of more complex members as JSON blobs, for now
         // NOTE: these .unwrap()s are all safe b/c to get here all of the data needs to be
@@ -406,8 +416,9 @@ impl RemoteDBClient {
                     rx_loss, 
                     tx_stats, 
                     rx_stats, 
-                    time
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)"#,
+                    time,
+                    client_uuid
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)"#,
                     self.connections_table_name
                 )
                 .as_str(),
@@ -429,6 +440,7 @@ impl RemoteDBClient {
                     &tx_stats,
                     &rx_stats,
                     &now,
+                    &client_uuid
                 ],
             )
             .await?;

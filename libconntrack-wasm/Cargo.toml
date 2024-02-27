@@ -17,6 +17,7 @@ serde_with = { version = "3.3.0", features = ["chrono_0_4"] }
 thiserror = { workspace = true }
 typescript-type-def = { workspace = true }
 wasm-logger = "*"
+uuid = { workspace = true, features = ["v3", "serde"] }
 
 
 [dev-dependencies]
