@@ -113,20 +113,12 @@ const Home: React.FC = () => {
           <Stack spacing={2} direction="row" useFlexGap>
             <Item sx={{ width: "45%", textAlign: "left" }}>
               <b>
-                <em>What's New with v0.2.2</em>{" "}
+                <em>What's New with v0.2.3</em>{" "}
               </b>
               <ul>
+                <li>UI improvements</li>
                 <li>
-                  Per-connection <Link to={"/rtt_latency"}> latency</Link> and
-                  bi-directional <Link to={"/flows"}> loss information</Link>{" "}
-                  (by <Link to={"/flows/by_dest_domain"}>DNS</Link> and{" "}
-                  <Link to={"/flows/by_app"}>App</Link>)
-                </li>
-                <li>
-                  Local network <Link to={"/devices"}>device</Link>,{" "}
-                  <Link to={"/local_network"}> packet-loss</Link>, and{" "}
-                  <Link to={"/local_network"}>latency </Link>
-                  monitoring
+                  Fix a potential leaking of connection to out backend server.
                 </li>
                 <li>
                   See full <Link to={"/about"}>Release Notes</Link>
