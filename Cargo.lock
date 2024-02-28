@@ -954,7 +954,6 @@ dependencies = [
  "serde",
  "serde_json",
  "typescript-type-def",
- "uuid",
 ]
 
 [[package]]
@@ -1858,6 +1857,7 @@ dependencies = [
  "tokio-test",
  "tokio-tungstenite 0.20.1",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -1874,6 +1874,7 @@ dependencies = [
  "serde_with",
  "thiserror",
  "typescript-type-def",
+ "uuid",
  "wasm-bindgen-test",
  "wasm-logger",
 ]
@@ -2647,6 +2648,7 @@ dependencies = [
  "chrono",
  "fallible-iterator",
  "postgres-protocol",
+ "uuid",
 ]
 
 [[package]]
@@ -4128,6 +4130,11 @@ name = "uuid"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f00cc9702ca12d3c81455259621e676d0f7251cec66a21e98fe2e9a37db93b2a"
+dependencies = [
+ "getrandom",
+ "md-5 0.10.6",
+ "serde",
+]
 
 [[package]]
 name = "valuable"
@@ -4345,6 +4352,7 @@ dependencies = [
  "tokio-rusqlite",
  "tower-http",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

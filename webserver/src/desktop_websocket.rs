@@ -12,6 +12,7 @@ use libconntrack_wasm::topology_server_messages::{
 };
 use log::{debug, info, warn};
 use tokio::sync::mpsc::{channel, Sender};
+use uuid::Uuid;
 
 use crate::{
     context::Context,
@@ -32,6 +33,9 @@ pub async fn handle_desktop_websocket(
         let lock = context.read().await;
         (lock.topology_server.clone(), lock.remotedb_client.clone())
     };
+
+    // TODO(Gregor): put the real/persistent client's UUID here that we get from the authentication
+    let client_uuid = Uuid::new_v3(&Uuid::NAMESPACE_DNS, addr.ip().to_string().as_bytes());
     /*
      * Unwrap the layering here:
      * 1. WebSockets has it's own Message Type
@@ -50,6 +54,7 @@ pub async fn handle_desktop_websocket(
                             &ws_tx,
                             &user_agent,
                             &addr,
+                            client_uuid,
                         )
                         .await;
                     }
@@ -78,6 +83,7 @@ async fn handle_desktop_message(
     ws_tx: &Sender<TopologyServerToDesktop>,
     user_agent: &str,
     addr: &SocketAddr,
+    client_uuid: Uuid,
 ) {
     use DesktopToTopologyServer::*;
     match msg {
@@ -85,7 +91,7 @@ async fn handle_desktop_message(
         StoreConnectionMeasurement {
             connection_measurements: connection_measurement,
             // TODO: put client Info (OS, version, etc.) in the message
-        } => handle_store_measurements(connection_measurement, remotedb_client).await,
+        } => handle_store_measurements(connection_measurement, client_uuid, remotedb_client).await,
         InferCongestion {
             connection_measurements,
         } => handle_infer_congestion(ws_tx, connection_measurements, topology_server).await,
@@ -220,6 +226,7 @@ async fn handle_infer_congestion(
  */
 async fn handle_store_measurements(
     connection_measurements: Box<libconntrack_wasm::ConnectionMeasurements>,
+    client_uuid: Uuid,
     remotedb_client: &Option<RemoteDBClientSender>,
 ) {
     if let Some(remotedb_client) = remotedb_client {
@@ -227,7 +234,8 @@ async fn handle_store_measurements(
             remotedb_client,
             "handle_store",
             RemoteDBClientMessages::StoreConnectionMeasurements {
-                connection_measurements
+                connection_measurements,
+                client_uuid
             }
         )
         .await

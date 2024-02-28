@@ -11,6 +11,7 @@ use rand::Rng;
 use std::{path::PathBuf, time::Duration};
 use tokio_postgres::types::ToSql;
 use tokio_postgres::Client;
+use uuid::Uuid;
 
 use pg_embed::pg_enums::PgAuthMethod;
 
@@ -83,7 +84,11 @@ async fn test_remotedb_client() {
     assert_eq!(rows, 1);
     // now store a connection measurement and make sure it's there
     remotedb_client
-        .handle_store_connection_measurement(&client, &ConnectionMeasurements::make_mock())
+        .handle_store_connection_measurement(
+            &client,
+            &ConnectionMeasurements::make_mock(),
+            &Uuid::new_v4(),
+        )
         .await
         .unwrap();
     let rows = remotedb_client
