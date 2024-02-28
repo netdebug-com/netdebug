@@ -1,6 +1,12 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
+// Workaround to use prinltn! for logs.
+#[cfg(not(test))]
+use log::{debug, info, warn};
+#[cfg(test)]
+use std::{println as debug, println as info, println as warn};
+
 use crate::send_or_log_async;
 use crate::utils::PerfMsgCheck;
 use chrono::Utc;
@@ -16,12 +22,6 @@ use libconntrack_wasm::topology_server_messages::{
     CongestionSummary, DesktopToTopologyServer, TopologyServerToDesktop,
 };
 use libconntrack_wasm::ConnectionMeasurements;
-#[cfg(not(test))]
-use log::{debug, info, warn};
-// Workaround to use printnl! for logs.
-#[cfg(test)]
-use std::{println as debug, println as info, println as warn};
-
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Receiver, Sender, WeakSender};
 use tokio_tungstenite::tungstenite::error::Error as TungsteniteError;
@@ -29,6 +29,7 @@ use tokio_tungstenite::tungstenite::handshake::client::generate_key;
 use tokio_tungstenite::tungstenite::http::Request;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+use uuid::Uuid;
 
 const COUNTER_REMOTE_SYNC_INTERVAL_MS: u64 = 60_000;
 const WS_KEEPALIVE_INTERVAL_MS: u64 = 1_000;
@@ -82,7 +83,7 @@ pub struct TopologyServerConnection {
     /// Send a keepalive (ping) to the WS sender periodically
     ws_keepalive_interval: tokio::time::Duration,
     // The UUID of the client for identifying it to the server
-    // client_uuid: Uuid, TODO(Gregor): add this
+    client_uuid: Uuid,
 }
 
 impl TopologyServerConnection {
@@ -127,7 +128,7 @@ impl TopologyServerConnection {
             ),
             super_counters_registries: super_counters_registry,
             ws_keepalive_interval: tokio::time::Duration::from_millis(WS_KEEPALIVE_INTERVAL_MS),
-            // client_uuid: Uuid::new_v4(), // just random, for now : TODO(Gregor) - persist this
+            client_uuid: Uuid::new_v4(), // just random, for now : TODO(Gregor) - persist this
         }
     }
 
@@ -169,11 +170,14 @@ impl TopologyServerConnection {
         // connect ala https://github.com/snapview/tokio-tungstenite/blob/master/examples/client.rs
         // Intentionally panic here if we got a bad URL
         let url = url::Url::parse(&self.url).unwrap_or_else(|_| panic!("Bad url! {}", &self.url));
+
+        let auth_header = "Bearer ".to_owned() + &self.client_uuid.as_hyphenated().to_string();
         // need to generate a custom request because we need to set the User-Agent for our webserver
         let req = Request::builder()
             .method("GET")
             .header("Host", url.authority())
             .header("User-Agent", "NetDebug Desktop version x.y.z")
+            .header("Authorization", auth_header)
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")

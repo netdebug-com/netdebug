@@ -23,6 +23,7 @@ const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 4096;
 pub async fn handle_desktop_websocket(
     websocket: WebSocket,
     context: Context,
+    client_uuid: Uuid,
     user_agent: String,
     addr: SocketAddr,
 ) {
@@ -34,8 +35,6 @@ pub async fn handle_desktop_websocket(
         (lock.topology_server.clone(), lock.remotedb_client.clone())
     };
 
-    // TODO(Gregor): put the real/persistent client's UUID here that we get from the authentication
-    let client_uuid = Uuid::new_v3(&Uuid::NAMESPACE_DNS, addr.ip().to_string().as_bytes());
     /*
      * Unwrap the layering here:
      * 1. WebSockets has it's own Message Type

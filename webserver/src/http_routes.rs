@@ -2,19 +2,25 @@ use std::net::SocketAddr;
 
 use crate::context::Context;
 use crate::{desktop_websocket, webtest};
+use axum::body::Body;
 use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
-use axum::response::IntoResponse;
+use axum::http::StatusCode;
+use axum::response::{self, IntoResponse};
 use axum::routing;
 use axum::Router;
 use axum_extra::TypedHeader;
 use common_wasm::timeseries_stats::{CounterProvider, CounterProviderWithTimeUpdate};
+use log::{info, warn};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+use uuid::Uuid;
 /* TODO: remove. These are used for the cookie stuff with axum
 use axum::http::header::SET_COOKIE;
 use asum::response;
 use axum::response::Html;
 */
+
+type BearerAuthHeader = headers::Authorization<headers::authorization::Bearer>;
 
 pub fn serve_dir_and_check_path<S: AsRef<str>>(path: S) -> ServeDir {
     let path = path.as_ref();
@@ -110,6 +116,7 @@ async fn webtest_ws_handler(
 async fn desktop_ws_handler(
     ws: WebSocketUpgrade,
     user_agent: Option<TypedHeader<headers::UserAgent>>,
+    auth: Option<TypedHeader<BearerAuthHeader>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(context): State<Context>,
 ) -> impl IntoResponse {
@@ -118,10 +125,41 @@ async fn desktop_ws_handler(
     } else {
         String::from("Unknown browser")
     };
-    // finalize the upgrade process by returning upgrade callback.
-    ws.on_upgrade(move |socket| {
-        desktop_websocket::handle_desktop_websocket(socket, context, user_agent, addr)
-    })
+    if let Some(auth) = auth {
+        if let Ok(client_id) = Uuid::try_parse(auth.token()) {
+            info!(
+                "Desktop Websocket request from {}, client_id {}",
+                addr.ip(),
+                client_id
+            );
+            // finalize the upgrade process by returning upgrade callback.
+            ws.on_upgrade(move |socket| {
+                desktop_websocket::handle_desktop_websocket(
+                    socket, context, client_id, user_agent, addr,
+                )
+            })
+        } else {
+            warn!(
+                "Received an invalid UUID from {}. Bad ID: `{}`",
+                addr.ip(),
+                auth.token()
+            );
+            response::Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::empty())
+                .unwrap()
+        }
+    } else {
+        warn!("Received no auth header / client UUID from {}", addr.ip());
+        // TODO: this should really be handled at a higher layer and not in
+        // an individual handler function. But it will do for now.
+        response::Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            // When returning a 401 unauthorized, we
+            .header("WWW-Authenticate", "Bearer")
+            .body(Body::empty())
+            .unwrap()
+    }
 }
 
 async fn get_counters_handler(State(context): State<Context>) -> String {
