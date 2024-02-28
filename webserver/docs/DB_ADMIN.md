@@ -25,8 +25,8 @@
     CREATE TABLE desktop_counters ( counter TEXT, value BIGINT, os TEXT, version TEXT, source TEXT, time TIMESTAMPTZ);
     CREATE TABLE desktop_logs ( msg TEXT, level TEXT, os TEXT, version TEXT, source TEXT, time TIMESTAMPTZ);
 
-    CREATE TABLE desktop_connections (               key_local_ip TEXT, 
-            key_remote_ip TEXT, key_local_port SMALLINT, key_remote_port SMALLINT, key_protocol TEXT, local_hostname TEXT,  remote_hostname TEXT,  
+    CREATE TABLE desktop_connections (               
+            local_ip TEXT, remote_ip TEXT, local_port INT, remote_port INT, ip_protocol SMALLINT, local_hostname TEXT,  remote_hostname TEXT,  
             probe_report_summary TEXT,  user_annotation TEXT, user_agent TEXT, associated_apps TEXT, 
             close_has_started BOOLEAN, four_way_close_done BOOLEAN, start_tracking_time TIMESTAMPTZ, 
             last_packet_time TIMESTAMPTZ, tx_loss BIGINT, rx_loss BIGINT, tx_stats TEXT, rx_stats TEXT, time TIMESTAMPTZ, client_uuid UUID);

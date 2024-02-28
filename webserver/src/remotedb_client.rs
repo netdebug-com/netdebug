@@ -319,11 +319,11 @@ impl RemoteDBClient {
             .query(
                 format!(
                     "CREATE TABLE {} ( 
-                        key_local_ip TEXT, 
-                        key_remote_ip TEXT, 
-                        key_local_port SMALLINT, 
-                        key_remote_port SMALLINT, 
-                        key_protocol TEXT, 
+                        local_ip TEXT, 
+                        remote_ip TEXT, 
+                        local_port INT, 
+                        remote_port INT, 
+                        ip_protocol SMALLINT, 
                         local_hostname TEXT, 
                         remote_hostname TEXT, 
                         probe_report_summary TEXT, 
@@ -404,11 +404,11 @@ impl RemoteDBClient {
             .execute(
                 format!(
                     r#"INSERT INTO {} (
-                    key_local_ip, 
-                    key_remote_ip, 
-                    key_local_port, 
-                    key_remote_port, 
-                    key_protocol, 
+                    local_ip, 
+                    remote_ip, 
+                    local_port, 
+                    remote_port, 
+                    ip_protocol, 
                     local_hostname, 
                     remote_hostname, 
                     probe_report_summary, 
@@ -433,9 +433,9 @@ impl RemoteDBClient {
                 &[
                     &m.key.local_ip.to_string(),
                     &m.key.remote_ip.to_string(),
-                    &(m.key.local_l4_port as i16),
-                    &(m.key.remote_l4_port as i16),
-                    &m.key.ip_proto.to_string(),
+                    &(m.key.local_l4_port as i32),
+                    &(m.key.remote_l4_port as i32),
+                    &(m.key.ip_proto.to_wire() as i16),
                     &m.local_hostname,
                     &m.remote_hostname,
                     &probe_report_summary,
