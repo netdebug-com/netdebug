@@ -22,13 +22,16 @@ def ssh_cmd(server: str, cmd: [str]):
 for server in servers:
     # Assumes that a server has already been manually prep'd via
     # ./scripts/prep_server.sh and has already successfully unpacked
-    # a deployment tarball (e.g., with ./targets/release/webserver) in
+    # a deployment tarball (e.g., with ./$VERSION/targets/release/webserver) in
     # ~deploy
     #
     # Assumes that the person running this has credentials to ssh in as
-    # root (fixme!!)
+    # root (fixme??)
     print(f"Updating server {server}")
     # running as root, needs root to kill
+
+    # TODO: need to consider a drain/undrain here so that user traffic to the console
+    # isn't effected
     ssh_cmd(server, ["systemctl", "stop", "netdebug-webserver"])
     ssh_cmd(server, ["su", "-", RunAsUser, "-c",
             "~deploy/scripts/update_webserver.sh"])

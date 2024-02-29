@@ -22,16 +22,19 @@ jobs:
           wasm_pack_build_flags: "--release"
       - name: Generate Version
         # looks like "2023-12-01"
-        run: echo OUTFILE=pre-prod-latest-ubuntu-${{github.ref_name}}-`date --iso-8601`.tgz >> $GITHUB_ENV
+        run: echo VERSION=pre-prod-latest-ubuntu-${{github.sha}}-`date --iso-8601` >> $GITHUB_ENV
       - name: make tarball
         # TODO: add artifacts from the electron build
+        # the --transform puts all of the files in the $VERSION subdir
         run: |
-          tar czf  $OUTFILE \
+          tar czf $VERSION.tgz \
+          --transform "s/^\./$VERSION/" \
           ./target/release/netdebug-desktop \
           ./target/release/webserver \
           ./target/release/router-graph \
           ./scripts \
           ./webserver/web-client/pkg/ \
+          ./webserver/netdebug_webui/dist \
           ./webserver/html
       # IF we get this far, automatically cut a release  with tag 'pre-prod-latest'
       # more Documentation at https://github.com/marketplace/actions/automatic-releases
