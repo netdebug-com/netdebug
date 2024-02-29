@@ -1,0 +1,148 @@
+/usr/bin/gh
+/usr/bin/curl
+./target/release/netdebug-desktop
+./target/release/webserver
+./target/release/router-graph
+./scripts/
+./scripts/macos-create-app-icons.sh
+./scripts/update_all_webservers.py
+./scripts/copy-desktop-binaries.sh
+./scripts/win-create-app-icons.sh
+./scripts/prep_server.sh
+./scripts/update_webserver.sh
+./scripts/netdebug-webserver.service
+./webserver/web-client/pkg/
+./webserver/web-client/pkg/README.md
+./webserver/web-client/pkg/web_client_bg.wasm.d.ts
+./webserver/web-client/pkg/web_client.d.ts
+./webserver/web-client/pkg/package.json
+./webserver/web-client/pkg/.gitignore
+./webserver/web-client/pkg/web_client.js
+./webserver/web-client/pkg/snippets/
+./webserver/web-client/pkg/snippets/web-client-69f986d2fb779fef/
+./webserver/web-client/pkg/snippets/web-client-69f986d2fb779fef/js/
+./webserver/web-client/pkg/snippets/web-client-69f986d2fb779fef/js/utils.js
+./webserver/web-client/pkg/web_client_bg.wasm
+./webserver/html/
+./webserver/html/errs/
+./webserver/html/errs/403.html
+./webserver/html/errs/404.html
+./webserver/html/webtest.html
+./webserver/html/index.html
+./webserver/html/webtest_static/
+./webserver/html/webtest_static/vantages.json
+./webserver/html/webtest_static/chart-4.3.0.umd.js
+./webserver/html/webtest_static/chart.umd.js.map
+./webserver/html/webtest_static/tabs.css
+./webserver/html/login.html
+● netdebug-webserver.service - Netdebug Webserver
+     Loaded: loaded (/etc/systemd/system/netdebug-webserver.service; enabled; vendor preset: enabled)
+     Active: activating (auto-restart) (Result: core-dump) since Thu 2024-02-29 19:19:51 UTC; 758ms ago
+    Process: 542350 ExecStart=/home/deploy/target/release/webserver --production --listen-port 443 (code=dumped, signal=ABRT)
+   Main PID: 542350 (code=dumped, signal=ABRT)
+        CPU: 278ms
+/usr/bin/gh
+/usr/bin/curl
+./target/release/netdebug-desktop
+./target/release/webserver
+./target/release/router-graph
+./scripts/
+./scripts/macos-create-app-icons.sh
+./scripts/update_all_webservers.py
+./scripts/copy-desktop-binaries.sh
+./scripts/win-create-app-icons.sh
+./scripts/prep_server.sh
+./scripts/update_webserver.sh
+./scripts/netdebug-webserver.service
+./webserver/web-client/pkg/
+./webserver/web-client/pkg/README.md
+./webserver/web-client/pkg/web_client_bg.wasm.d.ts
+./webserver/web-client/pkg/web_client.d.ts
+./webserver/web-client/pkg/package.json
+./webserver/web-client/pkg/.gitignore
+./webserver/web-client/pkg/web_client.js
+./webserver/web-client/pkg/snippets/
+./webserver/web-client/pkg/snippets/web-client-69f986d2fb779fef/
+./webserver/web-client/pkg/snippets/web-client-69f986d2fb779fef/js/
+./webserver/web-client/pkg/snippets/web-client-69f986d2fb779fef/js/utils.js
+./webserver/web-client/pkg/web_client_bg.wasm
+./webserver/html/
+./webserver/html/errs/
+./webserver/html/errs/403.html
+./webserver/html/errs/404.html
+./webserver/html/webtest.html
+./webserver/html/index.html
+./webserver/html/webtest_static/
+./webserver/html/webtest_static/vantages.json
+./webserver/html/webtest_static/chart-4.3.0.umd.js
+./webserver/html/webtest_static/chart.umd.js.map
+./webserver/html/webtest_static/tabs.css
+./webserver/html/login.html
+● netdebug-webserver.service - Netdebug Webserver
+     Loaded: loaded (/etc/systemd/system/netdebug-webserver.service; enabled; vendor preset: enabled)
+     Active: activating (auto-restart) (Result: core-dump) since Thu 2024-02-29 19:20:01 UTC; 715ms ago
+    Process: 1187589 ExecStart=/home/deploy/target/release/webserver --production --listen-port 443 (code=dumped, signal=ABRT)
+   Main PID: 1187589 (code=dumped, signal=ABRT)
+        CPU: 336ms
+/usr/bin/gh
+/usr/bin/curl
+./target/release/netdebug-desktop
+./target/release/webserver
+./target/release/router-graph
+./scripts/
+./scripts/macos-create-app-icons.sh
+./scripts/update_all_webservers.py
+./scripts/copy-desktop-binaries.sh
+./scripts/win-create-app-icons.sh
+./scripts/prep_server.sh
+./scripts/update_webserver.sh
+./scripts/netdebug-webserver.service
+./webserver/web-client/pkg/
+./webserver/web-client/pkg/README.md
+./webserver/web-client/pkg/web_client_bg.wasm.d.ts
+./webserver/web-client/pkg/web_client.d.ts
+./webserver/web-client/pkg/package.json
+./webserver/web-client/pkg/.gitignore
+./webserver/web-client/pkg/web_client.js
+./webserver/web-client/pkg/snippets/
+./webserver/web-client/pkg/snippets/web-client-69f986d2fb779fef/
+./webserver/web-client/pkg/snippets/web-client-69f986d2fb779fef/js/
+./webserver/web-client/pkg/snippets/web-client-69f986d2fb779fef/js/utils.js
+./webserver/web-client/pkg/web_client_bg.wasm
+./webserver/html/
+./webserver/html/errs/
+./webserver/html/errs/403.html
+./webserver/html/errs/404.html
+./webserver/html/webtest.html
+./webserver/html/index.html
+./webserver/html/webtest_static/
+./webserver/html/webtest_static/vantages.json
+./webserver/html/webtest_static/chart-4.3.0.umd.js
+./webserver/html/webtest_static/chart.umd.js.map
+./webserver/html/webtest_static/tabs.css
+./webserver/html/login.html
+● netdebug-webserver.service - Netdebug Webserver
+     Loaded: loaded (/etc/systemd/system/netdebug-webserver.service; enabled; vendor preset: enabled)
+     Active: activating (auto-restart) (Result: core-dump) since Thu 2024-02-29 19:20:10 UTC; 752ms ago
+    Process: 1155380 ExecStart=/home/deploy/target/release/webserver --production --listen-port 443 (code=dumped, signal=ABRT)
+   Main PID: 1155380 (code=dumped, signal=ABRT)
+        CPU: 318ms
+Updating server nyc1.topology.netdebug.com
+Running ['ssh', 'root@nyc1.topology.netdebug.com', 'systemctl', 'stop', 'netdebug-webserver'] on nyc1.topology.netdebug.com
+Running ['ssh', 'root@nyc1.topology.netdebug.com', 'su', '-', 'deploy', '-c', '~deploy/scripts/update_webserver.sh'] on nyc1.topology.netdebug.com
+Running ['ssh', 'root@nyc1.topology.netdebug.com', 'systemctl', 'restart', 'netdebug-webserver', '&&', 'sleep', '1', '&&', 'systemctl', 'status', 'netdebug-webserver'] on nyc1.topology.netdebug.com
+Done updating server nyc1.topology.netdebug.com
+##########################################################
+Updating server dal1.topology.netdebug.com
+Running ['ssh', 'root@dal1.topology.netdebug.com', 'systemctl', 'stop', 'netdebug-webserver'] on dal1.topology.netdebug.com
+Running ['ssh', 'root@dal1.topology.netdebug.com', 'su', '-', 'deploy', '-c', '~deploy/scripts/update_webserver.sh'] on dal1.topology.netdebug.com
+Running ['ssh', 'root@dal1.topology.netdebug.com', 'systemctl', 'restart', 'netdebug-webserver', '&&', 'sleep', '1', '&&', 'systemctl', 'status', 'netdebug-webserver'] on dal1.topology.netdebug.com
+Done updating server dal1.topology.netdebug.com
+##########################################################
+Updating server bay1.topology.netdebug.com
+Running ['ssh', 'root@bay1.topology.netdebug.com', 'systemctl', 'stop', 'netdebug-webserver'] on bay1.topology.netdebug.com
+Running ['ssh', 'root@bay1.topology.netdebug.com', 'su', '-', 'deploy', '-c', '~deploy/scripts/update_webserver.sh'] on bay1.topology.netdebug.com
+Running ['ssh', 'root@bay1.topology.netdebug.com', 'systemctl', 'restart', 'netdebug-webserver', '&&', 'sleep', '1', '&&', 'systemctl', 'status', 'netdebug-webserver'] on bay1.topology.netdebug.com
+Done updating server bay1.topology.netdebug.com
+##########################################################
+##################### Done 3 servers ###########################
