@@ -75,7 +75,8 @@ impl TopologyServer {
                     self.handle_infer_congestion(connection_measurements, reply_tx)
                         .await
                 },
-                StoreConnectionMeasurements { ..} => panic!("Should never try to store ConnectionMeasurements to the topology_server on webserver; use remotedbclient instead"),
+                // WHY Is this being triggered!?
+                StoreConnectionMeasurements { ..} => warn!("Should never try to store ConnectionMeasurements to the topology_server on webserver; use remotedbclient instead"),
             }
         }
         warn!("Exiting TopologyServer:rx_loop()");
