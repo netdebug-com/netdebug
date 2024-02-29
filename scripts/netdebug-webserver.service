@@ -8,7 +8,8 @@ Restart=always
 RestartSec=1
 User=root
 WorkingDirectory=/home/deploy
-ExecStart=/home/deploy/target/release/webserver --production --listen-port 443
+# NOTE the 'current' symlink needs to point to the current best version
+ExecStart=/home/deploy/latest/current/release/webserver --production --listen-port 443
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=netdebug-webserver

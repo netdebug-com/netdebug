@@ -87,6 +87,9 @@ runs:
       shell: bash
     - run: cd electron && npm run test
       shell: bash
+    # now the same for the webserver for the ./webserver/netdebug_webui/dist directory
+    - run: cd webserver/netdebug_webui && npm ci && npm run build
+      shell: bash
     # The `npm run package` step will surface any typescript type errors.
     # There must be an easier way to do so but I haven't found one yet.
     # Note, that `run test` will find typescript errors only in files that

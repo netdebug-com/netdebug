@@ -34,4 +34,12 @@ curl -L -o pre-prod-release.tgz "$asset" \
    -H "Accept: application/octet-stream" \
    -H "Authorization: Bearer $ACCESS_TOKEN"
 
+# This will extact into a $VERSION subdirectory
 tar xzvf pre-prod-release.tgz
+# Now setup the symlink
+#   All files are in the same subdir so just grab the last to get the
+#   versioned directory.
+dir=`tar tzf pre-prod-release.tgz | tail -1 | cut -d/ -f1`
+# the -f here is important to overwrite the previous link
+echo Marking \"$dir\" as the current version
+ln -sf $dir current
