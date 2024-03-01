@@ -21,7 +21,7 @@ def ssh_cmd(server: str, cmd: [str]):
 
 for server in servers:
     # Assumes that a server has already been manually prep'd via
-    # ./scripts/prep_server.sh and has already successfully unpacked
+    # ./current/scripts/prep_server.sh and has already successfully unpacked
     # a deployment tarball (e.g., with ./$VERSION/targets/release/webserver) in
     # ~deploy
     #
@@ -33,8 +33,11 @@ for server in servers:
     # TODO: need to consider a drain/undrain here so that user traffic to the console
     # isn't effected
     ssh_cmd(server, ["systemctl", "stop", "netdebug-webserver"])
+    # NOTE: this uses the *old* version's update script to install the new version
+    #   as long as you're not developing this file, it should be ok, but if you are,
+    #   you may need to update manually
     ssh_cmd(server, ["su", "-", RunAsUser, "-c",
-            "~deploy/scripts/update_webserver.sh"])
+            "~deploy/current/scripts/update_webserver.sh"])
     # add the sleep to avoid a race
     # tried 'systemctl is-failed $foo' but it didn't seem to exit with the right
     # error code to trigger the check=False part of subprocess.run()
