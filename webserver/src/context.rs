@@ -109,6 +109,7 @@ impl WebServerContext {
                 .unwrap(),
             )
         };
+        let remotedb_client_clone = remotedb_client.clone();
         let context = WebServerContext {
             user_db: UserDb::new(),
             html_root: args.html_root.clone(),
@@ -133,6 +134,7 @@ impl WebServerContext {
                 topology_server::TopologyServer::spawn_with_tx_rx(
                     topology_server_tx.clone(),
                     topology_server_rx,
+                    remotedb_client_clone,
                 )
                 .await
                 .unwrap();

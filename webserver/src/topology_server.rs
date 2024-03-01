@@ -25,28 +25,44 @@ use log::{debug, warn};
 use tokio::sync::mpsc::{channel, Sender};
 
 use crate::congestion_analysis::congestion_summary_from_measurements;
+use crate::remotedb_client::{RemoteDBClientMessages, RemoteDBClientSender, StorageSourceType};
 pub struct TopologyServer {
     tx: TopologyServerSender,
     rx: TopologyServerReceiver,
+    remotedb_client: Option<RemoteDBClientSender>,
+    storage_client_uuid: uuid::Uuid,
 }
 
 impl TopologyServer {
     async fn new(
         tx: TopologyServerSender,
         rx: TopologyServerReceiver,
+        remotedb_client: Option<RemoteDBClientSender>,
     ) -> tokio_rusqlite::Result<TopologyServer> {
-        Ok(TopologyServer { tx, rx })
+        // generate a random client ID for when we store our connection measurements
+        let storage_client_uuid = uuid::Uuid::new_v4();
+        Ok(TopologyServer {
+            tx,
+            rx,
+            remotedb_client,
+            storage_client_uuid,
+        })
     }
-    pub async fn spawn(buffer_size: usize) -> tokio_rusqlite::Result<TopologyServerSender> {
+
+    pub async fn spawn(
+        buffer_size: usize,
+        remotedb_client: Option<RemoteDBClientSender>,
+    ) -> tokio_rusqlite::Result<TopologyServerSender> {
         let (tx, rx) = channel(buffer_size);
-        TopologyServer::spawn_with_tx_rx(tx, rx).await
+        TopologyServer::spawn_with_tx_rx(tx, rx, remotedb_client).await
     }
 
     pub async fn spawn_with_tx_rx(
         tx: TopologyServerSender,
         rx: TopologyServerReceiver,
+        remotedb_client: Option<RemoteDBClientSender>,
     ) -> tokio_rusqlite::Result<TopologyServerSender> {
-        let topology_server = TopologyServer::new(tx.clone(), rx).await?;
+        let topology_server = TopologyServer::new(tx.clone(), rx, remotedb_client).await?;
         tokio::spawn(async move {
             topology_server.rx_loop().await;
         });
@@ -74,9 +90,25 @@ impl TopologyServer {
                 } => {
                     self.handle_infer_congestion(connection_measurements, reply_tx)
                         .await
-                },
-                // WHY Is this being triggered!?
-                StoreConnectionMeasurements { ..} => warn!("Should never try to store ConnectionMeasurements to the topology_server on webserver; use remotedbclient instead"),
+                }
+                // NOTE: this is triggered by measurements that the webserver itself makes, not measurements that pass through it
+                StoreConnectionMeasurements {
+                    connection_measurements,
+                } => {
+                    if let Some(remotedb_client) = &self.remotedb_client {
+                        send_or_log_async!(
+                            remotedb_client,
+                            "handle_store",
+                            RemoteDBClientMessages::StoreConnectionMeasurements {
+                                connection_measurements,
+                                client_uuid: self.storage_client_uuid,
+                                source_type: StorageSourceType::TopologyServer,
+                            }
+                        )
+                        .await
+                    }
+                    // don't log if remotedb_client isn't set; probably for testing
+                }
             }
         }
         warn!("Exiting TopologyServer:rx_loop()");
