@@ -158,8 +158,12 @@ let isInPanicMsg = false;
 
 function spawn_desktop_binary(command: string) {
   const args: string[] = [
-    // default to connecting to a local webserver/topology server on ws://localhost:3030/desktop
+    // default to connecting to topology server on wss://topology.netdebug.com:443/desktop
   ];
+  // allow a developer to pass extra " "-separated args to the desktop subprocess via $CANARY_OPTIONS
+  if (process.env.CANARY_OPTIONS) {
+    args.push(...process.env.CANARY_OPTIONS.split(" "));
+  }
   const options: SpawnOptions = { stdio: "pipe", windowsHide: true };
   desktopProcess = spawn(command, args, options);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -188,7 +192,7 @@ function spawn_desktop_binary(command: string) {
     console.error("Failed to spawn background process:", err);
   });
   desktopProcess.on("spawn", () => {
-    console.log("Successfully spawned background process");
+    console.log("Successfully spawned background process with args ", args);
   });
   // TODO: should we do anything with stdout??
   desktopProcess.stderr.setEncoding("utf-8");
