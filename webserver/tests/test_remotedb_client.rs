@@ -3,7 +3,7 @@ use common_wasm::get_git_hash_version;
 use indexmap::IndexMap;
 use libconntrack_wasm::topology_server_messages::DesktopLogLevel;
 use libconntrack_wasm::ConnectionMeasurements;
-use libwebserver::remotedb_client::{RemoteDBClient, RemoteDBClientMessages};
+use libwebserver::remotedb_client::{RemoteDBClient, RemoteDBClientMessages, StorageSourceType};
 use pg_embed::pg_fetch::{PgFetchSettings, PG_V13};
 use pg_embed::pg_types::PgResult;
 use pg_embed::postgres::{PgEmbed, PgSettings};
@@ -88,6 +88,7 @@ async fn test_remotedb_client() {
             &client,
             &ConnectionMeasurements::make_mock(),
             &Uuid::new_v4(),
+            &StorageSourceType::Desktop,
         )
         .await
         .unwrap();

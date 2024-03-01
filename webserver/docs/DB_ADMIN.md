@@ -29,7 +29,7 @@
             local_ip TEXT, remote_ip TEXT, local_port INT, remote_port INT, ip_protocol SMALLINT, local_hostname TEXT,  remote_hostname TEXT,  
             probe_report_summary TEXT,  user_annotation TEXT, user_agent TEXT, associated_apps TEXT, 
             close_has_started BOOLEAN, four_way_close_done BOOLEAN, start_tracking_time TIMESTAMPTZ, 
-            last_packet_time TIMESTAMPTZ, tx_loss BIGINT, rx_loss BIGINT, tx_stats TEXT, rx_stats TEXT, time TIMESTAMPTZ, client_uuid UUID);
+            last_packet_time TIMESTAMPTZ, tx_loss BIGINT, rx_loss BIGINT, tx_stats TEXT, rx_stats TEXT, time TIMESTAMPTZ, client_uuid UUID, source_type TEXT);
     ```
 2. Mark them as a 'hypertable' which tells the backend to treat it with timeseries optimizations:
     ```
