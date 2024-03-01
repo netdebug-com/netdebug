@@ -1,4 +1,4 @@
-use std::{env, error::Error, path::PathBuf, time::Duration};
+use std::{env, error::Error, fmt::Display, path::PathBuf, time::Duration};
 
 use chrono::{DateTime, Utc};
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration, StatType, Units};
@@ -6,6 +6,7 @@ use indexmap::IndexMap;
 use libconntrack::utils::PerfMsgCheck;
 use libconntrack_wasm::{topology_server_messages::DesktopLogLevel, ConnectionMeasurements};
 use log::{error, info, warn};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::channel;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -54,11 +55,28 @@ const INITIAL_RETRY_TIME_MS: u64 = 100;
 pub type RemoteDBClientSender = tokio::sync::mpsc::Sender<PerfMsgCheck<RemoteDBClientMessages>>;
 pub type RemoteDBClientReceiver = tokio::sync::mpsc::Receiver<PerfMsgCheck<RemoteDBClientMessages>>;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// When we log a ConnectionMeasurement, is the source a desktop or a topology server?
+pub enum StorageSourceType {
+    Desktop,
+    TopologyServer,
+}
+
+impl Display for StorageSourceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use StorageSourceType::*;
+        match self {
+            Desktop => write!(f, "Desktop"),
+            TopologyServer => write!(f, "Topology"),
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub enum RemoteDBClientMessages {
     StoreConnectionMeasurements {
         connection_measurements: Box<ConnectionMeasurements>,
         client_uuid: Uuid,
+        source_type: StorageSourceType,
     },
     StoreCounters {
         counters: IndexMap<String, u64>,
@@ -170,11 +188,13 @@ impl RemoteDBClient {
                     StoreConnectionMeasurements {
                         connection_measurements,
                         client_uuid,
+                        source_type,
                     } => {
                         self.handle_store_connection_measurement(
                             &client,
                             connection_measurements,
                             client_uuid,
+                            source_type,
                         )
                         .await
                     }
@@ -339,7 +359,8 @@ impl RemoteDBClient {
                         tx_stats TEXT,
                         rx_stats TEXT,
                         time TIMESTAMPTZ,
-                        client_uuid UUID
+                        client_uuid UUID,
+                        source_type TEXT
                     )",
                     self.connections_table_name
                 )
@@ -388,6 +409,7 @@ impl RemoteDBClient {
         client: &Client,
         m: &ConnectionMeasurements,
         client_uuid: &Uuid,
+        source_type: &StorageSourceType,
     ) -> Result<(), tokio_postgres::Error> {
         // store a bunch of more complex members as JSON blobs, for now
         // NOTE: these .unwrap()s are all safe b/c to get here all of the data needs to be
@@ -424,8 +446,10 @@ impl RemoteDBClient {
                     tx_stats, 
                     rx_stats, 
                     time,
-                    client_uuid
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19 , $20, $21)"#,
+                    client_uuid,
+                    source_type
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 
+                        $14, $15, $16, $17, $18, $19 , $20, $21, $22)"#,
                     self.connections_table_name
                 )
                 .as_str(),
@@ -451,7 +475,8 @@ impl RemoteDBClient {
                     &tx_stats,
                     &rx_stats,
                     &now,
-                    &client_uuid
+                    &client_uuid,
+                    &source_type.to_string(),
                 ],
             )
             .await?;

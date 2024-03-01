@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     context::Context,
-    remotedb_client::{RemoteDBClientMessages, RemoteDBClientSender},
+    remotedb_client::{RemoteDBClientMessages, RemoteDBClientSender, StorageSourceType},
 };
 
 const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 4096;
@@ -234,7 +234,8 @@ async fn handle_store_measurements(
             "handle_store",
             RemoteDBClientMessages::StoreConnectionMeasurements {
                 connection_measurements,
-                client_uuid
+                client_uuid,
+                source_type: StorageSourceType::Desktop,
             }
         )
         .await
