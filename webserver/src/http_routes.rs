@@ -1,11 +1,9 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use crate::context::Context;
 use crate::{desktop_websocket, webtest};
-use axum::body::Body;
 use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
-use axum::http::StatusCode;
-use axum::response::{self, IntoResponse};
+use axum::response::IntoResponse;
 use axum::routing;
 use axum::Router;
 use axum_extra::TypedHeader;
@@ -113,6 +111,10 @@ async fn webtest_ws_handler(
     ws.on_upgrade(move |socket| webtest::handle_websocket(socket, context, user_agent, addr))
 }
 
+fn make_uuid_from_ip(ip: IpAddr) -> Uuid {
+    Uuid::new_v3(&Uuid::NAMESPACE_DNS, ip.to_string().as_bytes())
+}
+
 async fn desktop_ws_handler(
     ws: WebSocketUpgrade,
     user_agent: Option<TypedHeader<headers::UserAgent>>,
@@ -125,41 +127,38 @@ async fn desktop_ws_handler(
     } else {
         String::from("Unknown browser")
     };
-    if let Some(auth) = auth {
+    // for now, just warn!() if there's no auth and make up a client_id; later we will enforce
+    let client_id = if let Some(auth) = auth {
         if let Ok(client_id) = Uuid::try_parse(auth.token()) {
             info!(
                 "Desktop Websocket request from {}, client_id {}",
                 addr.ip(),
                 client_id
             );
-            // finalize the upgrade process by returning upgrade callback.
-            ws.on_upgrade(move |socket| {
-                desktop_websocket::handle_desktop_websocket(
-                    socket, context, client_id, user_agent, addr,
-                )
-            })
+            client_id
         } else {
+            let client_id = make_uuid_from_ip(addr.ip());
             warn!(
-                "Received an invalid UUID from {}. Bad ID: `{}`",
+                "Received an invalid UUID from {}. Bad ID: `{}` - making an IP-based one {}",
                 addr.ip(),
-                auth.token()
+                auth.token(),
+                client_id
             );
-            response::Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::empty())
-                .unwrap()
+            client_id
         }
     } else {
-        warn!("Received no auth header / client UUID from {}", addr.ip());
-        // TODO: this should really be handled at a higher layer and not in
-        // an individual handler function. But it will do for now.
-        response::Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
-            // When returning a 401 unauthorized, we
-            .header("WWW-Authenticate", "Bearer")
-            .body(Body::empty())
-            .unwrap()
-    }
+        let client_id = make_uuid_from_ip(addr.ip());
+        warn!(
+            "Received no auth header / client UUID from {} - making up an IP-based one - {}",
+            addr.ip(),
+            client_id
+        );
+        client_id
+    };
+    // finalize the upgrade process by returning upgrade callback.
+    ws.on_upgrade(move |socket| {
+        desktop_websocket::handle_desktop_websocket(socket, context, client_id, user_agent, addr)
+    })
 }
 
 async fn get_counters_handler(State(context): State<Context>) -> String {
