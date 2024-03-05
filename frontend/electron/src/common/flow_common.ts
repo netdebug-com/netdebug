@@ -1,10 +1,12 @@
 import { GridColDef } from "@mui/x-data-grid";
-import { neverReached, prettyPrintSiUnits, sortCmpWithNull } from "../utils";
 import {
+  neverReached,
+  prettyPrintSiUnits,
+  sortCmpWithNull,
   AggregateStatEntry,
   AggregateStatKind,
   TrafficStatsSummary,
-} from "../netdebug_types";
+} from "@netdebug/common";
 
 const FLEX_VALUE_FOR_NUMERIC_COLS = 15;
 export function getDefaultGridColDefWithUnits(unitSuffix: string): {

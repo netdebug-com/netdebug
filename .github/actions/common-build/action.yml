@@ -81,20 +81,22 @@ runs:
         node-version: 18
         cache: "npm"
         cache-dependency-path: frontend/package-lock.json
-    - run: cd frontend && npm ci
+    - name: "Install required node modules"
+      run: cd frontend && npm ci
       shell: bash
-    - run: cd frontend/electron && npm run lint
+    - name: Build common node module so other modules can use it
+      run: cd frontend/common && npm run test && npm run lint && npm run build
       shell: bash
-    - run: cd frontend/electron && npm run test
+    # Run electron specific stuff
+    - run: cd frontend/electron && npm run lint && npm run test
       shell: bash
-    # now the same for the webserver for the ./webserver/netdebug_webui/dist directory
-    - run: cd frontend/console && npm run build
+    # Run typescript compiler/typechecker in electron
+    # TODO: I think the `npm run build` will run the type checker in
+    # console & common but should verify.
+    - run: cd frontend/electron && npm exec tsc -- --noEmit
       shell: bash
-    # The `npm run package` step will surface any typescript type errors.
-    # There must be an easier way to do so but I haven't found one yet.
-    # Note, that `run test` will find typescript errors only in files that
-    # are included in tests....
-    - run: cd frontend/electron && npm run package
+    # Run console specific stuff
+    - run: cd frontend/console && npm run build && npm run lint
       shell: bash
     - run: echo "🍏 This job's status is ${{ job.status }}."
       shell: bash

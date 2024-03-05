@@ -5,7 +5,7 @@ import {
   CongestionLatencyPair,
   ConnectionKey,
   ConnectionMeasurements,
-} from "../netdebug_types";
+} from "@netdebug/common";
 import TableContainer from "@mui/material/TableContainer";
 import Paper from "@mui/material/Paper";
 import Table from "@mui/material/Table";
@@ -18,7 +18,7 @@ import {
   headerStyle,
   headerStyleWithWidth,
   prettyPrintSiUnits,
-} from "../utils";
+} from "@netdebug/common";
 import { FlowSummary } from "../components/FlowSummary";
 import { useLoaderData } from "react-router";
 import { fetchAndCheckResult } from "../common/data_loading";

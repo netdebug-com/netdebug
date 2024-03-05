@@ -1,32 +1,10 @@
 // check how long it's been since our last message and send now or later
 
-import { MutableRefObject } from "react";
 import { SxProps } from "@mui/material";
 import { ConnectionKey, ConnectionMeasurements } from "./netdebug_types";
 
 export function desktop_api_url(path: string): string {
   return "http://localhost:33434/api/" + path;
-}
-
-// depending on our SLAs
-export function periodic_with_sla(
-  label: string,
-  timeout_id: MutableRefObject<NodeJS.Timeout>,
-  last_send: MutableRefObject<number>,
-  min: number,
-  max: number,
-  callback: () => void,
-) {
-  const send_delta = performance.now() - last_send.current;
-  if (send_delta <= min) {
-    timeout_id.current = setTimeout(callback, min - send_delta);
-  } else {
-    timeout_id.current = null;
-    callback();
-    if (send_delta > max) {
-      console.warn(label + " reply delayed beyond SLA " + max + "ms");
-    }
-  }
 }
 
 /// Given a number return a scale and suffix for the appropriate SI magnitude.
@@ -121,6 +99,7 @@ export function reshapeCounter(counter_map: Map<string, number>): CounterRow[] {
     if (!rowMap.has(name)) {
       rowMap.set(name, { id: name });
     }
+    // @ts-expect-error rowMap.get()'s type says it could return undefined but we set it in the line above
     rowMap.get(name)[what] = value;
   }
   return Array.from(rowMap.values()).sort((a, b) => a.id.localeCompare(b.id));

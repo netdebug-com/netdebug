@@ -1,9 +1,10 @@
 {
-    "name": "netdebug-frontend",
+    "name": "netdebug",
     "version": "0.0.1",
     "description": "parent of frontend code",
     "author": "",
     "workspaces": [
+        "common",
         "console",
         "electron"
     ]

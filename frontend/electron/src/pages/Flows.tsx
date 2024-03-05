@@ -1,11 +1,11 @@
 import React, { useState } from "react";
-import { ConnectionMeasurements } from "../netdebug_types";
+import { ConnectionMeasurements } from "@netdebug/common";
 import {
   connIdString,
   dataGridDefaultSxProp,
   desktop_api_url,
   sortCmpWithNull,
-} from "../utils";
+} from "@netdebug/common";
 import { SwitchHelper } from "../components/SwitchHelper";
 import { Box } from "@mui/material";
 import {

@@ -1,4 +1,4 @@
-import { desktop_api_url } from "../utils";
+import { desktop_api_url } from "@netdebug/common";
 import { useInterval } from "react-use";
 import { useEffect, useState } from "react";
 import {
@@ -11,7 +11,7 @@ import Stack from "@mui/material/Stack";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import { styled } from "@mui/material/styles";
-import { ChartJsBandwidth, NetworkInterfaceState } from "../netdebug_types";
+import { ChartJsBandwidth, NetworkInterfaceState } from "@netdebug/common";
 import { Scatter } from "react-chartjs-2";
 import {
   Chart as ChartJS,

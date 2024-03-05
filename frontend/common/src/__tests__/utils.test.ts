@@ -56,23 +56,23 @@ test("reshapeCounter", () => {
 
   const foo = output.find((element) => element.id == "foo.bar.baz");
   expect(foo).toBeDefined();
-  expect(foo.all).toBe(42);
-  expect(foo.t60).toBe(61);
-  expect(foo.t600).toBe(601);
-  expect(foo.t3600).toBe(3601);
+  expect(foo!.all).toBe(42);
+  expect(foo!.t60).toBe(61);
+  expect(foo!.t600).toBe(601);
+  expect(foo!.t3600).toBe(3601);
 
   const asdf = output.find((element) => element.id == "asdf.SUM");
   expect(asdf).toBeDefined();
-  expect(asdf.t60).toBe(661);
-  expect(asdf.t600).toBe(6601);
-  expect(asdf.t3600).toBeUndefined();
-  expect(asdf.all).toBeUndefined();
+  expect(asdf!.t60).toBe(661);
+  expect(asdf!.t600).toBe(6601);
+  expect(asdf!.t3600).toBeUndefined();
+  expect(asdf!.all).toBeUndefined();
 
   const noSuffix = output.find(
     (element) => element.id == "a_counter_without_suffix",
   );
   expect(noSuffix).toBeDefined();
-  expect(noSuffix.all).toBe(2323);
+  expect(noSuffix!.all).toBe(2323);
 });
 
 test("formatValue", () => {

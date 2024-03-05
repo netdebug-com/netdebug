@@ -5,7 +5,7 @@ import {
   dataGridDefaultSxProp,
   reshapeCounter,
   desktop_api_url,
-} from "../utils";
+} from "@netdebug/common";
 import { SwitchHelper } from "../components/SwitchHelper";
 import { Box } from "@mui/material";
 import { useLoaderData, useRevalidator } from "react-router";

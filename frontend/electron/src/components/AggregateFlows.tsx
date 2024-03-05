@@ -1,6 +1,9 @@
 import React, { useState } from "react";
-import { AggregateStatEntry, AggregateStatKind } from "../netdebug_types";
-import { dataGridDefaultSxProp } from "../utils";
+import {
+  dataGridDefaultSxProp,
+  AggregateStatEntry,
+  AggregateStatKind,
+} from "@netdebug/common";
 import { SwitchHelper } from "../components/SwitchHelper";
 import { Box } from "@mui/material";
 import { DataGrid, GridToolbar } from "@mui/x-data-grid";

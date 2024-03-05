@@ -59,6 +59,7 @@
         "@mui/icons-material": "^5.15.10",
         "@mui/material": "^5.14.16",
         "@mui/x-data-grid": "^6.18.2",
+        "@netdebug/common": "^0.0.0",
         "@oznu/ws-connect": "^2.2.0",
         "apexcharts": "^3.45.2",
         "electron-is-dev": "^2.0.0",
