@@ -43,9 +43,13 @@ axum-extra = { workspace = true, features = ["typed-header"] }
 axum-server = { workspace = true, features = ["tls-rustls"] }
 chrono = "0.4.26"
 clap = { workspace = true }
+clerk-rs = "0.2.3"
 common = { path = "../common" }
 common-wasm = { path = "../common/wasm" }
 console-subscriber = { workspace = true }
+# TODO: think about refactoring this file/structs so
+# that the webserver isn't importing stuff from the desktop
+desktop_common = { path = "../desktop/desktop_common" }
 # move back to the public branch once https://github.com/JulianSchmid/etherparse/pull/66 is merged
 # NOTE: 0.14.0 looks like it breaks partial IpHeader::from_slice() parsing
 # See https://github.com/JulianSchmid/etherparse/issues/46
@@ -59,10 +63,12 @@ libconntrack-wasm = { path = "../libconntrack-wasm" }
 log = "0.4.18"
 indexmap = { workspace = true, features = ["serde"] }
 itertools = "0.11.0"
+jsonwebtoken = "9.2.0"
 native-tls = "0.2"
 pcap = "1.1.0"
 postgres-native-tls = "0.5"
 pwhash = "1.0.0"
+reqwest = "0.11.24"
 rand = "0.8.5"
 rusqlite = { version = "0.29.0", features = ["bundled", "blob"] }
 tokio-rusqlite = "0.4.0"
@@ -72,6 +78,7 @@ tokio-postgres = { version = "0.7", features = [
 ] }
 serde = { version = "1.0.163", features = ["derive"] }
 serde_json = "1.0.96"
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true, features = ["fs"] }
 tracing = { workspace = true }
@@ -84,3 +91,10 @@ pg-embed = { git = "https://github.com/faokunega/pg-embed/", default-features = 
     "rt_tokio",
     "rt_tokio_migrate",
 ] }
+
+# needed by build.rs
+[build-dependencies]
+common-wasm = { path = "../common/wasm" }
+desktop_common = { path = "../desktop/desktop_common" }
+libconntrack-wasm = { path = "../libconntrack-wasm" }
+typescript-type-def = { workspace = true }

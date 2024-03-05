@@ -1,62 +1,38 @@
+use desktop_common::GuiApiTypes;
 #[cfg(windows)]
 use std::env;
-#[cfg(windows)]
 use std::path::Path;
-/*
-use std::process::Command;
-*/
+
+use typescript_type_def::{write_definition_file, DefinitionFileOptions};
+
+const TYPESCRIPT_OUT_FILE: &str = "netdebug_webui/src/netdebug_types.ts";
+
+/**
+ * This command generates the typescript bindings from the types listed in
+ * ExportedTypes to the file in the src directory of the electron code.
+ *
+ * That TYPESCRIPT_OUT_FILE is checked in so we should be able to track changes of it.
+ */
+
+fn generate_typescript_types() {
+    // NOTE: if we use Path::new(), things magically work with windows
+    // if we just use the raw &str, they do not
+    let mut outfile = std::fs::File::create(Path::new(TYPESCRIPT_OUT_FILE)).unwrap_or_else(|_| {
+        panic!(
+            "Can't write to {} from {}",
+            TYPESCRIPT_OUT_FILE,
+            std::env::current_dir().unwrap().to_string_lossy()
+        )
+    });
+    let options = DefinitionFileOptions {
+        root_namespace: None,
+        ..Default::default()
+    };
+    write_definition_file::<_, GuiApiTypes>(&mut outfile, options).unwrap();
+}
 
 fn main() {
-    /***
-     * What a fucking waste of time
-     *
-     * it's really hard to get this to work right - check out :
-     *
-     * https://github.com/rustwasm/wasm-pack/issues/251
-     *
-     * this code as written actually hangs trying to lock target/debug/.cargo-lock
-        let src_dir = "web-client";
-        // println!("cargo:rerun-if-changed={}/src/",src_dir);
-        let out_dir = env::var_os("OUT_DIR").unwrap();
-        let build_type = if "release".to_string() == env::var("PROFILE").unwrap() {
-            "--release"
-        } else {
-            "--dev"
-        };
-        let dest_path = Path::new(&out_dir).join("pkg");
-        let dest_path_str = dest_path.clone().into_os_string().into_string().unwrap();
-        println!("mydebug={}-outdir={}", build_type, dest_path_str);
-        let mut cmd = Command::new("wasm-pack");
-        let mut cmd = cmd.args(&["build", "--target", "web", build_type,
-                               // "--out-dir", &dest_path_str,
-                               src_dir]);
-        println!("mydebug={:?}", cmd);
-        let output = cmd
-            .output()
-            .expect("To build wasm files successfully");
-
-        println!("mydebug={:?}", output);
-
-        if !output.status.success() {
-            panic!(
-                "Error while compiling:\n{}\n\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-
-        let js_file = dest_path.join("web_client.js");
-        let wasm_file = dest_path.join("web_client_bg.wasm");
-
-        for file in &[&js_file, &wasm_file] {
-            let file = std::fs::metadata(file).expect("file to exist");
-            assert!(file.is_file());
-        }
-
-        println!("cargo:rustc-env=PROJECT_NAME_JS={}", js_file.display());
-        println!("cargo:rustc-env=PROJECT_NAME_WASM={}", wasm_file.display());
-    */
-
+    generate_typescript_types();
     #[cfg(windows)]
     {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
