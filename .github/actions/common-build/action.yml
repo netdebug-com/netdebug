@@ -79,22 +79,23 @@ runs:
       uses: actions/setup-node@v3
       with:
         node-version: 18
-        cache: "npm"
-        cache-dependency-path: electron/package-lock.json
-    - run: cd electron && npm ci
+        #TODO temporarily disabling cache. -- more changes coming
+        #cache: "npm"
+        #cache-dependency-path: electron/package-lock.json
+    - run: cd frontend/electron && npm ci
       shell: bash
-    - run: cd electron && npm run lint
+    - run: cd frontend/electron && npm run lint
       shell: bash
-    - run: cd electron && npm run test
+    - run: cd frontend/electron && npm run test
       shell: bash
     # now the same for the webserver for the ./webserver/netdebug_webui/dist directory
-    - run: cd webserver/netdebug_webui && npm ci && npm run build
+    - run: cd frontend/console && npm ci && npm run build
       shell: bash
     # The `npm run package` step will surface any typescript type errors.
     # There must be an easier way to do so but I haven't found one yet.
     # Note, that `run test` will find typescript errors only in files that
     # are included in tests....
-    - run: cd electron && npm run package
+    - run: cd frontend/electron && npm run package
       shell: bash
     - run: echo "🍏 This job's status is ${{ job.status }}."
       shell: bash

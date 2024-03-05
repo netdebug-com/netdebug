@@ -9,7 +9,7 @@ set -e
 
 # Hacky way to make sure we are called from project
 # root dir :-)
-test -d electron
+test -d frontend/electron
 
 UNIVERSAL_DESKTOP_OUTDIR=target/release/mac-os-universal
 
@@ -32,11 +32,11 @@ lipo -create \
     -output $UNIVERSAL_DESKTOP_OUTDIR/netdebug-desktop
 
 # delete the old name if it's there
-rm -f electron/extra-resources/desktop
-# Now copy the universal binary into electron
-cp $UNIVERSAL_DESKTOP_OUTDIR/netdebug-desktop electron/extra-resources/
+rm -f frontend/electron/extra-resources/desktop
+# Now copy the universal binary into frontend/electron
+cp $UNIVERSAL_DESKTOP_OUTDIR/netdebug-desktop frontend/electron/extra-resources/
 
 # Finally use electron-forge to build the universal .app bundle of the GUI
-cd electron 
+cd frontend/electron 
 npm run make -- --arch=universal
 

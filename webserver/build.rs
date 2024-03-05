@@ -5,7 +5,9 @@ use std::path::Path;
 
 use typescript_type_def::{write_definition_file, DefinitionFileOptions};
 
-const TYPESCRIPT_OUT_FILE: &str = "netdebug_webui/src/netdebug_types.ts";
+// FIXME: should refactor the typescript output into a shared crate, not
+// separately in webserver/build.rs and desktop/build.rs
+const TYPESCRIPT_OUT_FILE: &str = "../frontend/console/src/netdebug_types.ts";
 
 /**
  * This command generates the typescript bindings from the types listed in
