@@ -7,7 +7,7 @@ use std::{
 use axum::{extract::State, Router};
 use axum::{response, routing};
 use common_wasm::timeseries_stats::{CounterProvider, CounterProviderWithTimeUpdate};
-use desktop_common::CongestedLinksReply;
+use gui_types::CongestedLinksReply;
 use libconntrack::{
     connection_tracker::{ConnectionTrackerMsg, TimeMode},
     dns_tracker::DnsTrackerMessage,

@@ -1,6 +1,6 @@
 # Everything in this package must compile for both native rust *and* WASM
 [package]
-name = "desktop_common"
+name = "gui_types"
 version = "0.1.0"
 edition = "2021"
 
