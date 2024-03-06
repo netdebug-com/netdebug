@@ -4,14 +4,14 @@ import {
   desktop_api_url,
   sortCmpWithNull,
 } from "@netdebug/common";
-import { fetchAndCheckResult } from "../common/data_loading";
-import { SwitchHelper } from "../components/SwitchHelper";
+import { fetchAndCheckResult } from "@netdebug/common";
+import { SwitchHelper } from "@netdebug/common";
 import { Alert, Box } from "@mui/material";
 import { DataGrid, GridToolbar } from "@mui/x-data-grid";
-import { getColumns, getNameFromAggKind } from "../common/flow_common";
+import { getColumns, getNameFromAggKind } from "@netdebug/common";
 import { useLoaderData, useRevalidator } from "react-router";
-import { usePeriodicRefresh } from "../usePeriodicRefresh";
-import { ErrorMessage } from "../components/ErrorMessage";
+import { usePeriodicRefresh } from "@netdebug/common";
+import { ErrorMessage } from "@netdebug/common";
 import { AggregateStatEntry } from "@netdebug/common";
 
 export const flowsByHostLatencyLoader = async () => {

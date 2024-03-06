@@ -19,9 +19,9 @@ import {
   headerStyleWithWidth,
   prettyPrintSiUnits,
 } from "@netdebug/common";
-import { FlowSummary } from "../components/FlowSummary";
+import { FlowSummary } from "@netdebug/common";
 import { useLoaderData } from "react-router";
-import { fetchAndCheckResult } from "../common/data_loading";
+import { fetchAndCheckResult } from "@netdebug/common";
 
 function toFlowKey(key: ConnectionKey): string {
   return (

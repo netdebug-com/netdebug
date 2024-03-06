@@ -99,7 +99,6 @@ export function reshapeCounter(counter_map: Map<string, number>): CounterRow[] {
     if (!rowMap.has(name)) {
       rowMap.set(name, { id: name });
     }
-    // @ts-expect-error rowMap.get()'s type says it could return undefined but we set it in the line above
     rowMap.get(name)[what] = value;
   }
   return Array.from(rowMap.values()).sort((a, b) => a.id.localeCompare(b.id));

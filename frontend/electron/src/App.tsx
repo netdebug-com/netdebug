@@ -25,7 +25,7 @@ import AboutLayout from "./layouts/AboutLayout";
 import RootLayout from "./layouts/RootLayout";
 import FlowsLayout from "./layouts/FlowsLayout";
 import RouterDelays, { routerDelayLoader } from "./pages/RouteDelays";
-import { DefaultErrorElement } from "./components/DefaultErrorElement";
+import { DefaultErrorElement } from "@netdebug/common";
 import FlowsByHostLatency, {
   flowsByHostLatencyLoader,
 } from "./pages/FlowsByHost";

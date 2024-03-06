@@ -11,15 +11,15 @@ import {
   LineElement,
   Title,
 } from "chart.js";
-import { SwitchHelper } from "../components/SwitchHelper";
+import { SwitchHelper } from "@netdebug/common";
 import {
   desktop_api_url,
   getSiScale,
   prettyPrintSiUnits,
 } from "@netdebug/common";
 import { useLoaderData, useRevalidator } from "react-router";
-import { usePeriodicRefresh } from "../usePeriodicRefresh";
-import { fetchAndCheckResult } from "../common/data_loading";
+import { usePeriodicRefresh } from "@netdebug/common";
+import { fetchAndCheckResult } from "@netdebug/common";
 
 ChartJS.register(
   PointElement,

@@ -4,7 +4,7 @@ import { desktop_api_url } from "@netdebug/common";
 import { Box } from "@mui/material";
 import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
 import { useLoaderData, useRevalidator } from "react-router";
-import { usePeriodicRefresh } from "../usePeriodicRefresh";
+import { usePeriodicRefresh } from "@netdebug/common";
 
 /*********************************************************** */
 

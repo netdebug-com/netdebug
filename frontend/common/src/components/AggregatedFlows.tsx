@@ -1,16 +1,13 @@
 import React, { useState } from "react";
-import {
-  dataGridDefaultSxProp,
-  AggregateStatEntry,
-  AggregateStatKind,
-} from "@netdebug/common";
+import { AggregateStatEntry, AggregateStatKind } from "../netdebug_types";
 import { SwitchHelper } from "../components/SwitchHelper";
 import { Box } from "@mui/material";
 import { DataGrid, GridToolbar } from "@mui/x-data-grid";
-import { getColumns, getNameFromAggKind } from "../common/flow_common";
+import { getColumns, getNameFromAggKind } from "../flow_common";
 import { useLoaderData, useRevalidator } from "react-router";
-import { usePeriodicRefresh } from "../usePeriodicRefresh";
+import { usePeriodicRefresh } from "../hooks/usePeriodicRefresh";
 import { ErrorMessage } from "./ErrorMessage";
+import { dataGridDefaultSxProp } from "src/utils";
 
 const columns = getColumns([
   "id",
@@ -36,7 +33,7 @@ export interface AggregatedFlowsProps {
 // TODO: it's convenient to just use `useLoaderData` here. But if ever want to
 // use this component w/o react-router loaders, it's easy enough to change this
 // and simply pass the `statsEntries` as a prop.
-const AggregatedFlows: React.FC<AggregatedFlowsProps> = (props) => {
+export const AggregatedFlows: React.FC<AggregatedFlowsProps> = (props) => {
   const statEntries = useLoaderData() as AggregateStatEntry[];
   const [autoRefresh, setAutoRefresh] = useState(true);
 
@@ -106,5 +103,3 @@ const AggregatedFlows: React.FC<AggregatedFlowsProps> = (props) => {
     </>
   );
 };
-
-export default AggregatedFlows;

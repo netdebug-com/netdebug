@@ -1,4 +1,4 @@
-import { ErrorMessage } from "../components/ErrorMessage";
+import { ErrorMessage } from "./components/ErrorMessage";
 
 // The state for loading data from an URL.
 export class DataLoadingState<T> {

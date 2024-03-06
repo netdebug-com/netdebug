@@ -6,7 +6,7 @@ import {
   desktop_api_url,
   sortCmpWithNull,
 } from "@netdebug/common";
-import { SwitchHelper } from "../components/SwitchHelper";
+import { SwitchHelper } from "@netdebug/common";
 import { Box } from "@mui/material";
 import {
   DataGrid,
@@ -15,16 +15,16 @@ import {
   GridValueFormatterParams,
   GridValueGetterParams,
 } from "@mui/x-data-grid";
-import { FlowSummary } from "../components/FlowSummary";
+import { FlowSummary } from "@netdebug/common";
 import {
   calculateLossPercentage,
   getDefaultPercentageGridColDef,
   getDefaultGridColDefWithUnits,
   getDefaultRttGridColDef,
-} from "../common/flow_common";
+} from "@netdebug/common";
 import { useLoaderData, useRevalidator } from "react-router";
-import { usePeriodicRefresh } from "../usePeriodicRefresh";
-import { fetchAndCheckResult } from "../common/data_loading";
+import { usePeriodicRefresh } from "@netdebug/common";
+import { fetchAndCheckResult } from "@netdebug/common";
 
 function formatAssociatedApps(
   params: GridValueFormatterParams<ConnectionMeasurements["associated_apps"]>,

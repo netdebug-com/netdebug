@@ -5,8 +5,8 @@ import {
   DataLoadingState,
   loadData as loadData,
   renderDataLoadingState,
-} from "../common/data_loading";
-import { ErrorMessage } from "../components/ErrorMessage";
+} from "@netdebug/common";
+import { ErrorMessage } from "@netdebug/common";
 import Stack from "@mui/material/Stack";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
@@ -23,10 +23,7 @@ import {
   LineElement,
   Title,
 } from "chart.js";
-import {
-  IpVersionSelector,
-  PingGraphHistogram,
-} from "../components/NetworkInterfaceState";
+import { IpVersionSelector, PingGraphHistogram } from "@netdebug/common";
 import { getChartOptions, getChartScale, getChartjsData } from "./Bandwidth";
 import { Link } from "react-router-dom";
 // needed for anything ChartJS to work
