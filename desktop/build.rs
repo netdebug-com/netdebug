@@ -6,7 +6,7 @@ use desktop_common::GuiApiTypes;
 
 use typescript_type_def::{write_definition_file, DefinitionFileOptions};
 
-const TYPESCRIPT_OUT_FILE: &str = "../electron/src/netdebug_types.ts";
+const TYPESCRIPT_OUT_FILE: &str = "../frontend/electron/src/netdebug_types.ts";
 
 /**
  * This command generates the typescript bindings from the types listed in
