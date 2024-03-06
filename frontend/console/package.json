@@ -1,5 +1,5 @@
 {
-    "name": "netdebug_webui",
+    "name": "@netdebug/console",
     "private": true,
     "version": "0.0.0",
     "type": "module",
