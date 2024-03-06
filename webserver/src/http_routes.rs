@@ -1,12 +1,16 @@
 use std::net::{IpAddr, SocketAddr};
 
 use crate::context::Context;
+use crate::users::{AuthCredentials, AuthSession, NetDebugUserBackend, UserServiceData};
 use crate::{desktop_websocket, webtest};
 use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing;
 use axum::Router;
+use axum::{routing, Form};
 use axum_extra::TypedHeader;
+use axum_login::tower_sessions::{MemoryStore, SessionManagerLayer};
+use axum_login::{login_required, AuthManagerLayerBuilder, AuthUser};
 use common_wasm::timeseries_stats::{CounterProvider, CounterProviderWithTimeUpdate};
 use log::{info, warn};
 use tower_http::services::{ServeDir, ServeFile};
@@ -48,6 +52,7 @@ pub async fn setup_axum_http_routes(context: Context) -> Router {
     // Basic Request logging
     let trace_layer = TraceLayer::new_for_http()
         .make_span_with(DefaultMakeSpan::new().level(tracing::Level::DEBUG));
+
     Router::new()
         // Webtest related routes
         .nest_service(
@@ -83,12 +88,36 @@ pub async fn setup_axum_http_routes(context: Context) -> Router {
             // HACK! Assume the webui directory is always relative to the HTML one
             serve_dir_and_check_path(html_root.clone() + "/../../frontend/console/dist/assets"),
         )
+        .nest("/api", setup_protected_rest_routes(context.clone()).await)
         .layer(trace_layer)
         .with_state(context)
     /*
     .route("/setcookie", routing::get(setcookie))
     .route("/checkcookie", routing::get(checkcookie))
     */
+}
+
+pub async fn setup_protected_rest_routes(context: Context) -> Router<Context> {
+    // TODO: move the session store into the data base layer like in
+    // https://github.com/maxcountryman/axum-login/blob/main/examples/sqlite/src/web/app.rs#L34
+
+    // Session layer.
+    let session_store = MemoryStore::default();
+    let session_layer = SessionManagerLayer::new(session_store);
+
+    // Auth layer
+    let service_secret = context.read().await.user_service_secret.clone();
+    let user_service = UserServiceData::new_locked(service_secret).await;
+    let backend = NetDebugUserBackend::new(user_service);
+    let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
+
+    Router::new()
+        // list the paths that need authentication here
+        .route("/test_auth", routing::get(test_auth))
+        .route_layer(login_required!(NetDebugUserBackend))
+        .route("/login", routing::post(console_login))
+        .route("/login", routing::get(console_login))
+        .layer(auth_layer)
 }
 
 /// The handler for the HTTP request (this gets called when the HTTP GET lands at the start
@@ -168,6 +197,39 @@ async fn get_counters_handler(State(context): State<Context>) -> String {
     registries.lock().unwrap().update_time();
     registries.lock().unwrap().append_counters(&mut map);
     serde_json::to_string_pretty(&map).unwrap()
+}
+
+async fn console_login(
+    mut auth_session: AuthSession,
+    Form(creds): Form<AuthCredentials>,
+) -> impl IntoResponse {
+    let user = match auth_session.authenticate(creds.clone()).await {
+        Ok(Some(user)) => user,
+        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(e) => {
+            warn!("console_login error: {}", e);
+            // don't return the error message to the user for 'security' reasons
+            return (StatusCode::INTERNAL_SERVER_ERROR, "".to_string()).into_response();
+        }
+    };
+
+    if auth_session.login(&user).await.is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    // Redirect::to("/protected").into_response()
+    StatusCode::OK.into_response()
+}
+
+async fn test_auth(auth_session: AuthSession) -> impl IntoResponse {
+    match auth_session.user {
+        Some(user) => (StatusCode::OK, format!("Hello {}", user.id())),
+        None => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Weird - authenticated user not found!?".to_string(),
+        ),
+    }
+    .into_response()
 }
 
 /*
