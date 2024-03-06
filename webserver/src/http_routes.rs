@@ -76,12 +76,12 @@ pub async fn setup_axum_http_routes(context: Context) -> Router {
         .nest_service(
             "/console",
             // HACK! Assume the webui directory is always relative to the HTML one
-            serve_dir_and_check_path(html_root.clone() + "/../netdebug_webui/dist"),
+            serve_dir_and_check_path(html_root.clone() + "/../../frontend/console/dist"),
         )
         .nest_service(
             "/assets",
             // HACK! Assume the webui directory is always relative to the HTML one
-            serve_dir_and_check_path(html_root.clone() + "/../netdebug_webui/dist/assets"),
+            serve_dir_and_check_path(html_root.clone() + "/../../frontend/console/dist/assets"),
         )
         .layer(trace_layer)
         .with_state(context)
