@@ -15,10 +15,14 @@ use libconntrack::{
     process_tracker::{ProcessTracker, ProcessTrackerSender},
     utils::PerfMsgCheck,
 };
-use log::info;
+use log::{info, warn};
+use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use libconntrack::topology_client::{TopologyServerConnection, TopologyServerSender};
 
@@ -46,6 +50,11 @@ impl Trackers {
     }
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub struct LocalConfigData {
+    pub uuid: Uuid,
+}
+
 /// Netdebug desktop
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
@@ -65,15 +74,63 @@ pub struct Args {
     /// The URL of the Topology Server. E.g., ws://localhost:3030
     #[arg(long, default_value = "wss://topology.netdebug.com:443/desktop")]
     pub topology_server_url: String,
+
+    /// Directory were local configuration data is stored.
+    #[arg(long, default_value=None)]
+    pub local_config_dir: Option<String>,
 }
 
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
+const LOCAL_CONFIG_FILENAME: &str = "netdebug-collector-config.toml";
+
+fn get_local_config(config_dir: Option<String>) -> Result<LocalConfigData, std::io::Error> {
+    match config_dir {
+        Some(config_dir) => {
+            let path = std::path::Path::new(&config_dir);
+            // we don't want to just u se `path.is_dir()`. If path is not a directory, we want
+            // to know why. So lets use `read_dir()` which will return an appropriate io::Error
+            let _ = path.read_dir()?;
+            let path_to_file = path.join(LOCAL_CONFIG_FILENAME);
+            if path_to_file.exists() {
+                let mut file_contents = String::default();
+                File::open(path_to_file)?.read_to_string(&mut file_contents)?;
+                let config_data = toml::from_str(&file_contents).expect("config file is invalid");
+                info!("Read config from disk. local_config: {:?}", config_data);
+                Ok(config_data)
+            } else {
+                let config_data = LocalConfigData {
+                    uuid: Uuid::new_v4(),
+                };
+                info!(
+                    "Config does not exists. Generating. local_config: {:?}",
+                    config_data
+                );
+                let file_contents =
+                    toml::to_string_pretty(&config_data).expect("Failed to write config file");
+                File::create(path_to_file)?.write_all(file_contents.as_bytes())?;
+                Ok(config_data)
+            }
+        }
+        None => {
+            warn!(
+                "No local config directory given. Not reading config and using default client_id"
+            );
+            Ok(LocalConfigData::default())
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     common::init::netdebug_init();
 
     let args = Args::parse();
+    let _config_data = get_local_config(args.local_config_dir.clone()).unwrap_or_else(|err| {
+        panic!(
+            "Failed to read config file `{:?}`: {}",
+            args.local_config_dir, err
+        )
+    });
     let system_epoch = std::time::Instant::now();
 
     // Getting tokio RuntimeMetrics only works if we have tokio_unstable defined
@@ -198,4 +255,63 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let listener = tokio::net::TcpListener::bind(listen_addr).await.unwrap();
     axum::serve(listener, routes).await.unwrap();
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use std::io::ErrorKind;
+
+    use super::*;
+    use temp_dir::{self, TempDir};
+
+    #[test]
+    fn test_get_config() {
+        assert_eq!(get_local_config(None).unwrap(), LocalConfigData::default());
+        assert_eq!(
+            get_local_config(Some("/does/not/exist".to_owned()))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::NotFound
+        );
+        let tempdir = TempDir::new().unwrap();
+
+        let not_a_dir = tempdir
+            .child("not-a-directory")
+            .to_str()
+            .unwrap()
+            .to_owned();
+        // touch the file
+        File::create(not_a_dir.clone()).unwrap();
+        // TODO: For some reason, the actual error kind we get back is, ErrorKind::NotADirectory. Which sounds
+        // correct, but `ErrorKind::NotADirectory` is a nightly feature. So if I try to
+        // `assert_eq!(...., ErrorKind::NotADirectory)`. I get a compiler error that it's a nightly feature.
+        // Not sure why the std lib appears to be compile with nightly. Maybe because we use tokio_unstable?
+        // Anyways. This test is not worth enable nightly features. So just check for `is_err()`.
+        assert!(get_local_config(Some(not_a_dir)).is_err());
+
+        let dir_as_str = tempdir.path().to_str().unwrap().to_owned();
+        let config_from_fn = get_local_config(Some(dir_as_str.clone())).unwrap();
+        assert!(tempdir.child(LOCAL_CONFIG_FILENAME).exists());
+        let mut file_contents = String::default();
+        File::open(tempdir.child(LOCAL_CONFIG_FILENAME))
+            .unwrap()
+            .read_to_string(&mut file_contents)
+            .unwrap();
+
+        let config_from_file: LocalConfigData = toml::from_str(&file_contents).unwrap();
+        assert_eq!(config_from_fn, config_from_file);
+        assert_ne!(config_from_fn.uuid, Uuid::nil());
+
+        // overwrite the config with our own version.
+        let other_config = LocalConfigData {
+            uuid: Uuid::from_u128(0x1234_0000_4242),
+        };
+        File::create(tempdir.child(LOCAL_CONFIG_FILENAME))
+            .unwrap()
+            .write_all(toml::to_string_pretty(&other_config).unwrap().as_bytes())
+            .unwrap();
+
+        let config_from_fn = get_local_config(Some(dir_as_str.clone())).unwrap();
+        assert_eq!(config_from_fn, other_config);
+    }
 }
