@@ -1,10 +1,10 @@
 import React, { useState } from "react";
 import { SwitchHelper } from "../components/SwitchHelper";
-import { desktop_api_url } from "../utils";
+import { desktop_api_url } from "@netdebug/common";
 import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../usePeriodicRefresh";
 import { fetchAndCheckResult } from "../common/data_loading";
-import { NetworkInterfaceState } from "../netdebug_types";
+import { NetworkInterfaceState } from "@netdebug/common";
 import {
   IpVersionSelector,
   NetworkInterfaceStateComponent,

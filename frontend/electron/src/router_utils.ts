@@ -31,6 +31,7 @@ export function useMatchNavInfo(routeInfos: readonly NavInfo[]) {
 
     // useResolvedPath takes a `to` like we'd specify on a <Link> and generates
     // the absolute pathname (based on current location etc.) for it.
+    // eslint-disable-next-line react-hooks/rules-of-hooks
     const toPathname = useResolvedPath(to).pathname;
 
     // If the `to` has a trailing slash, look at that exact spot.  Otherwise,

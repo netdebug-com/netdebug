@@ -3,7 +3,7 @@ import {
   dataGridDefaultSxProp,
   desktop_api_url,
   sortCmpWithNull,
-} from "../utils";
+} from "@netdebug/common";
 import { fetchAndCheckResult } from "../common/data_loading";
 import { SwitchHelper } from "../components/SwitchHelper";
 import { Alert, Box } from "@mui/material";
@@ -12,7 +12,7 @@ import { getColumns, getNameFromAggKind } from "../common/flow_common";
 import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../usePeriodicRefresh";
 import { ErrorMessage } from "../components/ErrorMessage";
-import { AggregateStatEntry } from "../netdebug_types";
+import { AggregateStatEntry } from "@netdebug/common";
 
 export const flowsByHostLatencyLoader = async () => {
   const res = await fetchAndCheckResult(desktop_api_url("get_host_flows"));

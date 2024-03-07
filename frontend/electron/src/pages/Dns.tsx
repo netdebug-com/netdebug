@@ -1,6 +1,6 @@
 import React, { useRef } from "react";
-import { DnsTrackerEntry } from "../netdebug_types";
-import { dataGridDefaultSxProp, desktop_api_url } from "../utils";
+import { DnsTrackerEntry } from "@netdebug/common";
+import { dataGridDefaultSxProp, desktop_api_url } from "@netdebug/common";
 import { Box } from "@mui/material";
 import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
 import { useLoaderData, useRevalidator } from "react-router";
