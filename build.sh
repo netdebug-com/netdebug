@@ -16,7 +16,8 @@ fi
 cargo build $@
 wasm-pack build --target=web webserver/web-client ${build_opt}
 # build the react app for the console ui
-(cd webserver/netdebug_webui && npm run build)
+(cd frontend/common && npm run build)
+(cd frontend/console && npm run build)
 # add cargo tauri build here?  or cargo tauri dev?
 
 #
@@ -26,5 +27,5 @@ wasm-pack build --target=web webserver/web-client ${build_opt}
 #     think this does weird things to currently running processes using 
 #     that binary. This way, the new binary will get a new inode and the existing
 #     processe won't see their binary modified underneath them. At least on MacOS
-rm -f electron/extra-resources/netdebug-desktop
-cp $outpath/netdebug-desktop electron/extra-resources
+rm -f frontend/electron/extra-resources/netdebug-desktop
+cp $outpath/netdebug-desktop frontend/electron/extra-resources
