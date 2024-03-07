@@ -2,7 +2,7 @@
 use std::env;
 use std::path::Path;
 
-use desktop_common::GuiApiTypes;
+use gui_types::GuiApiTypes;
 
 use typescript_type_def::{write_definition_file, DefinitionFileOptions};
 

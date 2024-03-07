@@ -2,7 +2,7 @@ mod rest_endpoints;
 use chrono::Duration;
 use clap::Parser;
 use common_wasm::timeseries_stats::{SharedExportedStatRegistries, SuperRegistry};
-use desktop_common::get_git_hash_version;
+use gui_types::get_git_hash_version;
 use libconntrack::dns_tracker::DnsTrackerSender;
 use libconntrack::pcap::{
     pcap_find_all_local_addrs, spawn_pcap_monitor_all_interfaces, PcapMonitorOptions,

@@ -1,4 +1,4 @@
-use desktop_common::GuiApiTypes;
+use gui_types::GuiApiTypes;
 #[cfg(windows)]
 use std::env;
 use std::path::Path;

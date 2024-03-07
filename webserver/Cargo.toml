@@ -49,7 +49,7 @@ common-wasm = { path = "../common/wasm" }
 console-subscriber = { workspace = true }
 # TODO: think about refactoring this file/structs so
 # that the webserver isn't importing stuff from the desktop
-desktop_common = { path = "../desktop/desktop_common" }
+gui_types = { path = "../common/gui_types" }
 # move back to the public branch once https://github.com/JulianSchmid/etherparse/pull/66 is merged
 # NOTE: 0.14.0 looks like it breaks partial IpHeader::from_slice() parsing
 # See https://github.com/JulianSchmid/etherparse/issues/46
@@ -95,6 +95,6 @@ pg-embed = { git = "https://github.com/faokunega/pg-embed/", default-features = 
 # needed by build.rs
 [build-dependencies]
 common-wasm = { path = "../common/wasm" }
-desktop_common = { path = "../desktop/desktop_common" }
+gui_types = { path = "../common/gui_types" }
 libconntrack-wasm = { path = "../libconntrack-wasm" }
 typescript-type-def = { workspace = true }
