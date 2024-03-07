@@ -33,6 +33,7 @@ use uuid::Uuid;
 
 const COUNTER_REMOTE_SYNC_INTERVAL_MS: u64 = 60_000;
 const WS_KEEPALIVE_INTERVAL_MS: u64 = 1_000;
+const X_NETDEBUG_CLIENT_UUID_HEADER: &str = "X-Netdebug-Client-Uuid";
 
 #[allow(dead_code)] // will fix in next PR
 #[derive(Clone, Debug)]
@@ -87,12 +88,14 @@ pub struct TopologyServerConnection {
 }
 
 impl TopologyServerConnection {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         url: String,
         tx: TopologyServerSender,
         rx: Receiver<PerfMsgCheck<TopologyServerMessage>>,
         buffer_size: usize,
         max_retry_time: Duration,
+        client_uuid: Uuid,
         super_counters_registry: SharedExportedStatRegistries,
         stats_registry: ExportedStatRegistry,
     ) -> TopologyServerConnection {
@@ -128,7 +131,7 @@ impl TopologyServerConnection {
             ),
             super_counters_registries: super_counters_registry,
             ws_keepalive_interval: tokio::time::Duration::from_millis(WS_KEEPALIVE_INTERVAL_MS),
-            client_uuid: Uuid::new_v4(), // just random, for now : TODO(Gregor) - persist this
+            client_uuid,
         }
     }
 
@@ -136,6 +139,7 @@ impl TopologyServerConnection {
         url: String,
         buffer_size: usize,
         max_retry_time: Duration,
+        client_uuid: Uuid,
         super_counters_registry: SharedExportedStatRegistries,
         stats_registry: ExportedStatRegistry,
     ) -> Sender<PerfMsgCheck<TopologyServerMessage>> {
@@ -148,6 +152,7 @@ impl TopologyServerConnection {
                 rx,
                 buffer_size,
                 max_retry_time,
+                client_uuid,
                 super_counters_registry,
                 stats_registry,
             );
@@ -171,12 +176,15 @@ impl TopologyServerConnection {
         // Intentionally panic here if we got a bad URL
         let url = url::Url::parse(&self.url).unwrap_or_else(|_| panic!("Bad url! {}", &self.url));
 
+        // TODO: use a real token / shared secret here instead of the client_id
         let auth_header = "Bearer ".to_owned() + &self.client_uuid.as_hyphenated().to_string();
+        let client_uuid_header = self.client_uuid.as_hyphenated().to_string();
         // need to generate a custom request because we need to set the User-Agent for our webserver
         let req = Request::builder()
             .method("GET")
             .header("Host", url.authority())
             .header("User-Agent", "NetDebug Desktop version x.y.z")
+            .header(X_NETDEBUG_CLIENT_UUID_HEADER, client_uuid_header)
             .header("Authorization", auth_header)
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
@@ -528,6 +536,7 @@ mod test {
             rx,
             10,
             Duration::from_secs(10),
+            Uuid::default(),
             super_counters_registry,
             ExportedStatRegistry::new("topo_server_conn", Instant::now()),
         );
@@ -600,6 +609,7 @@ mod test {
             rx,
             1024,
             Duration::from_millis(10),
+            Uuid::default(),
             super_counters_registry,
             ExportedStatRegistry::new("topo_server_conn", Instant::now()),
         );
@@ -638,6 +648,7 @@ mod test {
             rx,
             1024,
             Duration::from_millis(10),
+            Uuid::default(),
             super_counters_registry,
             ExportedStatRegistry::new("topo_server_conn", Instant::now()),
         );
