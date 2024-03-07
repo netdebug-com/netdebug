@@ -36,6 +36,9 @@ rm -f frontend/electron/extra-resources/desktop
 # Now copy the universal binary into frontend/electron
 cp $UNIVERSAL_DESKTOP_OUTDIR/netdebug-desktop frontend/electron/extra-resources/
 
+# build shared js code
+(cd frontend/common && npm build)
+
 # Finally use electron-forge to build the universal .app bundle of the GUI
 cd frontend/electron 
 npm run make -- --arch=universal
