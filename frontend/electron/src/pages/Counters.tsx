@@ -6,11 +6,11 @@ import {
   reshapeCounter,
   desktop_api_url,
 } from "@netdebug/common";
-import { SwitchHelper } from "../components/SwitchHelper";
+import { SwitchHelper } from "@netdebug/common";
 import { Box } from "@mui/material";
 import { useLoaderData, useRevalidator } from "react-router";
-import { usePeriodicRefresh } from "../usePeriodicRefresh";
-import { fetchAndCheckResult } from "../common/data_loading";
+import { usePeriodicRefresh } from "@netdebug/common";
+import { fetchAndCheckResult } from "@netdebug/common";
 
 export const countersLoader = async () => {
   const res = await fetchAndCheckResult(desktop_api_url("get_counters"));

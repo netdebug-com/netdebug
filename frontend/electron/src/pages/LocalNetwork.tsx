@@ -1,14 +1,14 @@
 import React, { useState } from "react";
-import { SwitchHelper } from "../components/SwitchHelper";
+import { SwitchHelper } from "@netdebug/common";
 import { desktop_api_url } from "@netdebug/common";
 import { useLoaderData, useRevalidator } from "react-router";
-import { usePeriodicRefresh } from "../usePeriodicRefresh";
-import { fetchAndCheckResult } from "../common/data_loading";
+import { usePeriodicRefresh } from "@netdebug/common";
+import { fetchAndCheckResult } from "@netdebug/common";
 import { NetworkInterfaceState } from "@netdebug/common";
 import {
   IpVersionSelector,
   NetworkInterfaceStateComponent,
-} from "../components/NetworkInterfaceState";
+} from "@netdebug/common";
 
 export const localNetworkLoader = async () => {
   const res = await fetchAndCheckResult(

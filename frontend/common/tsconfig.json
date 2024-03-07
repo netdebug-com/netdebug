@@ -5,7 +5,9 @@
         "lib": ["DOM", "DOM.Iterable", "ESNext"],
         "allowJs": false,
         "allowSyntheticDefaultImports": true,
-        "strict": true,
+        // TODO: disabling this for now, since it wasn't set in electron
+        // and it causes code move from electron to have errors
+        //"strict": true,
         "forceConsistentCasingInFileNames": true,
         "module": "ESNext",
         "moduleResolution": "Node",

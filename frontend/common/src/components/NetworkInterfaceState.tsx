@@ -1,5 +1,5 @@
 import { ApexOptions } from "apexcharts";
-import { NetworkInterfaceState } from "@netdebug/common";
+import { NetworkInterfaceState } from "../netdebug_types";
 import ReactApexChart from "react-apexcharts";
 import TimeAgo from "timeago-react";
 import { useTheme } from "@mui/material/styles";

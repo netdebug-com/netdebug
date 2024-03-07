@@ -1,5 +1,5 @@
-import { getConnKeyForDisplay } from "@netdebug/common";
-import { ConnectionMeasurements } from "@netdebug/common";
+import { getConnKeyForDisplay } from "../utils";
+import { ConnectionMeasurements } from "../netdebug_types";
 import { useState } from "react";
 import Popover from "@mui/material/Popover";
 import MuiLink from "@mui/material/Link";
