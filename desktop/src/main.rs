@@ -125,7 +125,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     common::init::netdebug_init();
 
     let args = Args::parse();
-    let _config_data = get_local_config(args.local_config_dir.clone()).unwrap_or_else(|err| {
+    let config_data = get_local_config(args.local_config_dir.clone()).unwrap_or_else(|err| {
         panic!(
             "Failed to read config file `{:?}`: {}",
             args.local_config_dir, err
@@ -174,6 +174,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         args.topology_server_url.clone(),
         MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
         std::time::Duration::from_secs(30),
+        config_data.uuid,
         counter_registries.registries(),
         counter_registries.new_registry("topology_server_connection"),
     );
