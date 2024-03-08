@@ -89,10 +89,12 @@ uuid = { workspace = true, features = ["v3", "v4"] }
 [dev-dependencies]
 # dynamically + programatically instantiate a postgres server locally
 # used for remotedb_client testing
+http-body-util = "0.1.0"
 pg-embed = { git = "https://github.com/faokunega/pg-embed/", default-features = false, features = [
     "rt_tokio",
     "rt_tokio_migrate",
 ] }
+tower = "0.4"
 
 # needed by build.rs
 [build-dependencies]

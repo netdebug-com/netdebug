@@ -9,8 +9,10 @@ use axum::response::IntoResponse;
 use axum::Router;
 use axum::{routing, Form};
 use axum_extra::TypedHeader;
-use axum_login::tower_sessions::{MemoryStore, SessionManagerLayer};
-use axum_login::{login_required, AuthManagerLayerBuilder, AuthUser};
+use axum_login::tower_sessions::{MemoryStore, SessionManagerLayer, SessionStore};
+use axum_login::{
+    predicate_required, AuthManagerLayer, AuthManagerLayerBuilder, AuthUser, AuthnBackend,
+};
 use common_wasm::timeseries_stats::{CounterProvider, CounterProviderWithTimeUpdate};
 use log::{info, warn};
 use tower_http::services::{ServeDir, ServeFile};
@@ -100,22 +102,42 @@ pub async fn setup_axum_http_routes(context: Context) -> Router {
 pub async fn setup_protected_rest_routes(context: Context) -> Router<Context> {
     // TODO: move the session store into the data base layer like in
     // https://github.com/maxcountryman/axum-login/blob/main/examples/sqlite/src/web/app.rs#L34
-
-    // Session layer.
+    let service_secret = context.read().await.user_service_secret.clone();
+    let user_service = UserServiceData::new_locked(service_secret).await;
+    let backend = NetDebugUserBackend::new(user_service);
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store);
 
     // Auth layer
-    let service_secret = context.read().await.user_service_secret.clone();
-    let user_service = UserServiceData::new_locked(service_secret).await;
-    let backend = NetDebugUserBackend::new(user_service);
     let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
+    setup_protected_rest_routes_with_auth_layer(auth_layer)
+}
+
+pub fn setup_protected_rest_routes_with_auth_layer<
+    Backend: AuthnBackend + Clone + 'static,
+    Session: SessionStore + Clone,
+>(
+    auth_layer: AuthManagerLayer<Backend, Session>,
+) -> Router<Context> {
+    // This is a helper function copied out of login_requred!() macro which
+    // didn't support generic types
+    async fn is_authenticated<Backend2: AuthnBackend + Clone + 'static>(
+        auth_session: axum_login::AuthSession<Backend2>,
+    ) -> bool {
+        auth_session.user.is_some()
+    }
 
     Router::new()
         // list the paths that need authentication here
         .route("/test_auth", routing::get(test_auth))
-        .route_layer(login_required!(NetDebugUserBackend))
+        // don't use the login_required!() macro : can't figure out generic types so manually expand
+        .route_layer(predicate_required!(
+            is_authenticated::<Backend>,
+            StatusCode::UNAUTHORIZED
+        ))
+        // these are unauthenticated routes to get the auth token
         .route("/login", routing::post(console_login))
+        // TODO: decide whether having a login() function as a GET is a CSRV vulnerability
         .route("/login", routing::get(console_login))
         .layer(auth_layer)
 }
@@ -253,3 +275,132 @@ pub async fn setcookie() -> impl IntoResponse {
     (headers, content)
 }
 */
+
+#[cfg(test)]
+mod test {
+    /// Following examples from https://github.com/tokio-rs/axum/blob/main/examples/testing/src/main.rs#L85
+    /// and
+    /// https://docs.rs/axum-login/latest/src/axum_login/middleware.rs.html#303
+    use axum::{
+        body::Body,
+        http::{header, Request},
+        response::Response,
+    };
+    use axum_login::tower_sessions::cookie;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt; // for `call`, `oneshot`, and `ready`
+
+    use super::*;
+    use crate::{
+        context::test::make_test_context,
+        users::{MockAuthBackend, NetDebugUser},
+    };
+
+    fn get_session_cookie(res: &Response<Body>) -> Option<String> {
+        res.headers()
+            .get(header::SET_COOKIE)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|cookie_str| {
+                let cookie = cookie::Cookie::parse(cookie_str);
+                cookie.map(|c| c.to_string()).ok()
+            })
+    }
+
+    async fn make_mock_protected_routes() -> Router {
+        let mut mock_backend = MockAuthBackend::default();
+        let user = "Alice".to_string();
+        mock_backend.add_user(
+            user.clone(),
+            NetDebugUser {
+                user_id: user.clone(),
+                company_id: 0,
+                session_key: NetDebugUser::make_session_key(&user, &"random".to_string()),
+            },
+        );
+        let context = make_test_context();
+        let session_store = MemoryStore::default();
+        let session_layer = SessionManagerLayer::new(session_store).with_secure(false);
+        let auth_layer = AuthManagerLayerBuilder::new(mock_backend, session_layer).build();
+        setup_protected_rest_routes_with_auth_layer(auth_layer).with_state(context)
+        // context not needed except to make compiler happy
+    }
+
+    #[tokio::test]
+    async fn auth_check_no_auth() {
+        let protected_routes = make_mock_protected_routes().await;
+
+        // `Router` implements `tower::Service<Request<Body>>` so we can
+        // call it like any tower service, no need to run an HTTP server.
+        let response = protected_routes
+            .oneshot(
+                Request::builder()
+                    .uri("/test_auth")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let status = response.status();
+        // let body = response.into_body().collect().await.unwrap().to_bytes();
+        // println!("Response={:#?}", body);
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[ignore = "See https://github.com/maxcountryman/axum-login/discussions/192 but dies with 'Can't extract auth session. Is `AuthManagerLayer` enabled?'"]
+    #[tokio::test]
+    async fn auth_check_with_get_auth() {
+        let protected_routes = make_mock_protected_routes().await;
+
+        // `Router` implements `tower::Service<Request<Body>>` so we can
+        // call it like any tower service, no need to run an HTTP server.
+        let response = protected_routes
+            .oneshot(
+                Request::builder()
+                    .uri("/login?clerk_jwt=Alice")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let status = response.status();
+        let cookie = get_session_cookie(&response);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        println!("Response={:#?}", body);
+        println!("Cookie={:?}", cookie);
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[ignore = "See https://github.com/maxcountryman/axum-login/discussions/192 but dies with 'Can't extract auth session. Is `AuthManagerLayer` enabled?'"]
+    #[tokio::test]
+    async fn auth_check_with_post_auth() {
+        let protected_routes = make_mock_protected_routes().await;
+
+        // `Router` implements `tower::Service<Request<Body>>` so we can
+        // call it like any tower service, no need to run an HTTP server.
+        let response = protected_routes
+            .oneshot(
+                Request::builder()
+                    .uri("/login")
+                    .method("POST")
+                    .body(Body::from(
+                        serde_json::to_string(&AuthCredentials {
+                            clerk_jwt: "Alice".to_string(),
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let status = response.status();
+        let cookie = get_session_cookie(&response);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        println!("Response={:#?}", body);
+        println!("Cookie={:?}", cookie);
+        assert_eq!(status, StatusCode::OK);
+    }
+}
