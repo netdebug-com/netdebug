@@ -1,17 +1,20 @@
-import { desktop_api_url } from "@netdebug/common";
+import { desktop_api_url } from "../common/utils";
 import { useInterval } from "react-use";
 import { useEffect, useState } from "react";
 import {
   DataLoadingState,
   loadData as loadData,
   renderDataLoadingState,
-} from "@netdebug/common";
-import { ErrorMessage } from "@netdebug/common";
+} from "../common/data_loading";
+import { ErrorMessage } from "../common/components/ErrorMessage";
 import Stack from "@mui/material/Stack";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import { styled } from "@mui/material/styles";
-import { ChartJsBandwidth, NetworkInterfaceState } from "@netdebug/common";
+import {
+  ChartJsBandwidth,
+  NetworkInterfaceState,
+} from "../common/netdebug_types";
 import { Scatter } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -23,7 +26,10 @@ import {
   LineElement,
   Title,
 } from "chart.js";
-import { IpVersionSelector, PingGraphHistogram } from "@netdebug/common";
+import {
+  IpVersionSelector,
+  PingGraphHistogram,
+} from "../common/components/NetworkInterfaceState";
 import { getChartOptions, getChartScale, getChartjsData } from "./Bandwidth";
 import { Link } from "react-router-dom";
 // needed for anything ChartJS to work

@@ -1,10 +1,10 @@
 import React from "react";
-import { ExportedNeighborState } from "@netdebug/common";
-import { desktop_api_url } from "@netdebug/common";
+import { ExportedNeighborState } from "../common/netdebug_types";
+import { desktop_api_url } from "../common/utils";
 import { Box } from "@mui/material";
 import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
 import { useLoaderData, useRevalidator } from "react-router";
-import { usePeriodicRefresh } from "@netdebug/common";
+import { usePeriodicRefresh } from "../common/hooks/usePeriodicRefresh";
 
 /*********************************************************** */
 

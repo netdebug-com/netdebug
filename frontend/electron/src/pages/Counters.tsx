@@ -5,12 +5,12 @@ import {
   dataGridDefaultSxProp,
   reshapeCounter,
   desktop_api_url,
-} from "@netdebug/common";
-import { SwitchHelper } from "@netdebug/common";
+} from "../common/utils";
+import { SwitchHelper } from "../common/components/SwitchHelper";
 import { Box } from "@mui/material";
 import { useLoaderData, useRevalidator } from "react-router";
-import { usePeriodicRefresh } from "@netdebug/common";
-import { fetchAndCheckResult } from "@netdebug/common";
+import { usePeriodicRefresh } from "../common/hooks/usePeriodicRefresh";
+import { fetchAndCheckResult } from "../common/data_loading";
 
 export const countersLoader = async () => {
   const res = await fetchAndCheckResult(desktop_api_url("get_counters"));

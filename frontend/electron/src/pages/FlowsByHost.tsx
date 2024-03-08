@@ -3,16 +3,16 @@ import {
   dataGridDefaultSxProp,
   desktop_api_url,
   sortCmpWithNull,
-} from "@netdebug/common";
-import { fetchAndCheckResult } from "@netdebug/common";
-import { SwitchHelper } from "@netdebug/common";
+} from "../common/utils";
+import { fetchAndCheckResult } from "../common/data_loading";
+import { SwitchHelper } from "../common/components/SwitchHelper";
 import { Alert, Box } from "@mui/material";
 import { DataGrid, GridToolbar } from "@mui/x-data-grid";
-import { getColumns, getNameFromAggKind } from "@netdebug/common";
+import { getColumns, getNameFromAggKind } from "../common/flow_common";
 import { useLoaderData, useRevalidator } from "react-router";
-import { usePeriodicRefresh } from "@netdebug/common";
-import { ErrorMessage } from "@netdebug/common";
-import { AggregateStatEntry } from "@netdebug/common";
+import { usePeriodicRefresh } from "../common/hooks/usePeriodicRefresh";
+import { ErrorMessage } from "../common/components/ErrorMessage";
+import { AggregateStatEntry } from "../common/netdebug_types";
 
 export const flowsByHostLatencyLoader = async () => {
   const res = await fetchAndCheckResult(desktop_api_url("get_host_flows"));

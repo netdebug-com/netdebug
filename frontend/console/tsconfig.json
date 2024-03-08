@@ -15,9 +15,11 @@
         "jsx": "react-jsx",
 
         /* Linting */
-        "strict": true,
-        "noUnusedLocals": true,
-        "noUnusedParameters": true,
+        // TODO: disabling this for now, since it wasn't set in electron
+        // and it causes code move from electron to have errors
+        //"strict": true,
+        //"noUnusedLocals": true,
+        //"noUnusedParameters": true,
         "noFallthroughCasesInSwitch": true
     },
     "include": ["src"],

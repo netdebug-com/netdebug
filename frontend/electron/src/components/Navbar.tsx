@@ -1,7 +1,7 @@
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
 import { Link } from "react-router-dom";
-import { useMatchNavInfo } from "@netdebug/common";
+import { useMatchNavInfo } from "../../../common/src/hooks/useMatchRouteInfo";
 
 const TAB_NAV_INFO = [
   { label: "Home", to: "/", exactMatch: true },

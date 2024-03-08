@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ChartJsBandwidth, ChartJsPoint } from "@netdebug/common";
+import { ChartJsBandwidth, ChartJsPoint } from "../common/netdebug_types";
 import { Scatter } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -11,15 +11,15 @@ import {
   LineElement,
   Title,
 } from "chart.js";
-import { SwitchHelper } from "@netdebug/common";
+import { SwitchHelper } from "../common/components/SwitchHelper";
 import {
   desktop_api_url,
   getSiScale,
   prettyPrintSiUnits,
-} from "@netdebug/common";
+} from "../common/utils";
 import { useLoaderData, useRevalidator } from "react-router";
-import { usePeriodicRefresh } from "@netdebug/common";
-import { fetchAndCheckResult } from "@netdebug/common";
+import { usePeriodicRefresh } from "../common/hooks/usePeriodicRefresh";
+import { fetchAndCheckResult } from "../common/data_loading";
 
 ChartJS.register(
   PointElement,

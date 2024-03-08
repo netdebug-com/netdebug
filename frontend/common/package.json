@@ -4,17 +4,9 @@
     "version": "0.0.0",
     "type": "module",
     "scripts": {
-        "watch": "tsc && vite build --watch",
-        "build": "tsc && vite build",
         "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
         "test": "jest"
     },
-    "files": [
-        "dist"
-    ],
-    "main": "./dist/index.umd.cjs",
-    "module": "./dist/index.js",
-    "types": "./dist/index.d.ts",
     "peerDependencies": {
         "@mui/icons-material": "^5.15.12",
         "@mui/material": "^5.15.12",
@@ -35,7 +27,6 @@
         "@types/react-dom": "^18.2.19",
         "@typescript-eslint/eslint-plugin": "^7.0.2",
         "@typescript-eslint/parser": "^7.0.2",
-        "@vitejs/plugin-react": "^4.2.1",
         "eslint": "^8.56.0",
         "eslint-plugin-react-hooks": "^4.6.0",
         "eslint-plugin-react-refresh": "^0.4.5",
@@ -44,9 +35,6 @@
         "ts-jest": "^29.1.2",
         "ts-loader": "^9.5.1",
         "ts-node": "^10.9.2",
-        "typescript": "^5.2.2",
-        "vite": "^5.1.4",
-        "vite-plugin-dts": "^3.7.3",
-        "vite-tsconfig-paths": "^4.3.1"
+        "typescript": "^5.2.2"
     }
 }
