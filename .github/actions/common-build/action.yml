@@ -81,19 +81,20 @@ runs:
         node-version: 18
         cache: "npm"
         cache-dependency-path: frontend/package-lock.json
-    - name: Build common node module so other modules can use it
-      run: cd frontend/common && npm ci && npm run test && npm run lint && npm run build
+    - name: Install depedencies
+      run: cd frontend && npm ci
       shell: bash
-    # Run electron specific stuff
-    - run: cd frontend/electron && npm ci && npm run lint && npm run test
+    - name: Run lint in all workspaces
+      run: cd frontend && npm run lint --workspaces --if-present
       shell: bash
-    # Run typescript compiler/typechecker in electron
-    # TODO: I think the `npm run build` will run the type checker in
-    # console & common but should verify.
-    - run: cd frontend/electron && npm exec tsc -- --noEmit
+    - name: Run test in all workspaces
+      run: cd frontend && npm run test --workspaces --if-present
       shell: bash
-    # Run console specific stuff
-    - run: cd frontend/console && npm ci && npm run build && npm run lint
+    - name: Run typescript / type-checker in all workspaces
+      run: cd frontend && npm exec tsc --workspaces -- --noEmit
+      shell: bash
+    - name: Build console code
+      run: cd frontend && npm run build -w console
       shell: bash
     - run: echo "🍏 This job's status is ${{ job.status }}."
       shell: bash

@@ -1,7 +1,7 @@
 import { ToggleButton, ToggleButtonGroup } from "@mui/material";
 import React from "react";
 import { Link, Outlet } from "react-router-dom";
-import { NavInfo, useMatchNavInfo } from "@netdebug/common";
+import { NavInfo, useMatchNavInfo } from "../common/hooks/useMatchRouteInfo";
 
 const FLOW_ROUTE_INFOS: NavInfo[] = [
   { label: "By DNS Domain", to: "", exactMatch: true },

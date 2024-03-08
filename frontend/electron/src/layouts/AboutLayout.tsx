@@ -1,7 +1,10 @@
 import { ToggleButton, ToggleButtonGroup } from "@mui/material";
+import {
+  NavInfo,
+  useMatchNavInfo,
+} from "../../../common/src/hooks/useMatchRouteInfo";
 import React from "react";
 import { Link, Outlet } from "react-router-dom";
-import { NavInfo, useMatchNavInfo } from "@netdebug/common";
 
 const ABOUT_INFOS: NavInfo[] = [
   { label: "Release Notes", to: "", exactMatch: true },

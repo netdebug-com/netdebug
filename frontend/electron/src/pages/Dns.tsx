@@ -1,11 +1,11 @@
 import React, { useRef } from "react";
-import { DnsTrackerEntry } from "@netdebug/common";
-import { dataGridDefaultSxProp, desktop_api_url } from "@netdebug/common";
+import { DnsTrackerEntry } from "../common/netdebug_types";
+import { dataGridDefaultSxProp, desktop_api_url } from "../common/utils";
 import { Box } from "@mui/material";
 import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
 import { useLoaderData, useRevalidator } from "react-router";
-import { usePeriodicRefresh } from "@netdebug/common";
-import { fetchAndCheckResult } from "@netdebug/common";
+import { usePeriodicRefresh } from "../common/hooks/usePeriodicRefresh";
+import { fetchAndCheckResult } from "../common/data_loading";
 
 function format_ips(ips: string[]) {
   if (ips.length <= 1) {

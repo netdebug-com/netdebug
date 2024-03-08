@@ -1,8 +1,8 @@
 import React from "react";
-import { desktop_api_url } from "@netdebug/common";
-import { aggregateStatEntryDefaultSortFn } from "@netdebug/common";
-import { fetchAndCheckResult } from "@netdebug/common";
-import { AggregatedFlows } from "@netdebug/common";
+import { desktop_api_url } from "../common/utils";
+import { aggregateStatEntryDefaultSortFn } from "../common/flow_common";
+import { fetchAndCheckResult } from "../common/data_loading";
+import { AggregatedFlows } from "../common/components/AggregatedFlows";
 
 export const flowsByApplicationLoader = async () => {
   const res = await fetchAndCheckResult(desktop_api_url("get_app_flows"));

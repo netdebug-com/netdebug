@@ -5,7 +5,7 @@ import {
   CongestionLatencyPair,
   ConnectionKey,
   ConnectionMeasurements,
-} from "@netdebug/common";
+} from "../common/netdebug_types";
 import TableContainer from "@mui/material/TableContainer";
 import Paper from "@mui/material/Paper";
 import Table from "@mui/material/Table";
@@ -18,10 +18,10 @@ import {
   headerStyle,
   headerStyleWithWidth,
   prettyPrintSiUnits,
-} from "@netdebug/common";
-import { FlowSummary } from "@netdebug/common";
+} from "../common/utils";
+import { FlowSummary } from "../common/components/FlowSummary";
 import { useLoaderData } from "react-router";
-import { fetchAndCheckResult } from "@netdebug/common";
+import { fetchAndCheckResult } from "../common/data_loading";
 
 function toFlowKey(key: ConnectionKey): string {
   return (

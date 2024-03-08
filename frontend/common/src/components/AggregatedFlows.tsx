@@ -7,7 +7,7 @@ import { getColumns, getNameFromAggKind } from "../flow_common";
 import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../hooks/usePeriodicRefresh";
 import { ErrorMessage } from "./ErrorMessage";
-import { dataGridDefaultSxProp } from "src/utils";
+import { dataGridDefaultSxProp } from "../utils";
 
 const columns = getColumns([
   "id",

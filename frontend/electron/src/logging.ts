@@ -1,7 +1,10 @@
 import log from "electron-log/main";
 import { WebSocket } from "@oznu/ws-connect";
 import { LogMessage, Transport } from "electron-log";
-import { DesktopLogLevel, DesktopToTopologyServer } from "@netdebug/common";
+import {
+  DesktopLogLevel,
+  DesktopToTopologyServer,
+} from "./common/netdebug_types";
 // whether we are in dev-mode or prod
 import isDev from "electron-is-dev";
 
