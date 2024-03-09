@@ -19,6 +19,7 @@ use libconntrack::{
 
 use crate::{
     remotedb_client::{RemoteDBClient, RemoteDBClientSender},
+    secrets_db::Secrets,
     topology_server,
 };
 
@@ -41,7 +42,11 @@ pub struct WebServerContext {
     pub topology_server: TopologyServerSender,
     pub counter_registries: SharedExportedStatRegistries,
     pub remotedb_client: Option<RemoteDBClientSender>,
-    pub user_service_secret: String,
+    /// All of the shared secrets needed for off-box services
+    /// Assumes that the only people with access to the machine/binary/file are NetDebug employees
+    pub secrets: Secrets,
+    /// Are we running in production or dev mode?
+    pub production: bool,
 }
 
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
@@ -49,6 +54,13 @@ const MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE: usize = 8192;
 
 impl WebServerContext {
     pub fn new(args: &Args) -> Result<WebServerContext, Box<dyn Error>> {
+        let secrets = match Secrets::from_toml_file(&args.secrets_file) {
+            Ok(s) => s,
+            Err(e) => panic!(
+                "Error loading the secrets file {} :: {}",
+                &args.secrets_file, e
+            ),
+        };
         let pcap_device = match &args.pcap_device {
             Some(d) => lookup_pcap_device_by_name(d)?,
             None => {
@@ -102,7 +114,7 @@ impl WebServerContext {
         } else {
             Some(
                 RemoteDBClient::spawn(
-                    args.timescaledb_auth_file.clone(),
+                    secrets.clone(),
                     MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE,
                     Duration::from_secs(5),
                     counter_registries.new_registry("remotedb_client"),
@@ -111,7 +123,6 @@ impl WebServerContext {
             )
         };
         let remotedb_client_clone = remotedb_client.clone();
-        let user_service_secret = read_secret_from_file(&args.user_service_secret_file)?;
         let context = WebServerContext {
             user_db: UserDb::new(),
             html_root: args.html_root.clone(),
@@ -124,7 +135,8 @@ impl WebServerContext {
             max_connections_per_tracker: args.max_connections_per_tracker,
             counter_registries: counter_registries.registries(),
             remotedb_client,
-            user_service_secret,
+            secrets,
+            production: args.production,
         };
 
         // TODO Spawn lots for multi-processing
@@ -161,15 +173,6 @@ impl WebServerContext {
 
         Ok(context)
     }
-}
-
-/// Open this file, read the secret on one line and return it
-fn read_secret_from_file(user_service_secret_file: &String) -> Result<String, std::io::Error> {
-    Ok(std::fs::read_to_string(user_service_secret_file)?
-        .lines()
-        .map(String::from)
-        .next()
-        .unwrap())
 }
 
 /// Netdebug webserver
@@ -227,17 +230,13 @@ pub struct Args {
     #[arg(long, default_value = "./connections.sqlite3")]
     pub topology_server_db_path: String,
 
-    /// The path to the TimescaleDB Cloud service auth credential
-    #[arg(long, default_value = ".timescaledb_auth")]
-    pub timescaledb_auth_file: String,
+    /// The path to the shared secrets file - SSH!
+    #[arg(long, default_value = ".secrets.toml")]
+    pub secrets_file: String,
 
     /// If set, the remote timescaledb will not be used.
     #[arg(long, default_value_t = false)]
     pub no_timescaledb: bool,
-
-    /// Path to file containing user_service secret; must match test vs. prod config in console/.env
-    #[arg(long, default_value = ".clerk_secret")]
-    pub user_service_secret_file: String,
 }
 
 pub type Context = Arc<RwLock<WebServerContext>>;
@@ -337,7 +336,8 @@ pub mod test {
             max_connections_per_tracker: 4096,
             counter_registries,
             remotedb_client: Some(remotedb_client),
-            user_service_secret: "super secret".to_string(),
+            secrets: Secrets::default(),
+            production: false,
         }))
     }
 }

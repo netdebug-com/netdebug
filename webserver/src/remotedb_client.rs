@@ -1,15 +1,17 @@
-use std::{env, error::Error, fmt::Display, path::PathBuf, time::Duration};
+use std::{error::Error, fmt::Display, time::Duration};
 
 use chrono::{DateTime, Utc};
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration, StatType, Units};
 use indexmap::IndexMap;
 use libconntrack::utils::PerfMsgCheck;
 use libconntrack_wasm::{topology_server_messages::DesktopLogLevel, ConnectionMeasurements};
-use log::{error, info, warn};
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::channel;
 use tokio_postgres::Client;
 use uuid::Uuid;
+
+use crate::secrets_db::Secrets;
 
 /// An agent to manage the connection to the remote database service
 /// Currently we're using timescaledb.com b/c it supports both
@@ -97,17 +99,16 @@ pub enum RemoteDBClientMessages {
 
 impl RemoteDBClient {
     pub fn spawn(
-        auth_file: String,
+        secrets: Secrets,
         max_queue: usize,
         retry_time_max: tokio::time::Duration,
         stats: ExportedStatRegistry,
     ) -> Result<RemoteDBClientSender, Box<dyn Error>> {
         let (tx, rx) = channel(max_queue);
-        let auth_file = RemoteDBClient::get_fully_qualified_auth_file(auth_file);
-        let auth_token = std::fs::read_to_string(auth_file.clone()).map_err(|e| {
-            error!("Failed to read timescaledb_auth: {}", auth_file.display());
-            e
-        })?;
+        let auth_token = match secrets.timescale_db_write_secret {
+            Some(t) => t,
+            None => panic!("Started RemoteDBClient without setting the timescale_db_write_secret in the secrets file"),
+        };
         let url = format!("postgres://tsdbadmin:{}@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require", auth_token.trim());
         let url_no_auth = format!("postgres://tsdbadmin:{}@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require", "XXXXXXX");
 
@@ -207,22 +208,6 @@ impl RemoteDBClient {
                 }
             }
         }
-    }
-
-    /**
-     * Try a couple of places to find the auth_file, e.g.,
-     * $HOME
-     * CWD
-     * TODO : (some installed location?)
-     */
-    fn get_fully_qualified_auth_file(auth_file: String) -> PathBuf {
-        let mut path = if let Ok(home) = env::var("HOME") {
-            PathBuf::from(home)
-        } else {
-            PathBuf::from(".")
-        };
-        path.push(auth_file);
-        path
     }
 
     pub async fn handle_store_counters(

@@ -51,3 +51,8 @@
 
 5. TODO: Consider using Timescale's "tiered storage" because we don't need high performance on this data;
     details are here: https://docs.timescale.com/use-timescale/latest/data-tiering/
+
+6. User auth info: check out 
+  * https://docs.timescale.com/use-timescale/latest/security/client-credentials/
+  * Create a read-only user using SQL ala https://docs.timescale.com/use-timescale/latest/security/read-only-role/
+  * I created 'read_user' and granted access to the desktop_* tables.

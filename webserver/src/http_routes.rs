@@ -102,7 +102,21 @@ pub async fn setup_axum_http_routes(context: Context) -> Router {
 pub async fn setup_protected_rest_routes(context: Context) -> Router<Context> {
     // TODO: move the session store into the data base layer like in
     // https://github.com/maxcountryman/axum-login/blob/main/examples/sqlite/src/web/app.rs#L34
-    let service_secret = context.read().await.user_service_secret.clone();
+    let (service_secret, prod) = {
+        let lock = context.read().await;
+        if lock.production {
+            (lock.secrets.clerk_auth_prod_secret.clone(), "production")
+        } else {
+            (lock.secrets.clerk_auth_dev_secret.clone(), "dev")
+        }
+    };
+    let service_secret = match service_secret {
+        Some(s) => s,
+        None => panic!(
+            "Tried to connect to clerk without the {} secret in the secrets file",
+            prod
+        ),
+    };
     let user_service = UserServiceData::new_locked(service_secret).await;
     let backend = NetDebugUserBackend::new(user_service);
     let session_store = MemoryStore::default();
