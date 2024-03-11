@@ -157,9 +157,7 @@ let panicMsg = "";
 let isInPanicMsg = false;
 
 function spawn_desktop_binary(command: string) {
-  const args: string[] = [
-    // default to connecting to topology server on wss://topology.netdebug.com:443/desktop
-  ];
+  const args: string[] = ["--local-config-dir", app.getPath("userData")];
   // allow a developer to pass extra " "-separated args to the desktop subprocess via $CANARY_OPTIONS
   if (process.env.CANARY_OPTIONS) {
     args.push(...process.env.CANARY_OPTIONS.split(" "));
