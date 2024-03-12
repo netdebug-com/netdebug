@@ -80,9 +80,12 @@ if (!client_uuid) {
 console.log("Client UUID is:", client_uuid);
 
 let lastAcceptedEulaVersion = configStore.get(EULA_VERSION_STORE_KEY) as number;
-setupNetdebugLogging("wss://topology.netdebug.com:443/desktop");
-// for local debug:
-// setupNetdebugLogging("ws://localhost:3030/desktop");
+setupNetdebugLogging(
+  // for local debug:
+  //"ws://localhost:3030/desktop",
+  "wss://topology.netdebug.com:443/desktop",
+  client_uuid as string,
+);
 
 function isEulaAccepted() {
   return lastAcceptedEulaVersion >= CUR_EULA_VERSION;
