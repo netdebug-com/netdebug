@@ -2,7 +2,7 @@ use axum::async_trait;
 use axum_login::{AuthUser, AuthnBackend, UserId};
 use clerk_rs::{
     apis::{
-        jwks_api::{Jwks, JwksKey, JwksModel},
+        jwks_api::{Jwks, JwksModel},
         users_api::{GetUserError, GetUserListError, User},
         Error,
     },
@@ -14,13 +14,12 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 use thiserror::Error as ThisError;
-use tokio::sync::Mutex;
 
 /// The local state for a NetDebug users; TODO add more state!
 /// Clerk.com handles all of the authn for us but we still need
 /// to keep our own local state about a user, e.g., what company they're from
 #[allow(unused)] // TODO: remove!
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct NetDebugUser {
     /// The UserId we use internally is exactly the clerk_user.id string
     pub user_id: String,
@@ -28,17 +27,29 @@ pub struct NetDebugUser {
     /// for now use multiple accounts
     pub company_id: i64,
     /// A unique session key which is a hash of the user_id and the random seed
-    pub session_key: String,
+    pub session_key: Vec<u8>,
     // TODO : put in more state
 }
+
+impl std::fmt::Debug for NetDebugUser {
+    /// Manually implement debug so that people do not accidentally log/print
+    /// the session key.  Session keys might be short lived or long lived and
+    /// the long lived ones are equivalent to a plaintext password.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // every field except for session_key
+        f.debug_struct("NetDebugUser")
+            .field("user_id", &self.user_id)
+            .field("company_id", &self.company_id)
+            .finish()
+    }
+}
 impl NetDebugUser {
-    pub fn make_session_key(user_id: &String, random_salt: &String) -> String {
+    pub fn make_session_key(user_id: &String, random_salt: &String) -> Vec<u8> {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(user_id);
         hasher.update(random_salt);
-        let session_key = format!("{:x}", hasher.finalize());
-        session_key
+        hasher.finalize().as_slice().to_owned()
     }
 
     /// Translate a User as defined by Clerk.com into our own internal
@@ -73,7 +84,7 @@ impl AuthUser for NetDebugUser {
 
     // Tell Axum how to get a unique session key for the user
     fn session_auth_hash(&self) -> &[u8] {
-        self.session_key.as_bytes()
+        self.session_key.as_slice()
     }
 }
 
@@ -129,8 +140,6 @@ impl AuthnBackend for NetDebugUserBackend {
     ) -> Result<Option<Self::User>, Self::Error> {
         match self
             .user_service
-            .lock()
-            .await
             .get_user_from_clerk_jwt(&creds.clerk_jwt)
             .await?
         {
@@ -145,13 +154,13 @@ impl AuthnBackend for NetDebugUserBackend {
 
     async fn get_user(&self, user_id: &UserId<Self>) -> Result<Option<Self::User>, Self::Error> {
         // our user_id is a clerk id, so look it up in the clerk service
-        let clerk_user = self.user_service.lock().await.get_user(user_id).await?;
+        let clerk_user = self.user_service.get_user(user_id).await?;
         NetDebugUser::from_validated_clerk_user(&clerk_user, &self.random_salt)
     }
 }
 
 /// Wrapper around the UserServiceData so we can create a shared instance
-pub type UserService = Arc<Mutex<UserServiceData>>;
+pub type UserService = Arc<UserServiceData>;
 
 #[derive(ThisError, Debug)]
 pub enum UserAuthError {
@@ -174,39 +183,12 @@ pub enum UserAuthError {
 
 /// Abstract away some of the UserService details... but not that much
 /// Currently quite tied to Clerk.com...
+#[derive(Clone)]
 pub struct UserServiceData {
     /// A wrappper around the auth and REST APIs to clerk
-    client: Clerk,
+    client: Arc<Clerk>,
     /// A cached list of the Clerk public keys
-    jwks_models: JwksModel,
-    /// The clerk config, needed to create a new client
-    config: ClerkConfiguration,
-}
-
-impl Clone for UserServiceData {
-    // manually implement Clone b/c clerk_rs::Clerk doesn't do it
-    fn clone(&self) -> Self {
-        // sigh, neither client or jwks_models impl Clone
-        let client = Clerk::new(self.config.clone());
-        let keys = self
-            .jwks_models
-            .keys
-            .iter()
-            .map(|k| JwksKey {
-                use_key: k.use_key.clone(),
-                kty: k.kty.clone(),
-                kid: k.kid.clone(),
-                alg: k.alg.clone(),
-                n: k.n.clone(),
-                e: k.e.clone(),
-            })
-            .collect::<Vec<JwksKey>>();
-        Self {
-            client,
-            jwks_models: JwksModel { keys },
-            config: self.config.clone(),
-        }
-    }
+    jwks_models: Arc<JwksModel>,
 }
 
 impl UserServiceData {
@@ -215,23 +197,20 @@ impl UserServiceData {
     ///   "pk_live_XXX" key is NOT!
     pub async fn new(service_secret: String) -> UserServiceData {
         let config = ClerkConfiguration::new(None, None, Some(service_secret), None);
-        let client = Clerk::new(config.clone());
+        let client = Arc::new(Clerk::new(config.clone()));
         // TODO: decide if we want to/can cache the JWT models; still not super sure what they are
-        let jwks_models = Jwks::get_jwks(&client).await.unwrap();
+        let jwks_models = Arc::new(Jwks::get_jwks(&client).await.unwrap());
         UserServiceData {
             client,
             jwks_models,
-            config,
         }
     }
 
     pub async fn new_locked(service_secret: String) -> UserService {
-        Arc::new(Mutex::new(UserServiceData::new(service_secret).await))
+        Arc::new(UserServiceData::new(service_secret).await)
     }
 
-    pub async fn list_users(
-        &mut self,
-    ) -> Result<Vec<clerk_rs::models::User>, Error<GetUserListError>> {
+    pub async fn list_users(&self) -> Result<Vec<clerk_rs::models::User>, Error<GetUserListError>> {
         User::get_user_list(
             &self.client,
             None,
@@ -252,7 +231,7 @@ impl UserServiceData {
     /// This is the "user_XXXXXXX" string in the sub of the JWT token from Clerk.com
     /// NOTE: Clerk can (will automatically?) merge accounts different auth providers
     pub async fn get_user(
-        &mut self,
+        &self,
         user_id: &str,
     ) -> Result<clerk_rs::models::User, Error<GetUserError>> {
         User::get_user(&self.client, user_id).await
@@ -261,7 +240,7 @@ impl UserServiceData {
     /// Parse the JWT and if it's valid, extract the 'sub' id and use that to lookup
     /// in Clerk.com's DB
     pub async fn get_user_from_clerk_jwt(
-        &mut self,
+        &self,
         jwt: &str,
     ) -> Result<Option<clerk_rs::models::User>, UserAuthError> {
         // TODO: remove the unwrap()s! and return a joined error code
@@ -349,7 +328,7 @@ pub mod test {
     /// Can we connect to the auth and get a list of users?
     #[tokio::test]
     async fn test_get_users() {
-        let mut user_service = UserServiceData::new(TESTING_KEY.to_string()).await;
+        let user_service = UserServiceData::new(TESTING_KEY.to_string()).await;
         for user in user_service.list_users().await.unwrap() {
             println!("User: {:#?}", user);
         }
@@ -358,7 +337,7 @@ pub mod test {
     /// This test will only work if Rob has logged into Clerk.com - which he has!
     #[tokio::test]
     async fn test_get_user() {
-        let mut user_service = UserServiceData::new(TESTING_KEY.to_string()).await;
+        let user_service = UserServiceData::new(TESTING_KEY.to_string()).await;
         let rob = "user_2d1N4hIK6SPh90QI7W2YrGpgHRD";
         let user = user_service.get_user(rob).await.unwrap();
         let emails = user.email_addresses.unwrap();
