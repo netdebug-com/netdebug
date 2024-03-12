@@ -35,23 +35,40 @@ const COUNTER_REMOTE_SYNC_INTERVAL_MS: u64 = 60_000;
 const WS_KEEPALIVE_INTERVAL_MS: u64 = 1_000;
 const X_NETDEBUG_CLIENT_UUID_HEADER: &str = "X-Netdebug-Client-Uuid";
 
-#[allow(dead_code)] // will fix in next PR
+/// TopologyServer RPC messages. Used inside the desktop binary to
+/// send RPC requests from the UI facing rest endpoints to topology_client
+/// and from there to the server via websocket
+/// Also used inside the topology server between the websocket handler
+/// (from the desktop) to the TopologyServer impl that implements the
+/// actual business logic
 #[derive(Clone, Debug)]
-pub enum TopologyServerMessage {
+pub enum TopologyRpcMessage {
     GetMyIpAndUserAgent {
         reply_tx: Sender<PerfMsgCheck<(IpAddr, String)>>,
     },
-    StoreConnectionMeasurements {
-        connection_measurements: Box<ConnectionMeasurements>,
-    },
+
     InferCongestion {
         connection_measurements: Vec<ConnectionMeasurements>,
         reply_tx: Sender<PerfMsgCheck<CongestionSummary>>,
     },
 }
 
-pub type TopologyServerSender = Sender<PerfMsgCheck<TopologyServerMessage>>;
-pub type TopologyServerReceiver = Receiver<PerfMsgCheck<TopologyServerMessage>>;
+pub type TopologyRpcSender = Sender<PerfMsgCheck<TopologyRpcMessage>>;
+pub type TopologyRpcReceiver = Receiver<PerfMsgCheck<TopologyRpcMessage>>;
+
+/// Messages used to store data (ConnectionMeasurments, Pings, etc.) to a remote
+/// backend. E.g., in the desktop it can be used to send a message to the topology_client
+/// (which has the WS connection to the server). In the webserver it can be used for conn_tracker
+/// to send measurements to the DB backend.
+#[derive(Clone, Debug)]
+pub enum DataStorageMessage {
+    StoreConnectionMeasurements {
+        connection_measurements: Box<ConnectionMeasurements>,
+    },
+}
+
+pub type DataStorageSender = Sender<PerfMsgCheck<DataStorageMessage>>;
+pub type DataStorageReceiver = Receiver<PerfMsgCheck<DataStorageMessage>>;
 
 /// A local agent to manage all of the state around talking to the topology server
 const DEFAULT_FIRST_RETRY_TIME_MS: u64 = 100;
@@ -59,8 +76,11 @@ pub struct TopologyServerConnection {
     /// WebSocket url to topology server, e.g., ws://localhost:3030
     url: String,
     /// A copy of the tx queue to send to us, in case others need it
-    tx: TopologyServerSender,
-    rx: TopologyServerReceiver,
+    rpc_tx: TopologyRpcSender,
+    rpc_rx: TopologyRpcReceiver,
+    /// A copy of the tx queue to send to us, in case others need it
+    storage_tx: DataStorageSender,
+    storage_rx: DataStorageReceiver,
     buffer_size: usize,
     /// If we fail to connect, when we next will try to connect; exponential back off
     retry_time: Duration,
@@ -89,10 +109,12 @@ pub struct TopologyServerConnection {
 
 impl TopologyServerConnection {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    fn new(
         url: String,
-        tx: TopologyServerSender,
-        rx: Receiver<PerfMsgCheck<TopologyServerMessage>>,
+        rpc_tx: TopologyRpcSender,
+        rpc_rx: TopologyRpcReceiver,
+        storage_tx: DataStorageSender,
+        storage_rx: DataStorageReceiver,
         buffer_size: usize,
         max_retry_time: Duration,
         client_uuid: Uuid,
@@ -101,8 +123,10 @@ impl TopologyServerConnection {
     ) -> TopologyServerConnection {
         TopologyServerConnection {
             url,
-            tx,
-            rx,
+            rpc_tx,
+            rpc_rx,
+            storage_tx,
+            storage_rx,
             buffer_size,
             retry_time: Duration::from_millis(DEFAULT_FIRST_RETRY_TIME_MS),
             max_retry_time,
@@ -142,14 +166,18 @@ impl TopologyServerConnection {
         client_uuid: Uuid,
         super_counters_registry: SharedExportedStatRegistries,
         stats_registry: ExportedStatRegistry,
-    ) -> Sender<PerfMsgCheck<TopologyServerMessage>> {
-        let (tx, rx) = channel(buffer_size);
-        let tx_clone = tx.clone();
+    ) -> (TopologyRpcSender, DataStorageSender) {
+        let (rpc_tx, rpc_rx) = channel(buffer_size);
+        let rpc_tx_clone = rpc_tx.clone();
+        let (storage_tx, storage_rx) = channel(buffer_size);
+        let storage_tx_clone = storage_tx.clone();
         tokio::spawn(async move {
             let topology_server = TopologyServerConnection::new(
                 url,
-                tx,
-                rx,
+                rpc_tx,
+                rpc_rx,
+                storage_tx,
+                storage_rx,
                 buffer_size,
                 max_retry_time,
                 client_uuid,
@@ -158,7 +186,7 @@ impl TopologyServerConnection {
             );
             topology_server.rx_loop().await;
         });
-        tx_clone
+        (rpc_tx_clone, storage_tx_clone)
     }
 
     /// Loop indefinitely over our inputs from the desktop and the
@@ -247,8 +275,12 @@ impl TopologyServerConnection {
                     };
                     last_ws_received_time = tokio::time::Instant::now();
                 }
-                desktop_msg = self.rx.recv() => match desktop_msg {
-                    Some(desktop_msg) => self.handle_desktop_msg(desktop_msg, &ws_tx).await,
+                rpc_msg = self.rpc_rx.recv() => match rpc_msg {
+                    Some(desktop_msg) => self.handle_desktop_rpc_msg(desktop_msg, &ws_tx).await,
+                    None => warn!("Got None back from TopologyServerConnection rx!?"),
+                },
+                storage_msg = self.storage_rx.recv() => match storage_msg {
+                    Some(desktop_msg) => self.handle_desktop_storage_msg(desktop_msg, &ws_tx).await,
                     None => warn!("Got None back from TopologyServerConnection rx!?"),
                 },
                 _ = keepalive_ticks.tick() => {
@@ -322,16 +354,21 @@ impl TopologyServerConnection {
     }
 
     #[allow(unused)] // for now, we'll eventually need this
-    pub fn get_tx(&self) -> TopologyServerSender {
-        self.tx.clone()
+    pub fn get_rpc_tx(&self) -> TopologyRpcSender {
+        self.rpc_tx.clone()
     }
 
-    pub async fn handle_desktop_msg(
+    #[allow(unused)] // for now, we'll eventually need this
+    pub fn get_storage_tx(&self) -> DataStorageSender {
+        self.storage_tx.clone()
+    }
+
+    pub async fn handle_desktop_rpc_msg(
         &mut self,
-        desktop_msg: PerfMsgCheck<TopologyServerMessage>,
+        desktop_msg: PerfMsgCheck<TopologyRpcMessage>,
         ws_tx: &Sender<PerfMsgCheck<DesktopToTopologyServer>>,
     ) {
-        use TopologyServerMessage::*;
+        use TopologyRpcMessage::*;
         match desktop_msg.perf_check_get("TopologyServerConnection:: handle_desktop_msg()") {
             GetMyIpAndUserAgent { reply_tx } => {
                 // if we have it cached, then reply right away, else queue them
@@ -342,6 +379,23 @@ impl TopologyServerConnection {
                     self.waiting_for_hello.push(reply_tx.clone());
                 }
             }
+            InferCongestion {
+                connection_measurements,
+                reply_tx,
+            } => {
+                self.handle_infer_congestion(ws_tx, connection_measurements, reply_tx)
+                    .await
+            }
+        }
+    }
+
+    pub async fn handle_desktop_storage_msg(
+        &mut self,
+        desktop_msg: PerfMsgCheck<DataStorageMessage>,
+        ws_tx: &Sender<PerfMsgCheck<DesktopToTopologyServer>>,
+    ) {
+        use DataStorageMessage::*;
+        match desktop_msg.perf_check_get("TopologyServerConnection:: handle_desktop_msg()") {
             StoreConnectionMeasurements {
                 connection_measurements,
             } => {
@@ -354,13 +408,6 @@ impl TopologyServerConnection {
                     self.desktop2server_store_msgs_stat
                 )
                 .await
-            }
-            InferCongestion {
-                connection_measurements,
-                reply_tx,
-            } => {
-                self.handle_infer_congestion(ws_tx, connection_measurements, reply_tx)
-                    .await
             }
         }
     }
@@ -526,14 +573,17 @@ mod test {
      */
     #[tokio::test]
     async fn test_get_my_ip() {
-        let (tx, rx) = channel(10);
+        let (rpc_tx, rpc_rx) = channel(10);
+        let (storage_tx, storage_rx) = channel(10);
         let test_ip = IpAddr::from_str("1.2.3.4").unwrap();
         let test_user_agent = "JoMama".to_string();
         let super_counters_registry = SuperRegistry::new(Instant::now()).registries(); // for testing
         let mut topology = TopologyServerConnection::new(
             "fake URL".to_string(),
-            tx.clone(),
-            rx,
+            rpc_tx.clone(),
+            rpc_rx,
+            storage_tx,
+            storage_rx,
             10,
             Duration::from_secs(10),
             Uuid::default(),
@@ -544,8 +594,8 @@ mod test {
         // request the IP before it's ready
         let (reply_tx, mut reply_rx) = channel(10);
         topology
-            .handle_desktop_msg(
-                PerfMsgCheck::new(TopologyServerMessage::GetMyIpAndUserAgent { reply_tx }),
+            .handle_desktop_rpc_msg(
+                PerfMsgCheck::new(TopologyRpcMessage::GetMyIpAndUserAgent { reply_tx }),
                 &ws_tx,
             )
             .await;
@@ -570,8 +620,8 @@ mod test {
         // request the IP after it's cached
         let (reply_tx, mut reply_rx) = channel(10);
         topology
-            .handle_desktop_msg(
-                PerfMsgCheck::new(TopologyServerMessage::GetMyIpAndUserAgent { reply_tx }),
+            .handle_desktop_rpc_msg(
+                PerfMsgCheck::new(TopologyRpcMessage::GetMyIpAndUserAgent { reply_tx }),
                 &ws_tx,
             )
             .await;
@@ -601,12 +651,15 @@ mod test {
         });
         println!("listening on {}", ephemeral_port);
         let url = format!("ws://127.0.0.1:{}/test", ephemeral_port);
-        let (tx, rx) = channel::<PerfMsgCheck<TopologyServerMessage>>(10);
+        let (rpc_tx, rpc_rx) = channel::<PerfMsgCheck<TopologyRpcMessage>>(10);
+        let (storage_tx, storage_rx) = channel(10);
         let super_counters_registry = SuperRegistry::new(Instant::now()).registries(); // for testing
         let mut topology_client = TopologyServerConnection::new(
             url,
-            tx,
-            rx,
+            rpc_tx,
+            rpc_rx,
+            storage_tx,
+            storage_rx,
             1024,
             Duration::from_millis(10),
             Uuid::default(),
@@ -640,12 +693,15 @@ mod test {
         });
         println!("listening on {}", ephemeral_port);
         let url = format!("ws://127.0.0.1:{}/test", ephemeral_port);
-        let (tx, rx) = channel::<PerfMsgCheck<TopologyServerMessage>>(10);
+        let (rpc_tx, rpc_rx) = channel::<PerfMsgCheck<TopologyRpcMessage>>(10);
+        let (storage_tx, storage_rx) = channel(10);
         let super_counters_registry = SuperRegistry::new(Instant::now()).registries(); // for testing
         let mut topology_client = TopologyServerConnection::new(
             url,
-            tx,
-            rx,
+            rpc_tx,
+            rpc_rx,
+            storage_tx,
+            storage_rx,
             1024,
             Duration::from_millis(10),
             Uuid::default(),

@@ -473,6 +473,11 @@ export type ExportedNeighborState = {
     "vendor_oui": (string | null);
 };
 export type DesktopLogLevel = ("Error" | "Warn" | "Info" | "Debug");
+
+/**
+ * Messages sent over the websocket from the desktop app (both
+ * rust and electron) to the topology server.
+ */
 export type DesktopToTopologyServer = ({
     "tag": "Hello";
 } | {

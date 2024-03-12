@@ -39,7 +39,7 @@ use crate::{
     prober_helper::ProberHelper,
     process_tracker::{ProcessTrackerEntry, ProcessTrackerMessage, ProcessTrackerSender},
     send_or_log_sync,
-    topology_client::{TopologyServerMessage, TopologyServerSender},
+    topology_client::{DataStorageMessage, DataStorageSender},
     utils::{self, packet_is_tcp_rst, remote_ip_to_local, PerfMsgCheck},
 };
 
@@ -177,7 +177,7 @@ impl<'a> ConnectionTracker<'a> {
                 send_or_log_sync!(
                     tx,
                     "send_connection_storage_msg()",
-                    TopologyServerMessage::StoreConnectionMeasurements {
+                    DataStorageMessage::StoreConnectionMeasurements {
                         connection_measurements: measurement
                     }
                 );
@@ -331,7 +331,7 @@ pub struct ConnectionTracker<'a> {
     max_connections: usize,
     local_addrs: HashSet<IpAddr>,
     prober_helper: ProberHelper,
-    topology_client: Option<TopologyServerSender>,
+    topology_client: Option<DataStorageSender>,
     // If set, all evicted connections are send here. Mostly used for debugging/testing
     all_evicted_connections_listener: Option<Sender<Box<ConnectionMeasurements>>>,
     dns_tx: Option<DnsTrackerSender>,
@@ -377,7 +377,7 @@ pub struct ConnectionTracker<'a> {
 }
 impl<'a> ConnectionTracker<'a> {
     pub fn new(
-        topology_client: Option<TopologyServerSender>,
+        topology_client: Option<DataStorageSender>,
         max_connections_per_tracker: usize,
         local_addrs: HashSet<IpAddr>,
         prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
@@ -467,7 +467,7 @@ impl<'a> ConnectionTracker<'a> {
         }
     }
 
-    pub fn set_topology_client(&mut self, topology_client: Option<TopologyServerSender>) {
+    pub fn set_topology_client(&mut self, topology_client: Option<DataStorageSender>) {
         self.topology_client = topology_client;
     }
 
@@ -1859,7 +1859,7 @@ pub mod test {
         connection_tracker.add(pkt_unrelated_conn.clone());
         assert_eq!(connection_tracker.connections.len(), 1);
         let evicted = evict_rx.try_recv().unwrap().skip_perf_check();
-        use TopologyServerMessage::*;
+        use DataStorageMessage::*;
         match evicted {
             StoreConnectionMeasurements {
                 connection_measurements: m,
@@ -1867,8 +1867,8 @@ pub mod test {
                 assert_eq!(m.key.local_ip, IpAddr::from_str("192.168.1.238").unwrap());
                 assert_eq!(m.key.remote_ip, IpAddr::from_str("34.121.150.27").unwrap());
                 assert_eq!(m.key.remote_l4_port, 443);
-            }
-            _wut => panic!("Expected StoreConnectionMeasurements, got {:?}", _wut),
+            } //
+              //_wut => panic!("Expected StoreConnectionMeasurements, got {:?}", _wut),
         }
 
         // make sure we have the "unrelated" connection in the tracker

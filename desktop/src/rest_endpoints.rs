@@ -11,7 +11,7 @@ use gui_types::CongestedLinksReply;
 use libconntrack::{
     connection_tracker::{ConnectionTrackerMsg, TimeMode},
     dns_tracker::DnsTrackerMessage,
-    topology_client::TopologyServerMessage,
+    topology_client::TopologyRpcMessage,
     utils::{channel_rpc, channel_rpc_perf},
 };
 use libconntrack_wasm::{
@@ -216,10 +216,10 @@ pub(crate) async fn handle_get_my_ip(
 ) -> response::Json<IpAddr> {
     // TODO: should return a list of IPs or a pair of v4/v6.
     let (tx, mut rx) = channel(1);
-    let req = TopologyServerMessage::GetMyIpAndUserAgent { reply_tx: tx };
+    let req = TopologyRpcMessage::GetMyIpAndUserAgent { reply_tx: tx };
     response::Json(
         channel_rpc_perf(
-            trackers.topology_client.clone().unwrap(),
+            trackers.topology_rpc_client.clone().unwrap(),
             req,
             &mut rx,
             "topology_server/GetMyIp",
@@ -276,12 +276,12 @@ pub(crate) async fn handle_get_congested_links(
 
     // 2. send the measurements to the topology server for analysis
     let (tx, mut rx) = channel(1);
-    let req = TopologyServerMessage::InferCongestion {
+    let req = TopologyRpcMessage::InferCongestion {
         connection_measurements: conn_measurements.clone(),
         reply_tx: tx,
     };
     let congestion_summary = channel_rpc_perf(
-        trackers.topology_client.clone().unwrap(),
+        trackers.topology_rpc_client.clone().unwrap(),
         req,
         &mut rx,
         "congested links -- topology_server/InferCongestion",
