@@ -6,6 +6,7 @@ use common_wasm::option_to_string;
 pub use connection_key::*;
 pub use connection_measurements::*;
 pub use traffic_stats::*;
+use uuid::Uuid;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -225,6 +226,10 @@ pub struct NetworkGatewayPingState {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, TypeDef)]
 pub struct NetworkInterfaceState {
+    /// A random, unique id to identify this particular instance. We need/use
+    /// this on the DB backend. To match DB entries
+    #[type_def(type_of = "String")]
+    pub uuid: Uuid,
     /// The default gw IPs, if known/assigned.  Could be empty
     pub gateways: Vec<IpAddr>,
     /// The name the OS gave to the interface, if exists/active
@@ -290,6 +295,7 @@ impl NetworkInterfaceState {
      */
     pub fn mk_mock(interface_name: String, start_time: DateTime<Utc>) -> NetworkInterfaceState {
         NetworkInterfaceState {
+            uuid: Uuid::nil(),
             gateways: Vec::new(),
             interface_name: Some(interface_name),
             interface_ips: Vec::new(),

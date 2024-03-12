@@ -2223,6 +2223,7 @@ dependencies = [
  "serde_with 3.6.0",
  "thiserror",
  "typescript-type-def",
+ "uuid",
  "wasm-bindgen-test",
  "wasm-logger",
 ]

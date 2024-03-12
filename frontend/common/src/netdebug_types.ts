@@ -419,6 +419,12 @@ export type NetworkGatewayPingState = {
 export type NetworkInterfaceState = {
 
     /**
+     * A random, unique id to identify this particular instance. We need/use
+     * this on the DB backend. To match DB entries
+     */
+    "uuid": string;
+
+    /**
      * The default gw IPs, if known/assigned.  Could be empty
      */
     "gateways": (string)[];
@@ -509,6 +515,11 @@ export type DesktopToTopologyServer = ({
         "os": string;
         "version": string;
         "client_id": string;
+    };
+} | {
+    "tag": "PushNetworkInterfaceState";
+    "data": {
+        "network_interface_state": NetworkInterfaceState;
     };
 } | {
     "tag": "Ping";

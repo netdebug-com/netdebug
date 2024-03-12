@@ -112,6 +112,9 @@ async fn handle_desktop_message(
         Ping => {
             warn!("Received a DesktopToTopologyServer::Ping as JSON which should never be sent over the wire");
         }
+        PushNetworkInterfaceState { network_interface_state } => {
+            info!("TODO: Received network interface state: {}", network_interface_state);
+        }
     }
 }
 

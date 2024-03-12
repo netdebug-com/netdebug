@@ -35,6 +35,8 @@ pub fn spawn_webserver_connection_log_wrapper(
                     )
                     .await
                 }
+                // Ignore all other cases. ConnectionTracker isn't generating them
+                StoreNetworkInterfaceState { .. } => (),
             }
         }
         warn!("Exiting WebserverConnectionLogWrapper--rx_loop");

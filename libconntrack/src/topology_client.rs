@@ -21,7 +21,7 @@ use futures_util::StreamExt;
 use libconntrack_wasm::topology_server_messages::{
     CongestionSummary, DesktopToTopologyServer, TopologyServerToDesktop,
 };
-use libconntrack_wasm::ConnectionMeasurements;
+use libconntrack_wasm::{ConnectionMeasurements, NetworkInterfaceState};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Receiver, Sender, WeakSender};
 use tokio_tungstenite::tungstenite::error::Error as TungsteniteError;
@@ -64,6 +64,9 @@ pub type TopologyRpcReceiver = Receiver<PerfMsgCheck<TopologyRpcMessage>>;
 pub enum DataStorageMessage {
     StoreConnectionMeasurements {
         connection_measurements: Box<ConnectionMeasurements>,
+    },
+    StoreNetworkInterfaceState {
+        network_interface_state: NetworkInterfaceState,
     },
 }
 
@@ -409,6 +412,19 @@ impl TopologyServerConnection {
                 )
                 .await
             }
+            StoreNetworkInterfaceState {
+                network_interface_state,
+            } => {
+                send_or_log_async!(
+                    ws_tx,
+                    "handle_desktop_msg::StoreNetworkInterfaceState",
+                    DesktopToTopologyServer::PushNetworkInterfaceState {
+                        network_interface_state,
+                    },
+                    self.desktop2server_store_msgs_stat
+                )
+                .await
+            }
         }
     }
 
@@ -430,7 +446,7 @@ impl TopologyServerConnection {
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 let msg = msg.perf_check_get("TopologyServerConnection::spawn_ws_writer");
-                let outgoing_msg = if msg == DesktopToTopologyServer::Ping {
+                let outgoing_msg = if matches!(msg, DesktopToTopologyServer::Ping) {
                     Message::Ping(Vec::new())
                 } else {
                     Message::Text(serde_json::to_string(&msg).unwrap())
