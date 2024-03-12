@@ -41,6 +41,7 @@ pub struct WebServerContext {
     pub topology_server: TopologyServerSender,
     pub counter_registries: SharedExportedStatRegistries,
     pub remotedb_client: Option<RemoteDBClientSender>,
+    pub user_service_secret: String,
 }
 
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
@@ -110,6 +111,7 @@ impl WebServerContext {
             )
         };
         let remotedb_client_clone = remotedb_client.clone();
+        let user_service_secret = read_secret_from_file(&args.user_service_secret_file)?;
         let context = WebServerContext {
             user_db: UserDb::new(),
             html_root: args.html_root.clone(),
@@ -122,6 +124,7 @@ impl WebServerContext {
             max_connections_per_tracker: args.max_connections_per_tracker,
             counter_registries: counter_registries.registries(),
             remotedb_client,
+            user_service_secret,
         };
 
         // TODO Spawn lots for multi-processing
@@ -158,6 +161,15 @@ impl WebServerContext {
 
         Ok(context)
     }
+}
+
+/// Open this file, read the secret on one line and return it
+fn read_secret_from_file(user_service_secret_file: &String) -> Result<String, std::io::Error> {
+    Ok(std::fs::read_to_string(user_service_secret_file)?
+        .lines()
+        .map(String::from)
+        .next()
+        .unwrap())
 }
 
 /// Netdebug webserver
@@ -222,6 +234,10 @@ pub struct Args {
     /// If set, the remote timescaledb will not be used.
     #[arg(long, default_value_t = false)]
     pub no_timescaledb: bool,
+
+    /// Path to file containing user_service secret; must match test vs. prod config in console/.env
+    #[arg(long, default_value = ".clerk_secret")]
+    pub user_service_secret_file: String,
 }
 
 pub type Context = Arc<RwLock<WebServerContext>>;
@@ -321,6 +337,7 @@ pub mod test {
             max_connections_per_tracker: 4096,
             counter_registries,
             remotedb_client: Some(remotedb_client),
+            user_service_secret: "super secret".to_string(),
         }))
     }
 }

@@ -1,3 +1,5 @@
+use axum::async_trait;
+use axum_login::{AuthUser, AuthnBackend, UserId};
 use clerk_rs::{
     apis::{
         jwks_api::{Jwks, JwksKey, JwksModel},
@@ -9,9 +11,144 @@ use clerk_rs::{
     ClerkConfiguration,
 };
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
-use std::{str::FromStr, sync::Arc};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 use thiserror::Error as ThisError;
 use tokio::sync::Mutex;
+
+/// The local state for a NetDebug users; TODO add more state!
+/// Clerk.com handles all of the authn for us but we still need
+/// to keep our own local state about a user, e.g., what company they're from
+#[allow(unused)] // TODO: remove!
+#[derive(Debug, Clone)]
+pub struct NetDebugUser {
+    /// The UserId we use internally is exactly the clerk_user.id string
+    pub user_id: String,
+    /// A unique ID for the company the user is in.  If people have multiple companies,
+    /// for now use multiple accounts
+    pub company_id: i64,
+    /// A unique session key which is a hash of the user_id and the random seed
+    pub session_key: String,
+    // TODO : put in more state
+}
+impl NetDebugUser {
+    pub fn make_session_key(user_id: &String, random_salt: &String) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(user_id);
+        hasher.update(random_salt);
+        let session_key = format!("{:x}", hasher.finalize());
+        session_key
+    }
+
+    /// Translate a User as defined by Clerk.com into our own internal
+    /// state structure.  This should only be done after validating the
+    /// user, e.g., by calling [UserServiceData::get_user_from_clerk_jwt()]
+    fn from_validated_clerk_user(
+        clerk_user: &clerk_rs::models::User,
+        random_salt: &String,
+    ) -> Result<Option<NetDebugUser>, UserAuthError> {
+        match &clerk_user.id {
+            Some(user_id) => {
+                let session_key = NetDebugUser::make_session_key(user_id, random_salt);
+                Ok(Some(NetDebugUser {
+                    user_id: user_id.clone(),
+                    company_id: 0, // TODO: look up in our DB!
+                    session_key,
+                }))
+            }
+            None => Ok(None), // AFAICT, this should never happen but if it does, just return None="no user"
+        }
+    }
+}
+
+/// Translation layer to tell Axum how to get our user's IDs and session auth token
+impl AuthUser for NetDebugUser {
+    type Id = String; // how we uniquely ID a user
+
+    // Tell Axum how to get a unique id for the users
+    fn id(&self) -> Self::Id {
+        self.user_id.clone()
+    }
+
+    // Tell Axum how to get a unique session key for the user
+    fn session_auth_hash(&self) -> &[u8] {
+        self.session_key.as_bytes()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AuthCredentials {
+    pub clerk_jwt: String,
+}
+pub type AuthSession = axum_login::AuthSession<NetDebugUserBackend>;
+
+#[derive(Clone)]
+pub struct NetDebugUserBackend {
+    /// A wrapper around our Clerk.com state
+    user_service: UserService,
+    /// Some random data to ensure our session_keys are not guessable
+    /// NOTE: we don't presist or share this state so users will have
+    /// to re-auth if the server reboots or going between servers
+    ///
+    /// TODO: persist the state :-)
+    random_salt: String,
+}
+
+impl NetDebugUserBackend {
+    pub fn new(user_service: UserService) -> NetDebugUserBackend {
+        use rand::{distributions::Alphanumeric, Rng};
+        // Create a 64-character long random string
+        let random_salt = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(64)
+            .map(char::from)
+            .collect();
+        NetDebugUserBackend {
+            user_service,
+            random_salt,
+        }
+    }
+}
+
+#[async_trait]
+impl AuthnBackend for NetDebugUserBackend {
+    #[doc = r" Authenticating user type."]
+    type User = NetDebugUser;
+
+    #[doc = r" Credential type used for authentication."]
+    type Credentials = AuthCredentials;
+
+    #[doc = r" An error which can occur during authentication and authorization."]
+    type Error = UserAuthError;
+
+    #[doc = r" Authenticates the given credentials with the backend."]
+    async fn authenticate(
+        &self,
+        creds: Self::Credentials,
+    ) -> Result<Option<Self::User>, Self::Error> {
+        match self
+            .user_service
+            .lock()
+            .await
+            .get_user_from_clerk_jwt(&creds.clerk_jwt)
+            .await?
+        {
+            Some(clerk_user) => {
+                NetDebugUser::from_validated_clerk_user(&clerk_user, &self.random_salt)
+            }
+            None => Err(UserAuthError::UserNotFound {
+                jwt: creds.clerk_jwt,
+            }),
+        }
+    }
+
+    async fn get_user(&self, user_id: &UserId<Self>) -> Result<Option<Self::User>, Self::Error> {
+        // our user_id is a clerk id, so look it up in the clerk service
+        let clerk_user = self.user_service.lock().await.get_user(user_id).await?;
+        NetDebugUser::from_validated_clerk_user(&clerk_user, &self.random_salt)
+    }
+}
 
 /// Wrapper around the UserServiceData so we can create a shared instance
 pub type UserService = Arc<Mutex<UserServiceData>>;
@@ -31,6 +168,8 @@ pub enum UserAuthError {
         expected: Algorithm,
         found: Algorithm,
     },
+    #[error("Clerk could not find user matching JWT {jwt}")]
+    UserNotFound { jwt: String },
 }
 
 /// Abstract away some of the UserService details... but not that much
@@ -165,8 +304,40 @@ impl UserServiceData {
     }
 }
 
+/// Mock version of [NetDebugAuthBackend]
+#[derive(Debug, Clone, Default)]
+pub struct MockAuthBackend {
+    pub user_db: HashMap<String, NetDebugUser>,
+}
+
+impl MockAuthBackend {
+    #[allow(unused)] // odd that this complains that it's unused but also 'pub'
+    pub fn add_user(&mut self, user_id: String, user: NetDebugUser) {
+        self.user_db.insert(user_id, user);
+    }
+}
+
+#[async_trait]
+impl AuthnBackend for MockAuthBackend {
+    type User = NetDebugUser;
+    type Credentials = AuthCredentials;
+    type Error = UserAuthError;
+
+    async fn authenticate(
+        &self,
+        creds: Self::Credentials,
+    ) -> Result<Option<Self::User>, Self::Error> {
+        // fake auth - assume the jwt is the user name and if it exists in our db, just accept it
+        Ok(self.user_db.get(&creds.clerk_jwt).cloned())
+    }
+
+    async fn get_user(&self, user_id: &UserId<Self>) -> Result<Option<Self::User>, Self::Error> {
+        Ok(self.user_db.get(user_id).cloned())
+    }
+}
+
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
 
     // I *think* this is ok to check in; it's a "secret" but only for our
