@@ -3,7 +3,7 @@ use std::{
     net::IpAddr,
     num::Wrapping,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -13,12 +13,15 @@ use crate::{
 
 use chrono::Utc;
 use common::os_abstraction::pcap_ifname_to_ifindex;
-use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units};
+use common_wasm::{
+    stats_helper::{NaiivePercentiles, SimpleStats},
+    timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units},
+};
 use etherparse::TransportHeader;
 use itertools::Itertools;
 use libconntrack_wasm::{
-    ConnectionKey, NetworkGatewayPingProbe, NetworkGatewayPingState, NetworkGatewayPingType,
-    NetworkInterfaceState,
+    AggregatedGatewayPingData, ConnectionKey, NetworkGatewayPingProbe, NetworkGatewayPingState,
+    NetworkGatewayPingType, NetworkInterfaceState,
 };
 
 use mac_address::MacAddress;
@@ -34,7 +37,6 @@ use log::{debug, warn};
 // Workaround to use prinltn! for logs.
 use std::{println as debug, println as warn};
 
-pub const BROADCAST_MAC_ADDR: [u8; 6] = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
 use crate::{
     connection::ConnectionUpdateListener,
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
@@ -45,6 +47,12 @@ use crate::{
     send_or_log_sync,
     utils::remote_ip_to_local,
 };
+
+pub const BROADCAST_MAC_ADDR: [u8; 6] = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+// How frequently ping data is sent to the topology server
+pub const PING_DATA_EXPORT_INTERVAL_MS: u64 = 30_000;
+
+pub const MIN_REASONABLE_PING_RTT_NS: i64 = 1000;
 
 /**
  * The System Tracker tracks the state of the system, e.g., what is the current default Gateway, active network interface, cpu load, mem info etc.
@@ -142,8 +150,12 @@ pub struct SystemTracker {
     unknown_gateway_ping: StatHandle,
     /// counter for number of duplicate pings, shared across all gateways
     duplicate_ping: StatHandle,
+    /// Number of times the ping RTT was too short to be "real" or even negative
+    /// e.g., due to clock skew or clock going backwards
+    ping_rtt_too_low: StatHandle,
     /// Channel to send messages to the topology server
     data_storage_client: Option<DataStorageSender>,
+    last_ping_data_sent_time: Instant,
 }
 
 impl SystemTracker {
@@ -215,7 +227,13 @@ impl SystemTracker {
                 Units::None,
                 [StatType::COUNT],
             ),
+            ping_rtt_too_low: stats_registry.add_stat(
+                "ping_rtt_too_low",
+                Units::None,
+                [StatType::COUNT],
+            ),
             data_storage_client,
+            last_ping_data_sent_time: Instant::now(),
         }
     }
 
@@ -289,6 +307,15 @@ impl SystemTracker {
                 old_state, interface_state
             );
             if let Some(data_storage_client) = &self.data_storage_client {
+                self.export_gateway_ping_from_state(
+                    &old_state,
+                    "SystemTracker::handle_update_network_state() -- old ping data after change",
+                );
+                // We want to wait one interval before we export the first ping data for
+                // the new interface. Otherwise we might end up with no or very few data
+                // points and a potentially biased distribution.
+                self.last_ping_data_sent_time = Instant::now();
+
                 // Don't export the gateway ping data -- we export ping data
                 // separately.
                 let mut old_state = old_state.clone();
@@ -322,7 +349,39 @@ impl SystemTracker {
         for gateway in &self.current_network().gateways.clone() {
             self.send_next_ping(gateway);
         }
+        if self.last_ping_data_sent_time.elapsed()
+            > Duration::from_millis(PING_DATA_EXPORT_INTERVAL_MS)
+        {
+            self.export_gateway_ping_from_state(
+                self.current_network(),
+                "SystemTracker::handle_update_network_state() -- periodic ping data",
+            );
+            self.last_ping_data_sent_time = Instant::now();
+        }
         changed
+    }
+
+    pub fn export_gateway_ping_from_state(
+        &self,
+        network_state: &NetworkInterfaceState,
+        description: &'static str,
+    ) {
+        if let Some(data_storage_client) = &self.data_storage_client {
+            let ping_data = aggregate_ping_state(network_state);
+            if !ping_data.is_empty() {
+                send_or_log_sync!(
+                    data_storage_client,
+                    description,
+                    DataStorageMessage::StoreGatewayPingData { ping_data }
+                );
+                debug!("Sending aggregated ping data -- {}", description);
+            } else {
+                debug!(
+                    "Aggregated ping data is empry -- Not sending -- {}",
+                    description
+                );
+            }
+        }
     }
 
     pub fn get_network_interface_histories(&self) -> Vec<NetworkInterfaceState> {
@@ -594,6 +653,16 @@ impl SystemTracker {
                 // pull this out of the 'current_probe' state and push it into the histoical probe state
                 // unwrap is ok b/c we only get here if it existed
                 let probe = state.current_probe.take().unwrap();
+                let rtt = probe.recv_time.unwrap() - probe.sent_time.unwrap();
+                if rtt < chrono::Duration::nanoseconds(MIN_REASONABLE_PING_RTT_NS) {
+                    // The RTT is unreasonable short or even negative. This can happen due to clock skew, etc. ignore.
+                    debug!(
+                        "Ping RTT to gateway {} is {}ns which is unreasonable short (or negative)",
+                        gateway,
+                        rtt.num_nanoseconds().unwrap()
+                    );
+                    self.ping_rtt_too_low.bump();
+                }
                 state.historical_probes.push_back(probe);
                 // keep a max number of historical pings
                 while state.historical_probes.len() > max_pings_per_gateway {
@@ -812,12 +881,60 @@ impl SystemTracker {
 }
 const PING_LISTENER_DESC: &str = "SystemTracker::ping_listener";
 
+pub fn aggregate_ping_state(
+    network_state: &NetworkInterfaceState,
+) -> Vec<AggregatedGatewayPingData> {
+    let mut ret = Vec::new();
+    for (ip, ping_state) in &network_state.gateways_ping {
+        let mut num_responses_recv = 0usize;
+        let mut simple_stats = SimpleStats::new();
+        let mut samples = Vec::new();
+        for probe in &ping_state.historical_probes {
+            if !probe.dropped && probe.sent_time.is_some() && probe.recv_time.is_some() {
+                let rtt_ns = (probe.recv_time.unwrap() - probe.sent_time.unwrap())
+                    .num_nanoseconds()
+                    .unwrap();
+                if rtt_ns < MIN_REASONABLE_PING_RTT_NS {
+                    // this should never happen. We should never have added that probe.
+                    // I guess we could panic!() but that seems excessive.
+                    continue;
+                }
+                num_responses_recv += 1;
+                simple_stats.add_sample(rtt_ns as f64);
+                samples.push(rtt_ns as u64);
+            }
+        }
+        if !samples.is_empty() {
+            let percentiles = NaiivePercentiles::new(samples);
+            ret.push(AggregatedGatewayPingData {
+                network_interface_uuid: network_state.uuid,
+                gateway_ip: *ip,
+                num_probes_sent: ping_state.historical_probes.len(),
+                num_responses_recv,
+                // Note: we don't use simple_stats / ExportedSimpleStats directly here because they
+                // use f64 internally and I don't want to mix u64 for the percentiles with f64 for the
+                // mean...
+                rtt_mean_ns: simple_stats.mean().round() as u64,
+                rtt_variance_ns: simple_stats.variance().map(|v| v.round() as u64),
+                rtt_min_ns: percentiles.percentile(0).unwrap(),
+                rtt_p50_ns: percentiles.percentile(50).unwrap(),
+                rtt_p75_ns: percentiles.percentile(75).unwrap(),
+                rtt_p90_ns: percentiles.percentile(90).unwrap(),
+                rtt_p99_ns: percentiles.percentile(99).unwrap(),
+                rtt_max_ns: percentiles.percentile(100).unwrap(),
+            });
+        }
+    }
+    ret
+}
+
 #[cfg(test)]
 mod test {
-    use std::{collections::HashSet, str::FromStr};
+    use std::{collections::HashSet, net::Ipv4Addr, str::FromStr};
 
+    use common::test_utils::test_dir;
     use etherparse::{Icmpv4Type, TransportHeader};
-    use tokio::sync::mpsc::channel;
+    use tokio::sync::mpsc::{channel, error::TryRecvError};
 
     use crate::{
         neighbor_cache::NeighborState,
@@ -841,12 +958,56 @@ mod test {
         let now = Utc::now();
         let mut intf = NetworkInterfaceState::mk_mock("mock dev1".to_string(), now);
         let mut system_tracker = SystemTracker::mk_mock(intf.clone());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+        system_tracker.data_storage_client = Some(tx);
+        // hacky: set the last_ping_data_sent_time to some time in the past, but not enough
+        // in the past to trigger an export
+        system_tracker.last_ping_data_sent_time = Instant::now() - Duration::from_secs(15);
         intf.start_time = now + Duration::from_secs(1);
         assert!(!system_tracker.handle_update_network_state(intf).await);
         let intf2 =
             NetworkInterfaceState::mk_mock("mock dev2".to_string(), now + Duration::from_secs(2));
         assert!(system_tracker.handle_update_network_state(intf2).await);
         assert_eq!(system_tracker.network_device_changes.get_sum(), 1);
+
+        // last_ping_data_sent_time should have been reset by the update
+        // we hackily check that it's only a little in the past
+        assert!(system_tracker.last_ping_data_sent_time.elapsed() < Duration::from_secs(3));
+
+        let mut recv_interface_states = HashMap::new();
+        while let Ok(msg) = rx.try_recv() {
+            match msg.skip_perf_check() {
+                DataStorageMessage::StoreConnectionMeasurements { .. } => panic!(),
+                DataStorageMessage::StoreNetworkInterfaceState {
+                    network_interface_state,
+                } => {
+                    recv_interface_states.insert(
+                        network_interface_state.interface_name.clone().unwrap(),
+                        network_interface_state,
+                    );
+                }
+                // No ping data so nothing is exported
+                DataStorageMessage::StoreGatewayPingData { .. } => panic!(),
+            }
+        }
+        assert_eq!(
+            recv_interface_states.get("mock dev1").unwrap().start_time,
+            now
+        );
+        assert!(recv_interface_states
+            .get("mock dev1")
+            .unwrap()
+            .end_time
+            .is_some());
+        assert_eq!(
+            recv_interface_states.get("mock dev2").unwrap().start_time,
+            now + Duration::from_secs(2)
+        );
+        assert!(recv_interface_states
+            .get("mock dev2")
+            .unwrap()
+            .end_time
+            .is_none());
     }
 
     /**
@@ -1083,15 +1244,16 @@ mod test {
         assert_eq!(system_tracker.unknown_gateway_ping.get_sum(), 1);
     }
 
-    #[test]
-    fn test_ping_recv_state_machine_working() {
+    #[tokio::test]
+    async fn test_ping_recv_state_machine_working() {
         // setup test state
         let local_ip = IpAddr::from_str("192.168.1.34").unwrap();
         let local_mac = [1, 2, 3, 4, 5, 6];
         let gateway = IpAddr::from_str("192.168.1.1").unwrap();
         let gateway_mac = [0, 1, 2, 3, 4, 5];
-        let mock_network_interface_state =
+        let mut mock_network_interface_state =
             NetworkInterfaceState::mk_mock("test".to_string(), Utc::now());
+        mock_network_interface_state.uuid = Uuid::from_u128(0x1234_0000_4242);
         let mut system_tracker = SystemTracker::mk_mock(mock_network_interface_state.clone());
         let key = system_tracker.make_gateway_ping_key_testing(&gateway, &local_ip);
         // manually hack in the state we want
@@ -1188,6 +1350,58 @@ mod test {
         assert!(probe.sent_time.is_some());
         assert!(probe.recv_time.is_some());
         assert_eq!(probe.calc_rtt().unwrap().to_std().unwrap(), rtt);
+
+        //
+        // Now test exporting of ping data
+        //
+        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+        system_tracker.data_storage_client = Some(tx);
+        let interface_state = system_tracker.current_network().clone();
+        system_tracker
+            .handle_update_network_state(interface_state.clone())
+            .await;
+        // no message should have been sent since not enough time has
+        // passed since `last_ping_data_sent_time`
+        assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
+
+        // set the last_ping_data_sent_time in the past
+        system_tracker.last_ping_data_sent_time =
+            Instant::now() - Duration::from_millis(PING_DATA_EXPORT_INTERVAL_MS + 1);
+        system_tracker
+            .handle_update_network_state(interface_state.clone())
+            .await;
+
+        let msg = rx.try_recv().unwrap();
+        match msg.skip_perf_check() {
+            DataStorageMessage::StoreConnectionMeasurements { .. } => panic!(),
+            DataStorageMessage::StoreNetworkInterfaceState { .. } => panic!(),
+            DataStorageMessage::StoreGatewayPingData { ping_data } => {
+                assert_eq!(ping_data.len(), 1);
+                assert_eq!(
+                    ping_data[0].network_interface_uuid,
+                    Uuid::from_u128(0x1234_0000_4242)
+                );
+                assert_eq!(
+                    ping_data[0].gateway_ip,
+                    IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))
+                );
+                assert_eq!(ping_data[0].num_probes_sent, 1);
+                assert_eq!(ping_data[0].num_responses_recv, 1);
+                assert_eq!(ping_data[0].rtt_mean_ns, rtt.as_nanos() as u64);
+                assert_eq!(ping_data[0].rtt_variance_ns, None);
+                assert_eq!(ping_data[0].rtt_min_ns, rtt.as_nanos() as u64);
+                assert_eq!(ping_data[0].rtt_p50_ns, rtt.as_nanos() as u64);
+                assert_eq!(ping_data[0].rtt_p75_ns, rtt.as_nanos() as u64);
+                assert_eq!(ping_data[0].rtt_p90_ns, rtt.as_nanos() as u64);
+                assert_eq!(ping_data[0].rtt_p99_ns, rtt.as_nanos() as u64);
+                assert_eq!(ping_data[0].rtt_max_ns, rtt.as_nanos() as u64);
+            }
+        }
+        // there should be no more messages
+        assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
+        // last_ping_data_sent should have been updated. We don't have an excat value we expect but
+        // it should be reasonable close to "now"
+        assert!(system_tracker.last_ping_data_sent_time.elapsed() < Duration::from_secs(3));
     }
 
     #[tokio::test]
@@ -1227,5 +1441,79 @@ mod test {
         let mut _ignore = Vec::new();
         // success is not panic!()'ing
         SystemTracker::get_gateway_ip_by_all_hints(no_routes, None, &mut _ignore);
+    }
+
+    #[test]
+    fn test_aggregate_ping_state() {
+        let contents = std::fs::read_to_string(test_dir(
+            "libconntrack",
+            "tests/network_interface_state--example.json",
+        ))
+        .unwrap();
+        let network_interface_state =
+            serde_json::from_str::<NetworkInterfaceState>(&contents).unwrap();
+        // sanity checks
+        assert_eq!(
+            network_interface_state.uuid.hyphenated().to_string(),
+            "e3dce6ad-055e-4b3e-b10e-5b36276519f8"
+        );
+        // The network_interface_state from the json files has two gateway
+        let v6_gateway = IpAddr::from_str("fe80::ccb3:69ff:fea7:971f").unwrap();
+        let v4_gateway = IpAddr::from_str("192.168.1.1").unwrap();
+        assert_eq!(network_interface_state.gateways_ping.len(), 2);
+        assert!(network_interface_state
+            .gateways_ping
+            .contains_key(&v4_gateway));
+        assert!(network_interface_state
+            .gateways_ping
+            .contains_key(&v6_gateway));
+
+        let agg_ping_list = aggregate_ping_state(&network_interface_state);
+        println!("{}", serde_json::to_string_pretty(&agg_ping_list).unwrap());
+        // The network_interface_state from the json files has two gateway
+        // IPs. so we expect exactly two entries in the vector returned by
+        // `aggregate_ping_data()`
+        assert_eq!(agg_ping_list.len(), 2);
+        for agg_ping in agg_ping_list {
+            assert_eq!(
+                agg_ping.network_interface_uuid.hyphenated().to_string(),
+                "e3dce6ad-055e-4b3e-b10e-5b36276519f8"
+            );
+            match agg_ping.gateway_ip {
+                ip if ip == v4_gateway => {
+                    assert_eq!(agg_ping.num_probes_sent, 57);
+                    assert_eq!(agg_ping.num_responses_recv, 57);
+                }
+                ip if ip == v6_gateway => {
+                    assert_eq!(agg_ping.num_probes_sent, 57);
+                    // two pings are marked as dropped
+                    assert_eq!(agg_ping.num_responses_recv, 55);
+                    /*  FYI: The raw RTT values for the 55 pings are:
+                        2379000, 2301000, 2494000, 2222000, 3934000, 3825000, 2424000, 5250000, 2369000, 3754000, 4083000,
+                        1186000, 4047000, 5268000, 5454000, 2865000, 3667000, 5599000, 2307000, 1808000, 1968000, 5163000,
+                        2431000, 3800000, 2428000, 2744000, 2229000, 4076000, 2376000, 5424000, 3350000, 5519000, 2356000,
+                        4278000, 2199000, 5504000, 5499000, 2341000, 2042000, 3905000, 2168000, 3184000, 2449000, 2025000,
+                        2231000, 3882000, 5445000, 2687000, 2377000, 2510000, 2556000, 2250000, 4120000, 2446000, 5344000,
+                    */
+                    // Note, all these have been manually validated with numpy
+                    // (but see caveat for variance)
+                    assert_eq!(agg_ping.rtt_mean_ns, 3318945);
+                    // numpy calculates the "population variance" while our code calculates
+                    // the "sample variance". So I used: https://www.calculatorsoup.com/calculators/statistics/variance-calculator.php
+                    // Another note: the variance from the only calculate and ours matches in the 8 most significant digits
+                    // but then slighly diverges. Probably just floating point arithmetic.
+                    assert_eq!(agg_ping.rtt_variance_ns, Some(1606098719192));
+                    assert_eq!(agg_ping.rtt_min_ns, 1186000);
+                    assert_eq!(agg_ping.rtt_p50_ns, 2687000);
+                    assert_eq!(agg_ping.rtt_p75_ns, 4083000);
+                    assert_eq!(agg_ping.rtt_p90_ns, 5445000);
+                    assert_eq!(agg_ping.rtt_p99_ns, 5599000);
+                    assert_eq!(agg_ping.rtt_max_ns, 5599000);
+                }
+                other => {
+                    panic!("Unexpected gateway IP: {}", other);
+                }
+            }
+        }
     }
 }

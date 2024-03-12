@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use typescript_type_def::TypeDef;
 
-use crate::{ConnectionKey, ConnectionMeasurements, NetworkInterfaceState};
+use crate::{
+    AggregatedGatewayPingData, ConnectionKey, ConnectionMeasurements, NetworkInterfaceState,
+};
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, TypeDef)]
 pub enum DesktopLogLevel {
@@ -62,6 +64,9 @@ pub enum DesktopToTopologyServer {
     },
     PushNetworkInterfaceState {
         network_interface_state: NetworkInterfaceState,
+    },
+    PushGatewayPingData {
+        ping_data: Vec<AggregatedGatewayPingData>,
     },
     Ping,
 }

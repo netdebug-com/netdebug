@@ -479,6 +479,52 @@ export type ExportedNeighborState = {
     "vendor_oui": (string | null);
 };
 export type DesktopLogLevel = ("Error" | "Warn" | "Info" | "Debug");
+export type AggregatedGatewayPingData = {
+
+    /**
+     * The UUID of the NetworkInterfaceState this ping data belongs to
+     */
+    "network_interface_uuid": string;
+
+    /**
+     * The gateway IP this ping data belongs to.
+     */
+    "gateway_ip": string;
+
+    /**
+     * The number of ping probes that were sent
+     */
+    "num_probes_sent": Usize;
+
+    /**
+     * The number of ping responses received.
+     */
+    "num_responses_recv": Usize;
+    "rtt_mean_ns": U64;
+    "rtt_variance_ns": (U64 | null);
+    "rtt_min_ns": U64;
+
+    /**
+     * RTT median value in nanosecs
+     */
+    "rtt_p50_ns": U64;
+
+    /**
+     * RTT P75 value in nanosecs
+     */
+    "rtt_p75_ns": U64;
+
+    /**
+     * RTT P90 value in nanosecs
+     */
+    "rtt_p90_ns": U64;
+
+    /**
+     * RTT P99 value in nanosecs
+     */
+    "rtt_p99_ns": U64;
+    "rtt_max_ns": U64;
+};
 
 /**
  * Messages sent over the websocket from the desktop app (both
@@ -520,6 +566,11 @@ export type DesktopToTopologyServer = ({
     "tag": "PushNetworkInterfaceState";
     "data": {
         "network_interface_state": NetworkInterfaceState;
+    };
+} | {
+    "tag": "PushGatewayPingData";
+    "data": {
+        "ping_data": (AggregatedGatewayPingData)[];
     };
 } | {
     "tag": "Ping";

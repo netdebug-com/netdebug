@@ -224,6 +224,36 @@ pub struct NetworkGatewayPingState {
     pub historical_probes: VecDeque<NetworkGatewayPingProbe>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
+pub struct AggregatedGatewayPingData {
+    /// The UUID of the NetworkInterfaceState this ping data belongs to
+    #[type_def(type_of = "String")]
+    pub network_interface_uuid: Uuid,
+    /// The gateway IP this ping data belongs to.
+    pub gateway_ip: IpAddr,
+    /// The number of ping probes that were sent
+    pub num_probes_sent: usize,
+    /// The number of ping responses received.
+    pub num_responses_recv: usize,
+    // The mean of the RTTs
+    pub rtt_mean_ns: u64,
+    // The variance of the RTTs (if it exists, i.e., 2 or more samples)
+    pub rtt_variance_ns: Option<u64>,
+    // Min Rtt value (aka P0)
+    pub rtt_min_ns: u64,
+    /// RTT median value in nanosecs
+    pub rtt_p50_ns: u64,
+    /// RTT P75 value in nanosecs
+    pub rtt_p75_ns: u64,
+    /// RTT P90 value in nanosecs
+    pub rtt_p90_ns: u64,
+    /// RTT P99 value in nanosecs
+    pub rtt_p99_ns: u64,
+    // Max Rtt value (aka P100)
+    pub rtt_max_ns: u64,
+    // TODO: eventually we can also add a vec with more percentiles if we want to.
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, TypeDef)]
 pub struct NetworkInterfaceState {
     /// A random, unique id to identify this particular instance. We need/use

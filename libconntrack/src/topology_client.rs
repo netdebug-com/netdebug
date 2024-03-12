@@ -21,7 +21,7 @@ use futures_util::StreamExt;
 use libconntrack_wasm::topology_server_messages::{
     CongestionSummary, DesktopToTopologyServer, TopologyServerToDesktop,
 };
-use libconntrack_wasm::{ConnectionMeasurements, NetworkInterfaceState};
+use libconntrack_wasm::{AggregatedGatewayPingData, ConnectionMeasurements, NetworkInterfaceState};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Receiver, Sender, WeakSender};
 use tokio_tungstenite::tungstenite::error::Error as TungsteniteError;
@@ -67,6 +67,9 @@ pub enum DataStorageMessage {
     },
     StoreNetworkInterfaceState {
         network_interface_state: NetworkInterfaceState,
+    },
+    StoreGatewayPingData {
+        ping_data: Vec<AggregatedGatewayPingData>,
     },
 }
 
@@ -421,6 +424,15 @@ impl TopologyServerConnection {
                     DesktopToTopologyServer::PushNetworkInterfaceState {
                         network_interface_state,
                     },
+                    self.desktop2server_store_msgs_stat
+                )
+                .await
+            }
+            StoreGatewayPingData { ping_data } => {
+                send_or_log_async!(
+                    ws_tx,
+                    "handle_desktop_msg::StoreGatewayPingData",
+                    DesktopToTopologyServer::PushGatewayPingData { ping_data },
                     self.desktop2server_store_msgs_stat
                 )
                 .await

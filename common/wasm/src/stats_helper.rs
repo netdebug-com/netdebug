@@ -139,9 +139,70 @@ impl ExportedSimpleStats {
     }
 }
 
+/// A simple implementation of percentiles. It takes an array of integer values,
+/// sorts them, and can then return percentiles.
+pub struct NaiivePercentiles {
+    values: Vec<u64>,
+}
+
+impl NaiivePercentiles {
+    /// Create a new instance over the given values.
+    pub fn new(mut values: Vec<u64>) -> Self {
+        values.sort();
+        Self { values }
+    }
+
+    /// Return the given percentile value. Percentile must be <= 100.
+    /// IMPORTANT NOTE: We use integer arithmetic. For some percentiles we need to
+    /// compute `(x[i] + x[i+1]) / 2` (cf. median of a set with even number of elements).
+    /// This will be an *integer* division so if the values are small, we get a truncation error
+    /// `P0` is the min value, `P100` is the max value.
+    /// If values is empty, will always return None. If there is at least one value, will return
+    /// Some(x)
+    ///
+    /// Note, this function will either return an original sample value, or the mean of two
+    /// neighboring values, depending on the index calculation. So, if the number of samples
+    /// is small, it will return discontinous results (thus naiive)
+    ///
+    /// This implemention matches the logic of `numpy.percentile()`'s `averaged_inverted_cdf`
+    /// method. https://numpy.org/doc/stable/reference/generated/numpy.percentile.html
+    pub fn percentile(&self, percentile: u8) -> Option<u64> {
+        assert!(
+            percentile <= 100,
+            "Percentile must be <= 100, was {}",
+            percentile
+        );
+        let index = (percentile as usize * self.values.len()) / 100;
+        let index_rem = (percentile as usize * self.values.len()) % 100;
+        if self.values.is_empty() {
+            return None;
+        }
+        if index == 0 {
+            return Some(self.values[0]);
+        }
+        if index >= self.values.len() {
+            // we have at least one element, so unwrap is safe
+            return Some(*self.values.last().unwrap());
+        }
+        // We are now guaranteed that we have at least 1 element in the vec and
+        // that 0 < index < self.values.len(). Therefor we are guaranteed that
+        // values[index] and values[index-1] are valid entries.
+        if index_rem == 0 {
+            // No remainder. E.g, with 4 elements and P50:
+            // index = 4*50 / 100 = 2; remainder = 0. return (x[1] + x[2])/2 which is the median
+            Some((self.values[index - 1] + self.values[index]) / 2)
+        } else {
+            // We have a remainder. Round down (i.e., just take the index).
+            // E.g., with 5 values and P50: index = 5 * 50 / 100 = 2; remainder = 50 ==> index = 2
+            Some(self.values[index])
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use approx::assert_relative_eq;
+    use itertools::Itertools;
 
     use super::*;
 
@@ -182,5 +243,71 @@ mod test {
         assert_eq!(stats.num_samples(), 1);
         assert_eq!(stats.min(), 123.456);
         assert_eq!(stats.max(), 123.456);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_invalid_percentile() {
+        let p = NaiivePercentiles::new((1..200).collect());
+        p.percentile(101);
+    }
+
+    #[test]
+    fn test_naiive_percentiles() {
+        let p = NaiivePercentiles::new(vec![10, 20, 30, 40, 50]);
+        assert_eq!(p.percentile(0).unwrap(), 10);
+        assert_eq!(p.percentile(100).unwrap(), 50);
+        // Odd number of elements. ==> P50 is the middle element
+        assert_eq!(p.percentile(50).unwrap(), 30);
+        assert_eq!(p.percentile(90).unwrap(), 50);
+
+        let p = NaiivePercentiles::new(vec![10, 20, 30, 40, 50, 60]);
+        assert_eq!(p.percentile(0).unwrap(), 10);
+        assert_eq!(p.percentile(100).unwrap(), 60);
+        // Even number of elements. ==> P50 mean of the two middle elements
+        assert_eq!(p.percentile(50).unwrap(), 35);
+        assert_eq!(p.percentile(90).unwrap(), 60);
+        assert_eq!(p.percentile(10).unwrap(), 10);
+
+        // same range as before, but in different order
+        let p = NaiivePercentiles::new(vec![60, 20, 40, 10, 30, 50]);
+        assert_eq!(p.percentile(0).unwrap(), 10);
+        assert_eq!(p.percentile(100).unwrap(), 60);
+        // Even number of elements. ==> P50 mean of the two middle elements
+        assert_eq!(p.percentile(50).unwrap(), 35);
+        assert_eq!(p.percentile(90).unwrap(), 60);
+        assert_eq!(p.percentile(10).unwrap(), 10);
+
+        // Test empty samples
+        let p = NaiivePercentiles::new(Vec::new());
+        assert_eq!(p.percentile(0), None);
+        assert_eq!(p.percentile(1), None);
+        assert_eq!(p.percentile(5), None);
+        assert_eq!(p.percentile(99), None);
+        assert_eq!(p.percentile(100), None);
+
+        // Just a singel value.
+        let p = NaiivePercentiles::new(vec![42]);
+        assert_eq!(p.percentile(0).unwrap(), 42);
+        assert_eq!(p.percentile(1).unwrap(), 42);
+        assert_eq!(p.percentile(5).unwrap(), 42);
+        assert_eq!(p.percentile(99).unwrap(), 42);
+        assert_eq!(p.percentile(100).unwrap(), 42);
+
+        let range = (1..=100).map(|x| x * 10).collect_vec();
+        // sanity check
+        assert_eq!(range.len(), 100);
+        assert_eq!(range[10], 110);
+        assert_eq!(range[99], 1000);
+        let p = NaiivePercentiles::new(range);
+        assert_eq!(p.percentile(0).unwrap(), 10);
+        assert_eq!(p.percentile(1).unwrap(), 15);
+        assert_eq!(p.percentile(2).unwrap(), 25);
+        assert_eq!(p.percentile(3).unwrap(), 35);
+        assert_eq!(p.percentile(4).unwrap(), 45);
+        assert_eq!(p.percentile(5).unwrap(), 55);
+        assert_eq!(p.percentile(50).unwrap(), 505);
+        assert_eq!(p.percentile(99).unwrap(), 995);
+        assert_eq!(p.percentile(100).unwrap(), 1000);
     }
 }
