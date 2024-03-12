@@ -16,12 +16,18 @@ use libconntrack::{
     prober::spawn_raw_prober,
     topology_client::TopologyRpcSender,
 };
+use uuid::Uuid;
 
 use crate::{
     remotedb_client::{RemoteDBClient, RemoteDBClientSender},
     secrets_db::Secrets,
     spawn_webserver_connection_log_wrapper, topology_server,
 };
+
+/// We use a v5 NAMESPACE_DNS UUID as the "client_id" for connections we log from the
+/// webserver (i.e., webtest connections).
+/// The final UUID for this is: fa7825d6-6905-5acd-a29f-69be8d81c330
+const UUID_DNS_NAME_FOR_SERVER_CONN: &[u8] = b"topology.netdebug.com";
 
 // All of the web server state that's maintained across
 // parallel threads.  This will be wrapped in an
@@ -153,8 +159,10 @@ impl WebServerContext {
                 .await
                 .unwrap();
                 let optional_conn_storage_tx = remotedb_client_clone.map(|db| {
-                    // TODO: use a real, persistet UUID
-                    spawn_webserver_connection_log_wrapper(db, uuid::Uuid::nil())
+                    spawn_webserver_connection_log_wrapper(
+                        db,
+                        Uuid::new_v5(&Uuid::NAMESPACE_DNS, UUID_DNS_NAME_FOR_SERVER_CONN),
+                    )
                 });
                 let prober_tx =
                     spawn_raw_prober(bind_writable_pcap(), MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
@@ -342,5 +350,14 @@ pub mod test {
             secrets: Secrets::default(),
             production: false,
         }))
+    }
+
+    #[test]
+    fn uuid_for_webserver_conn_log() {
+        let expected = "fa7825d6-6905-5acd-a29f-69be8d81c330";
+        assert_eq!(
+            Uuid::new_v5(&Uuid::NAMESPACE_DNS, UUID_DNS_NAME_FOR_SERVER_CONN),
+            Uuid::from_str(expected).unwrap()
+        );
     }
 }
