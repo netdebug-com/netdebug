@@ -28,6 +28,8 @@ impl Display for DesktopLogLevel {
     }
 }
 
+/// Messages sent over the websocket from the desktop app (both
+/// rust and electron) to the topology server.
 #[derive(Clone, Debug, Serialize, Deserialize, TypeDef, PartialEq)]
 #[serde(tag = "tag", content = "data")]
 pub enum DesktopToTopologyServer {
@@ -61,6 +63,8 @@ pub enum DesktopToTopologyServer {
     Ping,
 }
 
+/// Messages sent over the websocket from the web/topology server back
+/// to the desktop app.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TopologyServerToDesktop {
     Hello {

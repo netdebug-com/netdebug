@@ -17,7 +17,7 @@ use libconntrack::send_or_log_async;
  *
  */
 use libconntrack::{
-    topology_client::{TopologyServerReceiver, TopologyServerSender},
+    topology_client::{TopologyRpcReceiver, TopologyRpcSender},
     utils::PerfMsgCheck,
 };
 use libconntrack_wasm::ConnectionMeasurements;
@@ -25,44 +25,29 @@ use log::{debug, warn};
 use tokio::sync::mpsc::{channel, Sender};
 
 use crate::congestion_analysis::congestion_summary_from_measurements;
-use crate::remotedb_client::{RemoteDBClientMessages, RemoteDBClientSender, StorageSourceType};
 pub struct TopologyServer {
-    tx: TopologyServerSender,
-    rx: TopologyServerReceiver,
-    remotedb_client: Option<RemoteDBClientSender>,
-    storage_client_uuid: uuid::Uuid,
+    tx: TopologyRpcSender,
+    rx: TopologyRpcReceiver,
 }
 
 impl TopologyServer {
     async fn new(
-        tx: TopologyServerSender,
-        rx: TopologyServerReceiver,
-        remotedb_client: Option<RemoteDBClientSender>,
+        tx: TopologyRpcSender,
+        rx: TopologyRpcReceiver,
     ) -> tokio_rusqlite::Result<TopologyServer> {
-        // generate a random client ID for when we store our connection measurements
-        let storage_client_uuid = uuid::Uuid::new_v4();
-        Ok(TopologyServer {
-            tx,
-            rx,
-            remotedb_client,
-            storage_client_uuid,
-        })
+        Ok(TopologyServer { tx, rx })
     }
 
-    pub async fn spawn(
-        buffer_size: usize,
-        remotedb_client: Option<RemoteDBClientSender>,
-    ) -> tokio_rusqlite::Result<TopologyServerSender> {
+    pub async fn spawn(buffer_size: usize) -> tokio_rusqlite::Result<TopologyRpcSender> {
         let (tx, rx) = channel(buffer_size);
-        TopologyServer::spawn_with_tx_rx(tx, rx, remotedb_client).await
+        TopologyServer::spawn_with_tx_rx(tx, rx).await
     }
 
     pub async fn spawn_with_tx_rx(
-        tx: TopologyServerSender,
-        rx: TopologyServerReceiver,
-        remotedb_client: Option<RemoteDBClientSender>,
-    ) -> tokio_rusqlite::Result<TopologyServerSender> {
-        let topology_server = TopologyServer::new(tx.clone(), rx, remotedb_client).await?;
+        tx: TopologyRpcSender,
+        rx: TopologyRpcReceiver,
+    ) -> tokio_rusqlite::Result<TopologyRpcSender> {
+        let topology_server = TopologyServer::new(tx.clone(), rx).await?;
         tokio::spawn(async move {
             topology_server.rx_loop().await;
         });
@@ -81,7 +66,7 @@ impl TopologyServer {
         debug!("Starting TopologyServer:rx_loop()");
         while let Some(msg) = self.rx.recv().await {
             let msg = msg.perf_check_get("TopologyServer.rx_loop()");
-            use libconntrack::topology_client::TopologyServerMessage::*;
+            use libconntrack::topology_client::TopologyRpcMessage::*;
             match msg {
                 GetMyIpAndUserAgent { reply_tx } => self.handle_get_my_ip(reply_tx).await,
                 InferCongestion {
@@ -90,24 +75,6 @@ impl TopologyServer {
                 } => {
                     self.handle_infer_congestion(connection_measurements, reply_tx)
                         .await
-                }
-                // NOTE: this is triggered by measurements that the webserver itself makes, not measurements that pass through it
-                StoreConnectionMeasurements {
-                    connection_measurements,
-                } => {
-                    if let Some(remotedb_client) = &self.remotedb_client {
-                        send_or_log_async!(
-                            remotedb_client,
-                            "handle_store",
-                            RemoteDBClientMessages::StoreConnectionMeasurements {
-                                connection_measurements,
-                                client_uuid: self.storage_client_uuid,
-                                source_type: StorageSourceType::TopologyServer,
-                            }
-                        )
-                        .await
-                    }
-                    // don't log if remotedb_client isn't set; probably for testing
                 }
             }
         }
@@ -131,7 +98,7 @@ impl TopologyServer {
         .await;
     }
 
-    pub fn get_tx(&self) -> TopologyServerSender {
+    pub fn get_tx(&self) -> TopologyRpcSender {
         self.tx.clone()
     }
 

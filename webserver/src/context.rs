@@ -14,13 +14,13 @@ use libconntrack::{
     connection_tracker::{ConnectionTracker, ConnectionTrackerSender},
     pcap::{bind_writable_pcap, lookup_pcap_device_by_name},
     prober::spawn_raw_prober,
-    topology_client::TopologyServerSender,
+    topology_client::TopologyRpcSender,
 };
 
 use crate::{
     remotedb_client::{RemoteDBClient, RemoteDBClientSender},
     secrets_db::Secrets,
-    topology_server,
+    spawn_webserver_connection_log_wrapper, topology_server,
 };
 
 // All of the web server state that's maintained across
@@ -39,7 +39,7 @@ pub struct WebServerContext {
     // communications channel to the connection_tracker
     // TODO: make a pool for multi-threading
     pub connection_tracker: ConnectionTrackerSender,
-    pub topology_server: TopologyServerSender,
+    pub topology_server: TopologyRpcSender,
     pub counter_registries: SharedExportedStatRegistries,
     pub remotedb_client: Option<RemoteDBClientSender>,
     /// All of the shared secrets needed for off-box services
@@ -149,15 +149,18 @@ impl WebServerContext {
                 topology_server::TopologyServer::spawn_with_tx_rx(
                     topology_server_tx.clone(),
                     topology_server_rx,
-                    remotedb_client_clone,
                 )
                 .await
                 .unwrap();
+                let optional_conn_storage_tx = remotedb_client_clone.map(|db| {
+                    // TODO: use a real, persistet UUID
+                    spawn_webserver_connection_log_wrapper(db, uuid::Uuid::nil())
+                });
                 let prober_tx =
                     spawn_raw_prober(bind_writable_pcap(), MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
                 info!("Launching the connection tracker (single instance for now)");
                 let mut connection_tracker = ConnectionTracker::new(
-                    Some(topology_server_tx),
+                    optional_conn_storage_tx,
                     max_connections_per_tracker,
                     local_ips,
                     prober_tx,

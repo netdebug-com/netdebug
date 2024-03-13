@@ -24,7 +24,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use libconntrack::topology_client::{TopologyServerConnection, TopologyServerSender};
+use libconntrack::topology_client::{
+    DataStorageSender, TopologyRpcSender, TopologyServerConnection,
+};
 
 use crate::rest_endpoints::setup_axum_router;
 
@@ -37,7 +39,8 @@ pub struct Trackers {
     pub connection_tracker: Option<ConnectionTrackerSender>,
     pub dns_tracker: Option<DnsTrackerSender>,
     pub process_tracker: Option<ProcessTrackerSender>,
-    pub topology_client: Option<TopologyServerSender>,
+    pub topology_rpc_client: Option<TopologyRpcSender>,
+    pub data_storage_client: Option<DataStorageSender>,
     // implemented as a shared lock
     pub system_tracker: Option<Arc<RwLock<SystemTracker>>>,
     pub counter_registries: Option<SharedExportedStatRegistries>,
@@ -154,6 +157,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let raw_sock = libconntrack::pcap::bind_writable_pcap();
     let prober_tx = spawn_raw_prober(raw_sock, MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
 
+    let (topology_rpc_client, data_storage_client) = TopologyServerConnection::spawn(
+        args.topology_server_url.clone(),
+        MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
+        std::time::Duration::from_secs(30),
+        config_data.uuid,
+        counter_registries.registries(),
+        counter_registries.new_registry("topology_server_connection"),
+    );
+    trackers.topology_rpc_client = Some(topology_rpc_client.clone());
+    trackers.data_storage_client = Some(data_storage_client.clone());
+
     let system_tracker = Arc::new(RwLock::new(
         SystemTracker::new(
             counter_registries.new_registry("system_tracker"),
@@ -161,6 +175,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             1024, /* max pings per gateway to keep */
             connection_tracker_tx.clone(),
             prober_tx.clone(),
+            Some(data_storage_client.clone()),
         )
         .await,
     ));
@@ -169,16 +184,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         std::time::Duration::from_millis(500),
     );
     trackers.system_tracker = Some(system_tracker.clone());
-
-    let topology_client = TopologyServerConnection::spawn(
-        args.topology_server_url.clone(),
-        MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
-        std::time::Duration::from_secs(30),
-        config_data.uuid,
-        counter_registries.registries(),
-        counter_registries.new_registry("topology_server_connection"),
-    );
-    trackers.topology_client = Some(topology_client.clone());
 
     // launch the process tracker
     let process_tracker = ProcessTracker::new(
@@ -214,12 +219,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     trackers.connection_tracker = Some(connection_manager_tx.clone());
 
     let conn_track_counters = counter_registries.new_registry("conn_tracker");
-    let topology_client_clone = topology_client.clone();
+    let data_storage_client_clone = data_storage_client.clone();
     let _connection_tracker_task = tokio::spawn(async move {
         let args = args_clone;
         // Spawn a ConnectionTracker task
         let mut connection_tracker = ConnectionTracker::new(
-            Some(topology_client_clone),
+            Some(data_storage_client_clone),
             args.max_connections_per_tracker,
             local_addrs,
             prober_tx,

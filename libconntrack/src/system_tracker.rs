@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use crate::utils::PerfMsgCheck;
+use crate::{topology_client::DataStorageSender, utils::PerfMsgCheck};
 
 use chrono::Utc;
 use common::os_abstraction::pcap_ifname_to_ifindex;
@@ -132,6 +132,8 @@ pub struct SystemTracker {
     unknown_gateway_ping: StatHandle,
     /// counter for number of duplicate pings, shared across all gateways
     duplicate_ping: StatHandle,
+    /// Channel to send messages to the topology server
+    _data_storage_client: Option<DataStorageSender>,
 }
 
 impl SystemTracker {
@@ -141,6 +143,7 @@ impl SystemTracker {
         max_pings_per_gateway: usize,
         connection_tracker: ConnectionTrackerSender,
         prober_tx: ProberSender,
+        data_storage_client: Option<DataStorageSender>,
     ) -> SystemTracker {
         let current_network = SystemTracker::snapshot_current_network_state().await;
         SystemTracker::new_with_network_state(
@@ -150,6 +153,7 @@ impl SystemTracker {
             current_network,
             connection_tracker,
             prober_tx,
+            data_storage_client,
         )
     }
     pub fn new_with_network_state(
@@ -159,6 +163,7 @@ impl SystemTracker {
         current_network: NetworkInterfaceState,
         connection_tracker: ConnectionTrackerSender,
         prober_tx: ProberSender,
+        data_storage_client: Option<DataStorageSender>,
     ) -> SystemTracker {
         SystemTracker {
             network_history: VecDeque::from([current_network]),
@@ -189,6 +194,7 @@ impl SystemTracker {
                 Units::None,
                 [StatType::COUNT],
             ),
+            _data_storage_client: data_storage_client,
         }
     }
 
@@ -204,15 +210,16 @@ impl SystemTracker {
             network_device,
             connection_tracker_tx,
             prober_tx,
+            None,
         )
     }
 
-    pub fn current_network(&self) -> &NetworkInterfaceState {
+    fn current_network(&self) -> &NetworkInterfaceState {
         // unwrap is ok b/c there will always be at least one
         self.network_history.iter().last().unwrap()
     }
 
-    pub fn current_network_mut(&mut self) -> &mut NetworkInterfaceState {
+    fn current_network_mut(&mut self) -> &mut NetworkInterfaceState {
         // unwrap is ok b/c there will always be at least one
         self.network_history.iter_mut().last().unwrap()
     }
@@ -222,7 +229,8 @@ impl SystemTracker {
     ///  
     /// Return true if state was updated, false if no update was needed
     ///  
-    /// If the state has changed, send a msg to the pcap_monitor to let it know
+    /// If the state has changed, send a msg to the connection tracker to delete the
+    /// ConnectionUpdateListener that handles ping responses
     ///  
     /// Whether the state has changed or not, send a fresh round of pings to each gateway.
     ///  

@@ -4,7 +4,7 @@ use axum::extract::ws::{self, WebSocket};
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
 use libconntrack::{
     send_or_log_async,
-    topology_client::{TopologyServerMessage, TopologyServerSender},
+    topology_client::{TopologyRpcMessage, TopologyRpcSender},
     utils::PerfMsgCheck,
 };
 use libconntrack_wasm::topology_server_messages::{
@@ -76,7 +76,7 @@ pub async fn handle_desktop_websocket(
 }
 
 async fn handle_desktop_message(
-    topology_server: &TopologyServerSender,
+    topology_server: &TopologyRpcSender,
     remotedb_client: &Option<RemoteDBClientSender>,
     msg: DesktopToTopologyServer,
     ws_tx: &Sender<TopologyServerToDesktop>,
@@ -187,7 +187,7 @@ async fn handle_push_counters(
 async fn handle_infer_congestion(
     ws_tx: &Sender<TopologyServerToDesktop>,
     connection_measurements: Vec<libconntrack_wasm::ConnectionMeasurements>,
-    topology_server: &Sender<PerfMsgCheck<TopologyServerMessage>>,
+    topology_server: &Sender<PerfMsgCheck<TopologyRpcMessage>>,
 ) {
     // spawn this request off to a dedicated task as it might take a while to process
     // and the client is completely async
@@ -198,7 +198,7 @@ async fn handle_infer_congestion(
         send_or_log_async!(
             topology_server,
             "handle_infer_congestion",
-            TopologyServerMessage::InferCongestion {
+            TopologyRpcMessage::InferCongestion {
                 connection_measurements,
                 reply_tx
             }
