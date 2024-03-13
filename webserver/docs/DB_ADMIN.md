@@ -4,8 +4,7 @@
     ```
     sudo apt install postgresql-client-common
     ```
-2. Get an admin password from the website or Rob; store in ```$HOME/.timescaledb_auth```
-    (no, there does not yet appear to be an OAUTH system.. I think)
+2. Get an admin or read-only password from the website or Rob; store in ```$HOME/.secrets.toml```
 3. The URL for our private db is 
     ```
     postgres://tsdbadmin@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require
@@ -19,19 +18,9 @@
 
 # One time setup/database initialization
 
-1. Create the 'desktop_counters' and 'desktop_logs' table with the schema from `RemoteDBClient::create_table_schema()`, 
-    e.g., :
-    ```
-    CREATE TABLE desktop_counters ( counter TEXT, value BIGINT, os TEXT, version TEXT, source TEXT, time TIMESTAMPTZ);
-    CREATE TABLE desktop_logs ( msg TEXT, level TEXT, os TEXT, version TEXT, source TEXT, time TIMESTAMPTZ);
-
-    CREATE TABLE desktop_connections (               
-            local_ip TEXT, remote_ip TEXT, local_port INT, remote_port INT, ip_protocol SMALLINT, local_hostname TEXT,  remote_hostname TEXT,  
-            probe_report_summary TEXT,  user_annotation TEXT, user_agent TEXT, associated_apps TEXT, 
-            close_has_started BOOLEAN, four_way_close_done BOOLEAN, start_tracking_time TIMESTAMPTZ, 
-            last_packet_time TIMESTAMPTZ, tx_loss BIGINT, rx_loss BIGINT, tx_stats TEXT, rx_stats TEXT, time TIMESTAMPTZ, client_uuid UUID, source_type TEXT);
-    ```
-2. Mark them as a 'hypertable' which tells the backend to treat it with timeseries optimizations:
+1. The file ./webserver/production_schema.sql contains a snapshot of the production DB's schema.  The prod DB itself is the
+    source of truth.
+2. With timescaledb, each table needs to be marked as a 'hypertable' which tells the backend to treat it with timeseries optimizations:
     ```
     SELECT create_hypertable('desktop_counters', by_range('time'));
     SELECT create_hypertable('desktop_logs', by_range('time'));
