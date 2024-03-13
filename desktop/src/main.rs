@@ -18,8 +18,6 @@ use libconntrack::{
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use std::fs::File;
-use std::io::{Read, Write};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -53,9 +51,18 @@ impl Trackers {
     }
 }
 
+/// The local configuration data we read from disk. This is the same schema
+/// that we define in electron for electron store.
+/// see `main.ts: new ElectronConfigStore()...`
+/// IF YOU MAKE A CHANGE HERE, ALSO CHANGE THE SCHEMA IN MAIN.
+/// TODO: find a better way to sync the schema
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
 pub struct LocalConfigData {
-    pub uuid: Uuid,
+    pub accepted_eula_version: Option<i32>,
+    /// Note, we *require* the client_uuid to be present if we read/use the
+    /// config file. Electron will make sure it exists. And the desktop binary
+    /// can always be run w/o a config file
+    pub client_uuid: Uuid,
 }
 
 /// Netdebug desktop
@@ -78,41 +85,29 @@ pub struct Args {
     #[arg(long, default_value = "wss://topology.netdebug.com:443/desktop")]
     pub topology_server_url: String,
 
-    /// Directory were local configuration data is stored.
+    /// Json file where local configuration is stored. This is the same file used by the
+    /// electron-store npm package.
     #[arg(long, default_value=None)]
-    pub local_config_dir: Option<String>,
+    pub local_config_file: Option<String>,
 }
 
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
-const LOCAL_CONFIG_FILENAME: &str = "netdebug-collector-config.toml";
 
-fn get_local_config(config_dir: Option<String>) -> Result<LocalConfigData, std::io::Error> {
-    match config_dir {
-        Some(config_dir) => {
-            let path = std::path::Path::new(&config_dir);
-            // we don't want to just u se `path.is_dir()`. If path is not a directory, we want
-            // to know why. So lets use `read_dir()` which will return an appropriate io::Error
-            let _ = path.read_dir()?;
-            let path_to_file = path.join(LOCAL_CONFIG_FILENAME);
-            if path_to_file.exists() {
-                let mut file_contents = String::default();
-                File::open(path_to_file)?.read_to_string(&mut file_contents)?;
-                let config_data = toml::from_str(&file_contents).expect("config file is invalid");
-                info!("Read config from disk. local_config: {:?}", config_data);
-                Ok(config_data)
-            } else {
-                let config_data = LocalConfigData {
-                    uuid: Uuid::new_v4(),
-                };
-                info!(
-                    "Config does not exists. Generating. local_config: {:?}",
-                    config_data
-                );
-                let file_contents =
-                    toml::to_string_pretty(&config_data).expect("Failed to write config file");
-                File::create(path_to_file)?.write_all(file_contents.as_bytes())?;
-                Ok(config_data)
-            }
+#[derive(thiserror::Error, Debug)]
+pub enum LocalConfigError {
+    #[error("Invalid config file format")]
+    InvalidConfig(#[from] serde_json::Error),
+    #[error("Could not read config file")]
+    Io(#[from] std::io::Error),
+}
+
+fn get_local_config(config_file_name: Option<String>) -> Result<LocalConfigData, LocalConfigError> {
+    match config_file_name {
+        Some(config_file_name) => {
+            let path_to_file = std::path::Path::new(&config_file_name);
+            let file_contents = std::fs::read_to_string(path_to_file)?;
+            let config_data = serde_json::from_str::<LocalConfigData>(&file_contents)?;
+            Ok(config_data)
         }
         None => {
             warn!(
@@ -128,12 +123,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     common::init::netdebug_init();
 
     let args = Args::parse();
-    let config_data = get_local_config(args.local_config_dir.clone()).unwrap_or_else(|err| {
+    let config_data = get_local_config(args.local_config_file.clone()).unwrap_or_else(|err| {
         panic!(
             "Failed to read config file `{:?}`: {}",
-            args.local_config_dir, err
+            args.local_config_file, err
         )
     });
+    info!("Successfully read local config: {:?}", config_data);
     let system_epoch = std::time::Instant::now();
 
     // Getting tokio RuntimeMetrics only works if we have tokio_unstable defined
@@ -161,7 +157,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         args.topology_server_url.clone(),
         MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
         std::time::Duration::from_secs(30),
-        config_data.uuid,
+        config_data.client_uuid,
         counter_registries.registries(),
         counter_registries.new_registry("topology_server_connection"),
     );
@@ -265,7 +261,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod test {
-    use std::io::ErrorKind;
+    use std::{
+        fs::File,
+        io::{ErrorKind, Write},
+        str::FromStr,
+    };
 
     use super::*;
     use temp_dir::{self, TempDir};
@@ -273,51 +273,48 @@ mod test {
     #[test]
     fn test_get_config() {
         assert_eq!(get_local_config(None).unwrap(), LocalConfigData::default());
-        assert_eq!(
-            get_local_config(Some("/does/not/exist".to_owned()))
-                .unwrap_err()
-                .kind(),
-            ErrorKind::NotFound
-        );
+
+        let res = get_local_config(Some("/does/not/exist".to_owned()));
+        assert!(res.is_err());
+        match res.unwrap_err() {
+            LocalConfigError::Io(io_err) => assert_eq!(io_err.kind(), ErrorKind::NotFound),
+            _ => panic!("unexpected error"),
+        }
         let tempdir = TempDir::new().unwrap();
 
-        let not_a_dir = tempdir
-            .child("not-a-directory")
-            .to_str()
-            .unwrap()
-            .to_owned();
-        // touch the file
-        File::create(not_a_dir.clone()).unwrap();
-        // TODO: For some reason, the actual error kind we get back is, ErrorKind::NotADirectory. Which sounds
-        // correct, but `ErrorKind::NotADirectory` is a nightly feature. So if I try to
-        // `assert_eq!(...., ErrorKind::NotADirectory)`. I get a compiler error that it's a nightly feature.
-        // Not sure why the std lib appears to be compile with nightly. Maybe because we use tokio_unstable?
-        // Anyways. This test is not worth enable nightly features. So just check for `is_err()`.
-        assert!(get_local_config(Some(not_a_dir)).is_err());
+        // An empty file should error
+        let empty_file = tempdir.child("an-empty-file").to_str().unwrap().to_owned();
+        File::create(empty_file.clone()).unwrap();
+        let res = get_local_config(Some(empty_file));
+        match res.unwrap_err() {
+            LocalConfigError::InvalidConfig(_) => (),
+            _ => panic!("unexpected error"),
+        }
 
-        let dir_as_str = tempdir.path().to_str().unwrap().to_owned();
-        let config_from_fn = get_local_config(Some(dir_as_str.clone())).unwrap();
-        assert!(tempdir.child(LOCAL_CONFIG_FILENAME).exists());
-        let mut file_contents = String::default();
-        File::open(tempdir.child(LOCAL_CONFIG_FILENAME))
+        // not having a client_uuid should be an error
+        let config_file = tempdir.child("config.json").to_str().unwrap().to_owned();
+        File::create(config_file.clone())
             .unwrap()
-            .read_to_string(&mut file_contents)
+            .write_all("{ \"accepted_eula_version\": 3 }".as_bytes())
             .unwrap();
 
-        let config_from_file: LocalConfigData = toml::from_str(&file_contents).unwrap();
-        assert_eq!(config_from_fn, config_from_file);
-        assert_ne!(config_from_fn.uuid, Uuid::nil());
+        let res = get_local_config(Some(config_file.clone()));
+        match res.unwrap_err() {
+            LocalConfigError::InvalidConfig(_) => (),
+            _ => panic!("unexpected error"),
+        }
 
-        // overwrite the config with our own version.
-        let other_config = LocalConfigData {
-            uuid: Uuid::from_u128(0x1234_0000_4242),
-        };
-        File::create(tempdir.child(LOCAL_CONFIG_FILENAME))
+        // Now test with a proper config:
+        File::create(config_file.clone())
             .unwrap()
-            .write_all(toml::to_string_pretty(&other_config).unwrap().as_bytes())
+            .write_all("{ \"client_uuid\": \"d92bdbe2-cdd1-47d9-a1fb-3d9dc84d310f\" }".as_bytes())
             .unwrap();
 
-        let config_from_fn = get_local_config(Some(dir_as_str.clone())).unwrap();
-        assert_eq!(config_from_fn, other_config);
+        let config_data = get_local_config(Some(config_file.clone())).unwrap();
+        assert_eq!(config_data.accepted_eula_version, None);
+        assert_eq!(
+            config_data.client_uuid,
+            Uuid::from_str("d92bdbe2-cdd1-47d9-a1fb-3d9dc84d310f").unwrap()
+        );
     }
 }
