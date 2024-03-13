@@ -1,6 +1,7 @@
 use std::{error::Error, fmt::Display, time::Duration};
 
 use chrono::{DateTime, Utc};
+use common::test_utils::test_dir;
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration, StatType, Units};
 use indexmap::IndexMap;
 use libconntrack::utils::PerfMsgCheck;
@@ -266,93 +267,53 @@ impl RemoteDBClient {
     }
 
     /**
-     * The assumed table schema that we're writing into.  This is mostly for testing and doesn't
-     * handle migrating the production database from what ever it's current schema is to this schema,
-     * so that needs to be handled separately.
+     * Load the table we've sync'd from prod into the database for testing
      *
      * This SHOULD fail with 'table already exists' if you mistakenly run this on the production DB,
      * but you know... like please don't do that.
      * FYI: super useful mapping of SQL types to Rust types: https://kotiri.com/2018/01/31/postgresql-diesel-rust-types.html
      *
      * TODO: decide how we want to do table schema migration
+     *
+     * NOTE: cannot wrap this in #[cfg(test)] as we need it for the integration tests in ./webserver/tests/test_remotedb_client.rs
      */
     pub async fn create_table_schema(
         &self,
         client: &Client,
     ) -> Result<(), tokio_postgres::error::Error> {
-        // for the counters
-        client
-            .query(
-                format!(
-                    "CREATE TABLE {} ( \
-                        counter TEXT, \
-                        value BIGINT, \
-                        os TEXT, \
-                        version TEXT, \
-                        source TEXT, \
-                        time TIMESTAMPTZ)",
-                    self.counters_table_name
+        let schema_file = test_dir("webserver", "production_schema.sql");
+        let sql_instructions = std::fs::read_to_string(schema_file).unwrap();
+        // the default table has a public schema - delete it before we add it
+        client.execute("DROP SCHEMA PUBLIC", &[]).await?;
+        // we need to create the needed roles so the sql can be inserted cleanly
+        for role in ["tsdbadmin", "tsdbexplorer", "readaccess"] {
+            client
+                .execute(format!("CREATE ROLE {} WITH SUPERUSER", role).as_str(), &[])
+                .await?;
+        }
+        client.batch_execute(&sql_instructions).await?;
+        // do some basic testing to make sure it's loaded properly
+        for table in ["desktop_counters", "desktop_logs"] {
+            let rows = client
+                .query(
+                    format!(
+                        "SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_schema = 'public' AND table_name = '{}');",
+                        table
+                    )
+                    .as_str(),
+                    &[],
                 )
-                .as_str(),
-                &[],
-            )
-            .await?;
-        // for the logs
-        client
-            .query(
-                format!(
-                    "CREATE TABLE {} ( \
-                        msg TEXT, \
-                        level TEXT, \
-                        os TEXT, \
-                        version TEXT, \
-                        source TEXT, \
-                        time TIMESTAMPTZ)",
-                    self.logs_table_name
-                )
-                .as_str(),
-                &[],
-            )
-            .await?;
-        // for the connections
-        // TODO: we really need to think about how much of this we really want to store and what has value
-        //      ... this is going to be a lot of data...
-        // TODO: expand the top-level struct but many subcomponents are still in JSON blobs
-        // TODO: add client ID here to make (client_id, connection_key) the primary key
-        // TODO: add company here to make the table name a function of the company
-        client
-            .query(
-                format!(
-                    "CREATE TABLE {} ( 
-                        local_ip TEXT, 
-                        remote_ip TEXT, 
-                        local_port INT, 
-                        remote_port INT, 
-                        ip_protocol SMALLINT, 
-                        local_hostname TEXT, 
-                        remote_hostname TEXT, 
-                        probe_report_summary TEXT, 
-                        user_annotation TEXT,
-                        user_agent TEXT,
-                        associated_apps TEXT,
-                        close_has_started BOOLEAN,
-                        four_way_close_done BOOLEAN,
-                        start_tracking_time TIMESTAMPTZ,
-                        last_packet_time TIMESTAMPTZ,
-                        tx_loss BIGINT,
-                        rx_loss BIGINT,
-                        tx_stats TEXT,
-                        rx_stats TEXT,
-                        time TIMESTAMPTZ,
-                        client_uuid UUID,
-                        source_type TEXT
-                    )",
-                    self.connections_table_name
-                )
-                .as_str(),
-                &[],
-            )
-            .await?;
+                .await
+                .unwrap();
+            let table_exists = rows.first().unwrap().get::<_, bool>(0);
+            if !table_exists {
+                // this is only called in test code, ok to panic
+                panic!("Failed to create table {} - wtf!?", table);
+            }
+            println!("Tested that table {} was successfully created", table);
+        }
         Ok(())
     }
 
@@ -484,9 +445,9 @@ impl RemoteDBClient {
                 Units::Microseconds,
                 [StatType::AVG],
             ),
-            counters_table_name: "test_db_counters".to_string(),
-            logs_table_name: "test_db_logs".to_string(),
-            connections_table_name: "test_db_connections".to_string(),
+            counters_table_name: COUNTERS_DB_NAME.to_string(),
+            logs_table_name: LOGS_DB_NAME.to_string(),
+            connections_table_name: CONNECTIONS_DB_NAME.to_string(),
         }
     }
 
