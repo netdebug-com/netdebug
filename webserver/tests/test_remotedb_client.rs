@@ -26,6 +26,7 @@ async fn test_remotedb_client() {
     let (client, db) = mk_test_db("testdb-test_remotedb_client").await.unwrap();
     let remotedb_client = RemoteDBClient::mk_mock(&db.db_uri);
     remotedb_client.create_table_schema(&client).await.unwrap();
+    // tokio::time::sleep(Duration::from_secs(10000000)).await;
     let now = Utc::now();
     let alice_counters =
         IndexMap::from_iter([("count1".to_string(), 2), ("count2".to_string(), 43)]);
@@ -186,7 +187,7 @@ async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
 
     // run migration sql scripts
     // to enable migrations view [Usage] for details
-    // pg.migrate("database_name").await;
+    // pg.migrate(database_name).await;
 
     // stop postgresql database
     // pg.stop_db().await;
@@ -196,6 +197,8 @@ async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
     // get a postgresql database uri
     // `postgres://{username}:{password}@localhost:{port}/{specified_database_name}`
     // let pg_db_uri: String = pg.full_db_uri("database_name");
+    let uri = &pg.db_uri;
+    println!("TestDB URI = {}", uri);
     let (client, connection) = tokio_postgres::connect(&pg.db_uri, tokio_postgres::NoTls)
         .await
         .unwrap();
