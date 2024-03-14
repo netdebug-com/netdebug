@@ -1,5 +1,6 @@
 #!/bin/bash
-set -x
+#set -x # debugging
+set -e # fail on any errors
 
 OUTFILE=production_schema.sql
 URL=postgres://tsdbadmin@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require
@@ -19,6 +20,7 @@ fi
 
 OUT=${OUTDIR}/${OUTFILE}
 
+echo Enter the tsdbadmin password - this can not be the rw_user password
 # Assumes you have postgresql-clients installed: https://www.postgresql.org/download/
 pg_dump --schema-only --schema public $URL > $OUT
 
