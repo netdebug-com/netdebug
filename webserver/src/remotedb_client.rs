@@ -1,4 +1,8 @@
-use std::{error::Error, fmt::Display, time::Duration};
+use std::{
+    error::Error,
+    fmt::{Debug, Display},
+    time::Duration,
+};
 
 use chrono::{DateTime, Utc};
 use common::test_utils::test_dir;
@@ -21,11 +25,9 @@ use crate::secrets_db::Secrets;
 /// Also looked at influxdb but the rust client was unofficial and
 /// didn't work for me.  Timescaledb was easier to setup and cheaper
 /// to support
+#[derive(Debug)]
 pub struct RemoteDBClient {
-    /// Full URL to our remote database... WITH PASSWORD - DO NOT LOG
-    url: String,
-    /// URL to our remote database with password XX'd out; use for logging
-    url_no_auth: String,
+    urls: MakeDbUrl,
     /// if we need to retry the connection, this is our next retry value; exponential backoff
     retry_time: tokio::time::Duration,
     /// max time that we wait between connections
@@ -65,6 +67,14 @@ pub enum StorageSourceType {
     TopologyServer,
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum RemoteDBClientError {
+    #[error("TLS Error {0}")]
+    TlsError(#[from] native_tls::Error),
+    #[error("Postgresql Error {0}")]
+    PostgresqlError(#[from] tokio_postgres::Error),
+}
+
 impl Display for StorageSourceType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use StorageSourceType::*;
@@ -98,6 +108,65 @@ pub enum RemoteDBClientMessages {
     },
 }
 
+// full URL is postgres://tsdbadmin:PASSWORD@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require
+const PRODUCTION_DB_DRIVER: &str = "postgres";
+const PRODUCTION_DB_URL_BASE: &str =
+    "ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require";
+/// Create the URL to the production DB server.  There are different URLs for
+/// connections with read-only vs. write priviledges
+/// return two strings; one valid with the password and one with the password XXX'd out
+/// for logging
+struct MakeDbUrl {
+    /// URL, but don't log this!
+    url_with_auth: String,
+    /// URL with auth info XXXXX'd out; safe to log
+    url_without_auth: String,
+}
+impl Debug for MakeDbUrl {
+    /// custom debug function to not log the auth info
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MakeDbUrl")
+            .field("url_without_auth", &self.url_without_auth)
+            .finish()
+    }
+}
+fn make_db_url(secrets: &Secrets, is_readonly: bool) -> MakeDbUrl {
+    let (user, passwd) = if is_readonly {
+        (
+            secrets
+                .timescale_db_read_user
+                .clone()
+                .expect("Asked for a read-only prod DB connection, but no read user"),
+            secrets
+                .timescale_db_read_secret
+                .clone()
+                .expect("Asked for a read-only prod DB connection, but no read secret"),
+        )
+    } else {
+        (
+            secrets
+                .timescale_db_write_user
+                .clone()
+                .expect("Asked for a write prod DB connection, but no write user"),
+            secrets
+                .timescale_db_write_secret
+                .clone()
+                .expect("Asked for a write prod DB connection, but no read user"),
+        )
+    };
+
+    MakeDbUrl {
+        url_with_auth: format!(
+            "{}://{}:{}@{}",
+            PRODUCTION_DB_DRIVER, user, passwd, PRODUCTION_DB_URL_BASE
+        ),
+        url_without_auth: format!(
+            "{}://{}:{}@{}",
+            PRODUCTION_DB_DRIVER, user, "XXXXX", PRODUCTION_DB_URL_BASE
+        ),
+    }
+}
+
 impl RemoteDBClient {
     pub fn spawn(
         secrets: Secrets,
@@ -106,16 +175,10 @@ impl RemoteDBClient {
         stats: ExportedStatRegistry,
     ) -> Result<RemoteDBClientSender, Box<dyn Error>> {
         let (tx, rx) = channel(max_queue);
-        let auth_token = match secrets.timescale_db_write_secret {
-            Some(t) => t,
-            None => panic!("Started RemoteDBClient without setting the timescale_db_write_secret in the secrets file"),
-        };
-        let url = format!("postgres://tsdbadmin:{}@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require", auth_token.trim());
-        let url_no_auth = format!("postgres://tsdbadmin:{}@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require", "XXXXXXX");
+        let urls = make_db_url(&secrets, false);
 
         let remote_db_client = RemoteDBClient {
-            url,
-            url_no_auth,
+            urls,
             rx,
             retry_time: Duration::from_millis(INITIAL_RETRY_TIME_MS),
             retry_time_max,
@@ -139,24 +202,55 @@ impl RemoteDBClient {
         self.tx.clone()
     }
 
+    /// Useful for other processes that want to read the database but don't want to do message
+    /// passing to and from this RemoteDbClient agent.  Just give them their own client.
+    ///
+    /// NOTE: I like the idea of all of the write connections going through the RemoteDbClient agent
+    /// so that they queue and will reconnect if disconnected where as the read operations can be more
+    /// fragile.
+    pub async fn make_read_only_client(secrets: &Secrets) -> Result<Client, RemoteDBClientError> {
+        let urls = make_db_url(secrets, true);
+        let connector = native_tls::TlsConnector::new()?;
+        let connector = postgres_native_tls::MakeTlsConnector::new(connector);
+
+        let (client, connection) = tokio_postgres::connect(&urls.url_with_auth, connector).await?;
+        // the tokio_postgres API requires that we spawn a task for the connection
+        // so it can handle multiple reads/writes in parallel on the backend
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                // TODO: figure out under what conditions this could exit and see
+                // if we need to be more resilient here
+                warn!(
+                    "tokio_postgress connection exited with {}... uhmm.. TODO",
+                    e
+                );
+            }
+        });
+        Ok(client)
+    }
+
     async fn rx_loop(mut self) -> Result<(), Box<dyn Error>> {
         loop {
-            info!("Trying to connect to database server: {}", self.url_no_auth);
+            info!(
+                "Trying to connect to database server: {}",
+                self.urls.url_without_auth
+            );
             let connector = native_tls::TlsConnector::new()?;
             let connector = postgres_native_tls::MakeTlsConnector::new(connector);
 
-            let (client, connection) = match tokio_postgres::connect(&self.url, connector).await {
-                Ok((client, connection)) => (client, connection),
-                Err(e) => {
-                    self.retry_time = std::cmp::min(self.retry_time * 2, self.retry_time_max);
-                    warn!(
+            let (client, connection) =
+                match tokio_postgres::connect(&self.urls.url_with_auth, connector).await {
+                    Ok((client, connection)) => (client, connection),
+                    Err(e) => {
+                        self.retry_time = std::cmp::min(self.retry_time * 2, self.retry_time_max);
+                        warn!(
                         "Failed to connect to postgres server {} - retrying in {:?} -- error {}",
-                        self.url_no_auth, self.retry_time, e
+                        self.urls.url_without_auth, self.retry_time, e
                     );
-                    tokio::time::sleep(self.retry_time).await;
-                    continue;
-                }
-            };
+                        tokio::time::sleep(self.retry_time).await;
+                        continue;
+                    }
+                };
             // successful connect, reset retry timer
             self.retry_time = Duration::from_millis(INITIAL_RETRY_TIME_MS);
 
@@ -434,8 +528,10 @@ impl RemoteDBClient {
         let (tx, rx) = channel(10);
         let registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
         RemoteDBClient {
-            url: url.to_string(),
-            url_no_auth: url.to_string(), // mock version shouldn't have a password to protect
+            urls: MakeDbUrl {
+                url_with_auth: url.to_string(),
+                url_without_auth: url.to_string(), // mock version shouldn't have a password to protect
+            },
             retry_time: Duration::from_millis(INITIAL_RETRY_TIME_MS),
             retry_time_max: Duration::from_secs(10),
             tx,
