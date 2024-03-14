@@ -1868,7 +1868,7 @@ pub mod test {
                 assert_eq!(m.key.remote_ip, IpAddr::from_str("34.121.150.27").unwrap());
                 assert_eq!(m.key.remote_l4_port, 443);
             } //
-              //_wut => panic!("Expected StoreConnectionMeasurements, got {:?}", _wut),
+            _wut => panic!("Expected StoreConnectionMeasurements, got {:?}", _wut),
         }
 
         // make sure we have the "unrelated" connection in the tracker

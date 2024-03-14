@@ -6,7 +6,10 @@ use std::{
     time::Duration,
 };
 
-use crate::{topology_client::DataStorageSender, utils::PerfMsgCheck};
+use crate::{
+    topology_client::{DataStorageMessage, DataStorageSender},
+    utils::PerfMsgCheck,
+};
 
 use chrono::Utc;
 use common::os_abstraction::pcap_ifname_to_ifindex;
@@ -17,14 +20,19 @@ use libconntrack_wasm::{
     ConnectionKey, NetworkGatewayPingProbe, NetworkGatewayPingState, NetworkGatewayPingType,
     NetworkInterfaceState,
 };
-#[cfg(not(test))]
-use log::{debug, warn};
+
 use mac_address::MacAddress;
 use net_route::Route;
 use pcap::{ConnectionStatus, IfFlags};
+
+use tokio::sync::{mpsc::channel, RwLock};
+use uuid::Uuid;
+
+#[cfg(not(test))]
+use log::{debug, warn};
 #[cfg(test)]
+// Workaround to use prinltn! for logs.
 use std::{println as debug, println as warn};
-use tokio::sync::{mpsc::channel, RwLock}; // Workaround to use prinltn! for logs.
 
 pub const BROADCAST_MAC_ADDR: [u8; 6] = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
 use crate::{
@@ -62,6 +70,7 @@ fn network_interface_state_from_pcap_device(
 ) -> NetworkInterfaceState {
     match pcap_dev {
         Ok(pcap_dev) => NetworkInterfaceState {
+            uuid: Uuid::new_v4(),
             gateways,
             // NOTE: pcap puts a more human readable name in the description,
             // so use that if it exists, else fall back the device name
@@ -89,6 +98,7 @@ fn network_interface_state_from_pcap_device(
         },
         // Failed to lookup the device - fill in as much as we can
         Err(e) => NetworkInterfaceState {
+            uuid: Uuid::new_v4(),
             gateways: Vec::new(),
             interface_name: None,
             interface_ips: Vec::new(),
@@ -133,7 +143,7 @@ pub struct SystemTracker {
     /// counter for number of duplicate pings, shared across all gateways
     duplicate_ping: StatHandle,
     /// Channel to send messages to the topology server
-    _data_storage_client: Option<DataStorageSender>,
+    data_storage_client: Option<DataStorageSender>,
 }
 
 impl SystemTracker {
@@ -165,6 +175,17 @@ impl SystemTracker {
         prober_tx: ProberSender,
         data_storage_client: Option<DataStorageSender>,
     ) -> SystemTracker {
+        if let Some(data_storage_client) = &data_storage_client {
+            let mut cloned_state = current_network.clone();
+            cloned_state.gateways_ping.clear();
+            send_or_log_sync!(
+                data_storage_client,
+                "SystemTracker::new_with_network_state()",
+                DataStorageMessage::StoreNetworkInterfaceState {
+                    network_interface_state: cloned_state,
+                }
+            );
+        }
         SystemTracker {
             network_history: VecDeque::from([current_network]),
             network_device_changes: stats_registry.add_stat(
@@ -194,7 +215,7 @@ impl SystemTracker {
                 Units::None,
                 [StatType::COUNT],
             ),
-            _data_storage_client: data_storage_client,
+            data_storage_client,
         }
     }
 
@@ -267,6 +288,28 @@ impl SystemTracker {
                 "Network state change from '{}' to '{}'",
                 old_state, interface_state
             );
+            if let Some(data_storage_client) = &self.data_storage_client {
+                // Don't export the gateway ping data -- we export ping data
+                // separately.
+                let mut old_state = old_state.clone();
+                old_state.gateways_ping.clear();
+                let mut interface_state = interface_state.clone();
+                interface_state.gateways_ping.clear();
+                send_or_log_sync!(
+                    data_storage_client,
+                    "SystemTracker::handle_update_network_state() -- old_state",
+                    DataStorageMessage::StoreNetworkInterfaceState {
+                        network_interface_state: old_state
+                    }
+                );
+                send_or_log_sync!(
+                    data_storage_client,
+                    "SystemTracker::handle_update_network_state() -- new_state",
+                    DataStorageMessage::StoreNetworkInterfaceState {
+                        network_interface_state: interface_state
+                    }
+                );
+            }
             true
         } else {
             debug!(

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use typescript_type_def::TypeDef;
 
-use crate::{ConnectionKey, ConnectionMeasurements};
+use crate::{ConnectionKey, ConnectionMeasurements, NetworkInterfaceState};
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, TypeDef)]
 pub enum DesktopLogLevel {
@@ -30,7 +30,7 @@ impl Display for DesktopLogLevel {
 
 /// Messages sent over the websocket from the desktop app (both
 /// rust and electron) to the topology server.
-#[derive(Clone, Debug, Serialize, Deserialize, TypeDef, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
 #[serde(tag = "tag", content = "data")]
 pub enum DesktopToTopologyServer {
     Hello,
@@ -59,6 +59,9 @@ pub enum DesktopToTopologyServer {
         os: String,
         version: String,
         client_id: String,
+    },
+    PushNetworkInterfaceState {
+        network_interface_state: NetworkInterfaceState,
     },
     Ping,
 }
