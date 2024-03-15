@@ -115,6 +115,9 @@ async fn handle_desktop_message(
         PushNetworkInterfaceState { network_interface_state } => {
             info!("TODO: Received network interface state: {}", network_interface_state);
         }
+        PushGatewayPingData { ping_data } => {
+            info!("TODO: Received gateway ping data: {:?}", ping_data);
+        }
     }
 }
 
