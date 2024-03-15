@@ -51,10 +51,12 @@ pub struct RemoteDBClient {
 ///     value int,
 ///     source varchar (256),
 ///     time DATE);
-const COUNTERS_DB_NAME: &str = "desktop_counters";
-const LOGS_DB_NAME: &str = "desktop_logs";
-const CONNECTIONS_DB_NAME: &str = "desktop_connections";
-const INITIAL_RETRY_TIME_MS: u64 = 100;
+pub const COUNTERS_TABLE_NAME: &str = "desktop_counters";
+pub const LOGS_TABLE_NAME: &str = "desktop_logs";
+pub const CONNECTIONS_TABLE_NAME: &str = "desktop_connections";
+pub const USERS_TABLE_NAME: &str = "users";
+pub const INITIAL_RETRY_TIME_MS: u64 = 100;
+
 // Linux root cert db is /etc/ssl/certs/ca-certificates.crt, at least on Ubuntu
 
 pub type RemoteDBClientSender = tokio::sync::mpsc::Sender<PerfMsgCheck<RemoteDBClientMessages>>;
@@ -188,9 +190,9 @@ impl RemoteDBClient {
                 Units::Microseconds,
                 [StatType::AVG, StatType::MAX],
             ),
-            counters_table_name: COUNTERS_DB_NAME.to_string(),
-            logs_table_name: LOGS_DB_NAME.to_string(),
-            connections_table_name: CONNECTIONS_DB_NAME.to_string(),
+            counters_table_name: COUNTERS_TABLE_NAME.to_string(),
+            logs_table_name: LOGS_TABLE_NAME.to_string(),
+            connections_table_name: CONNECTIONS_TABLE_NAME.to_string(),
         };
         tokio::spawn(async move {
             remote_db_client.rx_loop().await.unwrap();
@@ -541,9 +543,9 @@ impl RemoteDBClient {
                 Units::Microseconds,
                 [StatType::AVG],
             ),
-            counters_table_name: COUNTERS_DB_NAME.to_string(),
-            logs_table_name: LOGS_DB_NAME.to_string(),
-            connections_table_name: CONNECTIONS_DB_NAME.to_string(),
+            counters_table_name: COUNTERS_TABLE_NAME.to_string(),
+            logs_table_name: LOGS_TABLE_NAME.to_string(),
+            connections_table_name: CONNECTIONS_TABLE_NAME.to_string(),
         }
     }
 

@@ -14,6 +14,12 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 use thiserror::Error as ThisError;
+use tokio_postgres::Client;
+
+use crate::{
+    remotedb_client::{RemoteDBClient, RemoteDBClientError},
+    secrets_db::Secrets,
+};
 
 /// The local state for a NetDebug users; TODO add more state!
 /// Clerk.com handles all of the authn for us but we still need
@@ -25,7 +31,7 @@ pub struct NetDebugUser {
     pub user_id: String,
     /// A unique ID for the company the user is in.  If people have multiple companies,
     /// for now use multiple accounts
-    pub company_id: i64,
+    pub organization_id: i64,
     /// A unique session key which is a hash of the user_id and the random seed
     pub session_key: Vec<u8>,
     // TODO : put in more state
@@ -39,7 +45,7 @@ impl std::fmt::Debug for NetDebugUser {
         // every field except for session_key
         f.debug_struct("NetDebugUser")
             .field("user_id", &self.user_id)
-            .field("company_id", &self.company_id)
+            .field("organization_id", &self.organization_id)
             .finish()
     }
 }
@@ -55,21 +61,43 @@ impl NetDebugUser {
     /// Translate a User as defined by Clerk.com into our own internal
     /// state structure.  This should only be done after validating the
     /// user, e.g., by calling [UserServiceData::get_user_from_clerk_jwt()]
-    fn from_validated_clerk_user(
+    async fn from_validated_clerk_user(
         clerk_user: &clerk_rs::models::User,
         random_salt: &String,
+        client: &Arc<Client>,
     ) -> Result<Option<NetDebugUser>, UserAuthError> {
         match &clerk_user.id {
             Some(user_id) => {
                 let session_key = NetDebugUser::make_session_key(user_id, random_salt);
+                let organization = NetDebugUser::lookup_organization_id(user_id, client).await?;
                 Ok(Some(NetDebugUser {
                     user_id: user_id.clone(),
-                    company_id: 0, // TODO: look up in our DB!
+                    organization_id: organization,
                     session_key,
                 }))
             }
             None => Ok(None), // AFAICT, this should never happen but if it does, just return None="no user"
         }
+    }
+
+    /// Query the backend database to lookup this user's organization id
+    /// TODO: expand this to be "lookup all of the things that only the backend DB has"
+    async fn lookup_organization_id(
+        user_id: &str,
+        client: &Arc<Client>,
+    ) -> Result<i64, UserAuthError> {
+        let row = client
+            .query_one(
+                &format!(
+                    "SELECT primary_email, organization, name FROM {} WHERE clerk_id = $1",
+                    crate::remotedb_client::USERS_TABLE_NAME
+                ),
+                &[&user_id],
+            )
+            .await?;
+        let organization_id = row.get::<_, i64>(1);
+        // TODO: get and return more user data
+        Ok(organization_id)
     }
 }
 
@@ -104,10 +132,15 @@ pub struct NetDebugUserBackend {
     ///
     /// TODO: persist the state :-)
     random_salt: String,
+    /// read-only data-base client
+    client: Arc<Client>,
 }
 
 impl NetDebugUserBackend {
-    pub fn new(user_service: UserService) -> NetDebugUserBackend {
+    pub async fn new(
+        user_service: UserService,
+        secrets: &Secrets,
+    ) -> Result<NetDebugUserBackend, RemoteDBClientError> {
         use rand::{distributions::Alphanumeric, Rng};
         // Create a 64-character long random string
         let random_salt = rand::thread_rng()
@@ -115,10 +148,12 @@ impl NetDebugUserBackend {
             .take(64)
             .map(char::from)
             .collect();
-        NetDebugUserBackend {
+        let client = Arc::new(RemoteDBClient::make_read_only_client(secrets).await?);
+        Ok(NetDebugUserBackend {
             user_service,
             random_salt,
-        }
+            client,
+        })
     }
 }
 
@@ -144,7 +179,12 @@ impl AuthnBackend for NetDebugUserBackend {
             .await?
         {
             Some(clerk_user) => {
-                NetDebugUser::from_validated_clerk_user(&clerk_user, &self.random_salt)
+                NetDebugUser::from_validated_clerk_user(
+                    &clerk_user,
+                    &self.random_salt,
+                    &self.client,
+                )
+                .await
             }
             None => Err(UserAuthError::UserNotFound {
                 jwt: creds.clerk_jwt,
@@ -155,7 +195,7 @@ impl AuthnBackend for NetDebugUserBackend {
     async fn get_user(&self, user_id: &UserId<Self>) -> Result<Option<Self::User>, Self::Error> {
         // our user_id is a clerk id, so look it up in the clerk service
         let clerk_user = self.user_service.get_user(user_id).await?;
-        NetDebugUser::from_validated_clerk_user(&clerk_user, &self.random_salt)
+        NetDebugUser::from_validated_clerk_user(&clerk_user, &self.random_salt, &self.client).await
     }
 }
 
@@ -179,6 +219,8 @@ pub enum UserAuthError {
     },
     #[error("Clerk could not find user matching JWT {jwt}")]
     UserNotFound { jwt: String },
+    #[error("Error on backend DB lookup {0}")]
+    BackendDbError(#[from] tokio_postgres::Error),
 }
 
 /// Abstract away some of the UserService details... but not that much
