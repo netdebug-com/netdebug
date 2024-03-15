@@ -72,7 +72,7 @@ async fn test_remotedb_client() {
                 level: DesktopLogLevel::Debug,
                 os: "TestOS".to_string(),
                 version: "1".to_string(),
-                client_id: "JOemama".to_string(),
+                device_uuid: "JOemama".to_string(),
                 time: Utc::now(),
             },
         )

@@ -549,7 +549,6 @@ export type DesktopToTopologyServer = ({
         "counters": Record<string, U64>;
         "os": string;
         "version": string;
-        "client_id"?: string;
     };
 } | {
     "tag": "PushLog";
@@ -560,7 +559,6 @@ export type DesktopToTopologyServer = ({
         "msg": string;
         "os": string;
         "version": string;
-        "client_id": string;
     };
 } | {
     "tag": "PushNetworkInterfaceState";

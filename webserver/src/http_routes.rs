@@ -192,37 +192,37 @@ async fn desktop_ws_handler(
     } else {
         String::from("Unknown browser")
     };
-    // for now, just warn!() if there's no auth and make up a client_id; later we will enforce
-    let client_id = if let Some(auth) = auth {
-        if let Ok(client_id) = Uuid::try_parse(auth.token()) {
+    // for now, just warn!() if there's no auth and make up a device_uuid; later we will enforce
+    let device_uuid = if let Some(auth) = auth {
+        if let Ok(device_uuid) = Uuid::try_parse(auth.token()) {
             info!(
-                "Desktop Websocket request from {}, client_id {}",
+                "Desktop Websocket request from {}, device_uuid {}",
                 addr.ip(),
-                client_id
+                device_uuid
             );
-            client_id
+            device_uuid
         } else {
-            let client_id = make_uuid_from_ip(addr.ip());
+            let device_uuid = make_uuid_from_ip(addr.ip());
             warn!(
                 "Received an invalid UUID from {}. Bad ID: `{}` - making an IP-based one {}",
                 addr.ip(),
                 auth.token(),
-                client_id
+                device_uuid
             );
-            client_id
+            device_uuid
         }
     } else {
-        let client_id = make_uuid_from_ip(addr.ip());
+        let device_uuid = make_uuid_from_ip(addr.ip());
         warn!(
             "Received no auth header / client UUID from {} - making up an IP-based one - {}",
             addr.ip(),
-            client_id
+            device_uuid
         );
-        client_id
+        device_uuid
     };
     // finalize the upgrade process by returning upgrade callback.
     ws.on_upgrade(move |socket| {
-        desktop_websocket::handle_desktop_websocket(socket, context, client_id, user_agent, addr)
+        desktop_websocket::handle_desktop_websocket(socket, context, device_uuid, user_agent, addr)
     })
 }
 

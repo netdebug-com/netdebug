@@ -24,7 +24,7 @@ use crate::{
     spawn_webserver_connection_log_wrapper, topology_server,
 };
 
-/// We use a v5 NAMESPACE_DNS UUID as the "client_id" for connections we log from the
+/// We use a v5 NAMESPACE_DNS UUID as the "device_uuid" for connections we log from the
 /// webserver (i.e., webtest connections).
 /// The final UUID for this is: fa7825d6-6905-5acd-a29f-69be8d81c330
 const UUID_DNS_NAME_FOR_SERVER_CONN: &[u8] = b"topology.netdebug.com";

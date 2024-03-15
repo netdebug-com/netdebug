@@ -88,7 +88,7 @@ impl Display for StorageSourceType {
 pub enum RemoteDBClientMessages {
     StoreConnectionMeasurements {
         connection_measurements: Box<ConnectionMeasurements>,
-        client_uuid: Uuid,
+        device_uuid: Uuid,
         source_type: StorageSourceType,
     },
     StoreCounters {
@@ -103,7 +103,7 @@ pub enum RemoteDBClientMessages {
         level: DesktopLogLevel,
         os: String,
         version: String,
-        client_id: String,
+        device_uuid: String,
         time: DateTime<Utc>,
     },
 }
@@ -283,13 +283,13 @@ impl RemoteDBClient {
                     StoreLog { .. } => self.handle_store_log(&client, msg).await,
                     StoreConnectionMeasurements {
                         connection_measurements,
-                        client_uuid,
+                        device_uuid,
                         source_type,
                     } => {
                         self.handle_store_connection_measurement(
                             &client,
                             connection_measurements,
-                            client_uuid,
+                            device_uuid,
                             source_type,
                         )
                         .await
@@ -422,12 +422,12 @@ impl RemoteDBClient {
                 level,
                 os,
                 version,
-                client_id,
+                device_uuid,
                 time,
             } => {
                 client.execute(
                 format!("INSERT INTO {} (msg, level, source, time, os, version) VALUES ($1, $2, $3, $4, $5, $6)",self.logs_table_name).as_str(),
-            &[&msg, &level.to_string(), &client_id, &time, &os, &version  ]
+            &[&msg, &level.to_string(), &device_uuid, &time, &os, &version  ]
         ).await?;
             }
             _ => panic!(
@@ -448,7 +448,7 @@ impl RemoteDBClient {
         &self,
         client: &Client,
         m: &ConnectionMeasurements,
-        client_uuid: &Uuid,
+        device_uuid: &Uuid,
         source_type: &StorageSourceType,
     ) -> Result<(), tokio_postgres::Error> {
         // store a bunch of more complex members as JSON blobs, for now
@@ -515,7 +515,7 @@ impl RemoteDBClient {
                     &tx_stats,
                     &rx_stats,
                     &now,
-                    &client_uuid,
+                    &device_uuid,
                     &source_type.to_string(),
                 ],
             )

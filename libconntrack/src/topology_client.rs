@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 const COUNTER_REMOTE_SYNC_INTERVAL_MS: u64 = 60_000;
 const WS_KEEPALIVE_INTERVAL_MS: u64 = 1_000;
-const X_NETDEBUG_CLIENT_UUID_HEADER: &str = "X-Netdebug-Client-Uuid";
+const X_NETDEBUG_DEVICE_UUID_HEADER: &str = "X-Netdebug-Device-Uuid";
 
 /// TopologyServer RPC messages. Used inside the desktop binary to
 /// send RPC requests from the UI facing rest endpoints to topology_client
@@ -115,7 +115,7 @@ pub struct TopologyServerConnection {
     /// Send a keepalive (ping) to the WS sender periodically
     ws_keepalive_interval: tokio::time::Duration,
     // The UUID of the client for identifying it to the server
-    client_uuid: Uuid,
+    device_uuid: Uuid,
 }
 
 impl TopologyServerConnection {
@@ -128,7 +128,7 @@ impl TopologyServerConnection {
         storage_rx: DataStorageReceiver,
         buffer_size: usize,
         max_retry_time: Duration,
-        client_uuid: Uuid,
+        device_uuid: Uuid,
         super_counters_registry: SharedExportedStatRegistries,
         stats_registry: ExportedStatRegistry,
     ) -> TopologyServerConnection {
@@ -166,7 +166,7 @@ impl TopologyServerConnection {
             ),
             super_counters_registries: super_counters_registry,
             ws_keepalive_interval: tokio::time::Duration::from_millis(WS_KEEPALIVE_INTERVAL_MS),
-            client_uuid,
+            device_uuid,
         }
     }
 
@@ -174,7 +174,7 @@ impl TopologyServerConnection {
         url: String,
         buffer_size: usize,
         max_retry_time: Duration,
-        client_uuid: Uuid,
+        device_uuid: Uuid,
         super_counters_registry: SharedExportedStatRegistries,
         stats_registry: ExportedStatRegistry,
     ) -> (TopologyRpcSender, DataStorageSender) {
@@ -191,7 +191,7 @@ impl TopologyServerConnection {
                 storage_rx,
                 buffer_size,
                 max_retry_time,
-                client_uuid,
+                device_uuid,
                 super_counters_registry,
                 stats_registry,
             );
@@ -215,15 +215,15 @@ impl TopologyServerConnection {
         // Intentionally panic here if we got a bad URL
         let url = url::Url::parse(&self.url).unwrap_or_else(|_| panic!("Bad url! {}", &self.url));
 
-        // TODO: use a real token / shared secret here instead of the client_id
-        let auth_header = "Bearer ".to_owned() + &self.client_uuid.as_hyphenated().to_string();
-        let client_uuid_header = self.client_uuid.as_hyphenated().to_string();
+        // TODO: use a real token / shared secret here instead of the device_uuid
+        let auth_header = "Bearer ".to_owned() + &self.device_uuid.as_hyphenated().to_string();
+        let device_uuid_header = self.device_uuid.as_hyphenated().to_string();
         // need to generate a custom request because we need to set the User-Agent for our webserver
         let req = Request::builder()
             .method("GET")
             .header("Host", url.authority())
             .header("User-Agent", "NetDebug Desktop version x.y.z")
-            .header(X_NETDEBUG_CLIENT_UUID_HEADER, client_uuid_header)
+            .header(X_NETDEBUG_DEVICE_UUID_HEADER, device_uuid_header)
             .header("Authorization", auth_header)
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
@@ -575,7 +575,6 @@ impl TopologyServerConnection {
                             counters,
                             os: std::env::consts::OS.to_string(),
                             version: get_git_hash_version(),
-                            client_id: Default::default(),
                         }))
                         .await
                     {

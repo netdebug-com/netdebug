@@ -23,7 +23,7 @@ const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 4096;
 pub async fn handle_desktop_websocket(
     websocket: WebSocket,
     context: Context,
-    client_uuid: Uuid,
+    device_uuid: Uuid,
     user_agent: String,
     addr: SocketAddr,
 ) {
@@ -53,7 +53,7 @@ pub async fn handle_desktop_websocket(
                             &ws_tx,
                             &user_agent,
                             &addr,
-                            client_uuid,
+                            device_uuid,
                         )
                         .await;
                     }
@@ -82,7 +82,7 @@ async fn handle_desktop_message(
     ws_tx: &Sender<TopologyServerToDesktop>,
     user_agent: &str,
     addr: &SocketAddr,
-    client_uuid: Uuid,
+    device_uuid: Uuid,
 ) {
     use DesktopToTopologyServer::*;
     match msg {
@@ -90,7 +90,7 @@ async fn handle_desktop_message(
         StoreConnectionMeasurement {
             connection_measurements: connection_measurement,
             // TODO: put client Info (OS, version, etc.) in the message
-        } => handle_store_measurements(connection_measurement, client_uuid, remotedb_client).await,
+        } => handle_store_measurements(connection_measurement, device_uuid, remotedb_client).await,
         InferCongestion {
             connection_measurements,
         } => handle_infer_congestion(ws_tx, connection_measurements, topology_server).await,
@@ -99,7 +99,6 @@ async fn handle_desktop_message(
             counters,
             os,
             version,
-            .. // TODO: use client_id
         } => handle_push_counters(remotedb_client, timestamp, counters, addr, os, version).await,
         PushLog {
             timestamp,
@@ -107,7 +106,7 @@ async fn handle_desktop_message(
             level,
             os,
             version,
-            .. // TODO: replace the addr.to_string() with the client id from the message
+            .. // FIXME: use `scope` field!!
         } => handle_push_log(remotedb_client, timestamp, msg, level, os, version, addr.to_string()).await,
         Ping => {
             warn!("Received a DesktopToTopologyServer::Ping as JSON which should never be sent over the wire");
@@ -132,7 +131,7 @@ async fn handle_push_log(
     level: DesktopLogLevel,
     os: String,
     version: String,
-    client_id: String,
+    device_uuid: String,
 ) {
     if let Some(remotedb_client) = remotedb_client {
         send_or_log_async!(
@@ -143,7 +142,7 @@ async fn handle_push_log(
                 level,
                 os,
                 version,
-                client_id,
+                device_uuid,
                 time,
             }
         )
@@ -151,7 +150,7 @@ async fn handle_push_log(
     } else {
         debug!(
             "Storage not configured:: not storing log from {} :: {:?} :: {} :: {} :: {} :: {} :: ",
-            client_id, level, time, os, version, msg
+            device_uuid, level, time, os, version, msg
         );
     }
 }
@@ -235,7 +234,7 @@ async fn handle_infer_congestion(
  */
 async fn handle_store_measurements(
     connection_measurements: Box<libconntrack_wasm::ConnectionMeasurements>,
-    client_uuid: Uuid,
+    device_uuid: Uuid,
     remotedb_client: &Option<RemoteDBClientSender>,
 ) {
     if let Some(remotedb_client) = remotedb_client {
@@ -244,7 +243,7 @@ async fn handle_store_measurements(
             "handle_store",
             RemoteDBClientMessages::StoreConnectionMeasurements {
                 connection_measurements,
-                client_uuid,
+                device_uuid,
                 source_type: StorageSourceType::Desktop,
             }
         )

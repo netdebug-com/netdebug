@@ -9,7 +9,7 @@ use crate::remotedb_client::{RemoteDBClientMessages, RemoteDBClientSender, Stora
 /// tracker and send them to the remote DB.
 pub fn spawn_webserver_connection_log_wrapper(
     remotedb_client: RemoteDBClientSender,
-    storage_client_uuid: uuid::Uuid,
+    device_uuid: uuid::Uuid,
 ) -> DataStorageSender {
     // This is pretty much just a passthrough
     let (tx, mut rx) = channel(128);
@@ -29,7 +29,7 @@ pub fn spawn_webserver_connection_log_wrapper(
                         "handle_store",
                         RemoteDBClientMessages::StoreConnectionMeasurements {
                             connection_measurements,
-                            client_uuid: storage_client_uuid,
+                            device_uuid,
                             source_type: StorageSourceType::TopologyServer,
                         }
                     )
