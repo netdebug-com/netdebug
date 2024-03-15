@@ -38,6 +38,7 @@ pub fn spawn_webserver_connection_log_wrapper(
                 // Ignore all other cases. ConnectionTracker isn't generating them
                 StoreNetworkInterfaceState { .. } => (),
                 StoreGatewayPingData { .. } => (),
+                StoreDnsEntries { .. } => (),
             }
         }
         warn!("Exiting WebserverConnectionLogWrapper--rx_loop");

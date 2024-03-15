@@ -1661,6 +1661,7 @@ pub mod test {
     async fn test_dns_tracker_new_connection_lookup() {
         let mut dns_tracker = DnsTracker::new(
             20,
+            None,
             ExportedStatRegistry::new("testing_dns", std::time::Instant::now()),
         );
         let local_syn = OwnedParsedPacket::try_from_fake_time(TEST_1_LOCAL_SYN.to_vec()).unwrap();

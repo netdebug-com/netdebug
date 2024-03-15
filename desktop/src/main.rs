@@ -192,6 +192,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // launch the DNS tracker; cache localhost entries
     let (dns_tx, _) = DnsTracker::spawn(
         /* expiring cache capacity */ 4096,
+        Some(data_storage_client.clone()),
         counter_registries.new_registry("dns_tracker"),
         /* max msg queue entries */
         4096,

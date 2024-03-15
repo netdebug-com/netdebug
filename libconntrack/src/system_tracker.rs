@@ -988,6 +988,7 @@ mod test {
                 }
                 // No ping data so nothing is exported
                 DataStorageMessage::StoreGatewayPingData { .. } => panic!(),
+                DataStorageMessage::StoreDnsEntries { .. } => panic!(),
             }
         }
         assert_eq!(
@@ -1375,6 +1376,7 @@ mod test {
         match msg.skip_perf_check() {
             DataStorageMessage::StoreConnectionMeasurements { .. } => panic!(),
             DataStorageMessage::StoreNetworkInterfaceState { .. } => panic!(),
+            DataStorageMessage::StoreDnsEntries { .. } => panic!(),
             DataStorageMessage::StoreGatewayPingData { ping_data } => {
                 assert_eq!(ping_data.len(), 1);
                 assert_eq!(

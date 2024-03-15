@@ -118,6 +118,10 @@ async fn handle_desktop_message(
         PushGatewayPingData { ping_data } => {
             info!("TODO: Received gateway ping data: {:?}", ping_data);
         }
+        PushDnsEntries { dns_entries } => {
+            info!("TODO: Received dns_entries: {:?}", dns_entries);
+        }
+
     }
 }
 
