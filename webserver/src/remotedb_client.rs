@@ -108,7 +108,7 @@ pub enum RemoteDBClientMessages {
     },
 }
 
-// full URL is postgres://tsdbadmin:PASSWORD@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require
+// full URL is postgres://rw_user:PASSWORD@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require
 const PRODUCTION_DB_DRIVER: &str = "postgres";
 const PRODUCTION_DB_URL_BASE: &str =
     "ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require";
@@ -380,7 +380,7 @@ impl RemoteDBClient {
         // the default table has a public schema - delete it before we add it
         client.execute("DROP SCHEMA PUBLIC", &[]).await?;
         // we need to create the needed roles so the sql can be inserted cleanly
-        for role in ["tsdbadmin", "tsdbexplorer", "readaccess"] {
+        for role in ["tsdbadmin", "tsdbexplorer", "readaccess", "rw_updater"] {
             client
                 .execute(format!("CREATE ROLE {} WITH SUPERUSER", role).as_str(), &[])
                 .await?;
