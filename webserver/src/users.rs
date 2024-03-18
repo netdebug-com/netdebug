@@ -61,7 +61,7 @@ impl NetDebugUser {
     /// Translate a User as defined by Clerk.com into our own internal
     /// state structure.  This should only be done after validating the
     /// user, e.g., by calling [UserServiceData::get_user_from_clerk_jwt()]
-    async fn from_validated_clerk_user(
+    pub async fn from_validated_clerk_user(
         clerk_user: &clerk_rs::models::User,
         random_salt: &String,
         client: &Arc<Client>,
@@ -69,7 +69,16 @@ impl NetDebugUser {
         match &clerk_user.id {
             Some(user_id) => {
                 let session_key = NetDebugUser::make_session_key(user_id, random_salt);
-                let organization = NetDebugUser::lookup_organization_id(user_id, client).await?;
+                let organization =
+                    match NetDebugUser::lookup_organization_id(user_id, client).await? {
+                        Some(id) => id,
+                        None =>
+                        // user not found!
+                        {
+                            return Ok(None)
+                        }
+                    };
+
                 Ok(Some(NetDebugUser {
                     user_id: user_id.clone(),
                     organization_id: organization,
@@ -85,19 +94,30 @@ impl NetDebugUser {
     async fn lookup_organization_id(
         user_id: &str,
         client: &Arc<Client>,
-    ) -> Result<i64, UserAuthError> {
-        let row = client
-            .query_one(
+    ) -> Result<Option<i64>, UserAuthError> {
+        let rows = client
+            .query(
                 &format!(
-                    "SELECT primary_email, organization, name FROM {} WHERE clerk_id = $1",
+                    "SELECT primary_email, organization, name, clerk_id FROM {} WHERE clerk_id = $1",
                     crate::remotedb_client::USERS_TABLE_NAME
                 ),
                 &[&user_id],
             )
             .await?;
-        let organization_id = row.get::<_, i64>(1);
-        // TODO: get and return more user data
-        Ok(organization_id)
+        match rows.len() {
+            0 => Ok(None),
+            1 => {
+                let org_id = rows[0].get::<_, i64>(1);
+                Ok(Some(org_id))
+            }
+            // NOTE: this is a pedantic check b/c the 'clerk_id' is a PRIMARY KEY so
+            // should be inherently UNIQUE, but rust is happier if we have a default _
+            // match so just add it to make everyone happier.
+            _ => Err(UserAuthError::InvarianceError(format!(
+                "Multiple users returned for same user_id {}",
+                user_id
+            ))),
+        }
     }
 }
 
@@ -221,6 +241,8 @@ pub enum UserAuthError {
     UserNotFound { jwt: String },
     #[error("Error on backend DB lookup {0}")]
     BackendDbError(#[from] tokio_postgres::Error),
+    #[error("Internal DB Invariance voliated {0}")]
+    InvarianceError(String),
 }
 
 /// Abstract away some of the UserService details... but not that much
