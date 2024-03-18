@@ -68,23 +68,23 @@ const configStore = new ElectronConfigStore({
   // (`LocalConfigData` struct).
   schema: {
     accepted_eula_version: { type: "number", default: 0 },
-    client_uuid: { type: "string" },
+    device_uuid: { type: "string" },
   },
 });
 
-let client_uuid = configStore.get("client_uuid");
-if (!client_uuid) {
-  configStore.set("client_uuid", crypto.randomUUID());
-  client_uuid = configStore.get("client_uuid");
+let device_uuid = configStore.get("device_uuid");
+if (!device_uuid) {
+  configStore.set("device_uuid", crypto.randomUUID());
+  device_uuid = configStore.get("device_uuid");
 }
-console.log("Client UUID is:", client_uuid);
+console.log("Client UUID is:", device_uuid);
 
 let lastAcceptedEulaVersion = configStore.get(EULA_VERSION_STORE_KEY) as number;
 setupNetdebugLogging(
   // for local debug:
   //"ws://localhost:3030/desktop",
   "wss://topology.netdebug.com:443/desktop",
-  client_uuid as string,
+  device_uuid as string,
 );
 
 function isEulaAccepted() {

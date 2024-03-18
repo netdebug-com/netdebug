@@ -12,15 +12,15 @@ import isDev from "electron-is-dev";
 // For debugging/testing the remote logging
 const OVERRIDE_LOG_TO_REMOTE = false;
 
-function setupRemoteLogging(url: string, client_uuid: string) {
+function setupRemoteLogging(url: string, device_uuid: string) {
   const ws = new WebSocket(url, {
     reconnectInterval: 1000, // in ms
     pingInterval: 2000, // in ms. Sends keepalive's
     options: {
       headers: {
         "User-Agent": "net-debug-electron",
-        Authorization: "Bearer " + client_uuid,
-        "X-Netdebug-Client-Uuid": client_uuid,
+        Authorization: "Bearer " + device_uuid,
+        "X-Netdebug-Device-Uuid": device_uuid,
       },
     },
   });
@@ -61,7 +61,6 @@ function setupRemoteLogging(url: string, client_uuid: string) {
         msg: remainder.join(" "),
         os: "",
         version: "",
-        client_id: "",
       },
     };
 
@@ -127,7 +126,7 @@ function makeLogFormatter(useColor: boolean) {
   return logFormatter;
 }
 
-export function setupNetdebugLogging(url: string, client_uuid: string) {
+export function setupNetdebugLogging(url: string, device_uuid: string) {
   // spyRendererConsole will also log any JS console messages from
   // the renderer to our logging backends
   log.initialize({ spyRendererConsole: true });
@@ -147,7 +146,7 @@ export function setupNetdebugLogging(url: string, client_uuid: string) {
   log.transports.file.format = makeLogFormatter(false);
   if (!isDev || OVERRIDE_LOG_TO_REMOTE) {
     process.stderr.write("Setting up remote logging\n");
-    setupRemoteLogging(url, client_uuid);
+    setupRemoteLogging(url, device_uuid);
   } else {
     process.stderr.write("Dev Mode -- no remote logging\n");
   }

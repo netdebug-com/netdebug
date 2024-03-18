@@ -59,10 +59,10 @@ impl Trackers {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
 pub struct LocalConfigData {
     pub accepted_eula_version: Option<i32>,
-    /// Note, we *require* the client_uuid to be present if we read/use the
+    /// Note, we *require* the device_uuid to be present if we read/use the
     /// config file. Electron will make sure it exists. And the desktop binary
     /// can always be run w/o a config file
-    pub client_uuid: Uuid,
+    pub device_uuid: Uuid,
 }
 
 /// Netdebug desktop
@@ -111,7 +111,7 @@ fn get_local_config(config_file_name: Option<String>) -> Result<LocalConfigData,
         }
         None => {
             warn!(
-                "No local config directory given. Not reading config and using default client_id"
+                "No local config directory given. Not reading config and using default device_uuid"
             );
             Ok(LocalConfigData::default())
         }
@@ -157,7 +157,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         args.topology_server_url.clone(),
         MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
         std::time::Duration::from_secs(30),
-        config_data.client_uuid,
+        config_data.device_uuid,
         counter_registries.registries(),
         counter_registries.new_registry("topology_server_connection"),
     );
@@ -292,7 +292,7 @@ mod test {
             _ => panic!("unexpected error"),
         }
 
-        // not having a client_uuid should be an error
+        // not having a device_uuid should be an error
         let config_file = tempdir.child("config.json").to_str().unwrap().to_owned();
         File::create(config_file.clone())
             .unwrap()
@@ -308,13 +308,13 @@ mod test {
         // Now test with a proper config:
         File::create(config_file.clone())
             .unwrap()
-            .write_all("{ \"client_uuid\": \"d92bdbe2-cdd1-47d9-a1fb-3d9dc84d310f\" }".as_bytes())
+            .write_all("{ \"device_uuid\": \"d92bdbe2-cdd1-47d9-a1fb-3d9dc84d310f\" }".as_bytes())
             .unwrap();
 
         let config_data = get_local_config(Some(config_file.clone())).unwrap();
         assert_eq!(config_data.accepted_eula_version, None);
         assert_eq!(
-            config_data.client_uuid,
+            config_data.device_uuid,
             Uuid::from_str("d92bdbe2-cdd1-47d9-a1fb-3d9dc84d310f").unwrap()
         );
     }

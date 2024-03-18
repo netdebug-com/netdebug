@@ -50,8 +50,6 @@ pub enum DesktopToTopologyServer {
         counters: IndexMap<String, u64>,
         os: String,
         version: String,
-        #[serde(default)]
-        client_id: String,
     },
     PushLog {
         #[type_def(type_of = "String")]
@@ -61,7 +59,6 @@ pub enum DesktopToTopologyServer {
         msg: String,
         os: String,
         version: String,
-        client_id: String,
     },
     PushNetworkInterfaceState {
         network_interface_state: NetworkInterfaceState,
