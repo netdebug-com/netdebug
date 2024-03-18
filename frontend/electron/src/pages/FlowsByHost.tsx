@@ -19,14 +19,12 @@ export const flowsByHostLatencyLoader = async () => {
   return res
     .json()
     .then((entries) =>
-      entries
-        .filter((e: AggregateStatEntry) => e.summary.tx.rtt_stats_ms !== null)
-        .sort((a: AggregateStatEntry, b: AggregateStatEntry) =>
-          sortCmpWithNull(
-            b.summary.tx.rtt_stats_ms.max,
-            a.summary.tx.rtt_stats_ms.max,
-          ),
+      entries.sort((a: AggregateStatEntry, b: AggregateStatEntry) =>
+        sortCmpWithNull(
+          b.summary.tx.rtt_stats_ms?.max,
+          a.summary.tx.rtt_stats_ms?.max,
         ),
+      ),
     );
 };
 
@@ -116,9 +114,11 @@ const FlowsByHostLatency: React.FC = () => {
     </Box>
   );
 
+  const haveEntriesWithRtt = statEntries.some(
+    (e: AggregateStatEntry) => e.summary.tx.rtt_stats_ms !== null,
+  );
   const shouldDisplayTcpTimestampNote =
-    statEntries.length == 0 &&
-    navigator.platform.toLowerCase().includes("win32");
+    !haveEntriesWithRtt && navigator.platform.toLowerCase().includes("win32");
   return (
     <>
       {anyInvalidKind && (
