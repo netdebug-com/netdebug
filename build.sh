@@ -16,7 +16,6 @@ fi
 cargo build $@
 wasm-pack build --target=web webserver/web-client ${build_opt}
 # build the react app for the console ui
-(cd frontend/common && npm run build)
 (cd frontend/console && npm run build)
 # add cargo tauri build here?  or cargo tauri dev?
 
