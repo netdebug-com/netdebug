@@ -34,7 +34,7 @@ jobs:
           ./target/release/router-graph \
           ./scripts \
           ./webserver/web-client/pkg/ \
-          ./webserver/netdebug_webui/dist \
+          ./frontend/console/dist \
           ./webserver/html
       # IF we get this far, automatically cut a release  with tag 'pre-prod-latest'
       # more Documentation at https://github.com/marketplace/actions/automatic-releases
