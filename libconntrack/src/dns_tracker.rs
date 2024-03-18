@@ -3,13 +3,19 @@ use common_wasm::{
     evicting_hash_map::EvictingHashMap,
     timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units},
 };
+use itertools::Itertools;
 #[cfg(not(test))]
 use log::{debug, warn};
 use rand::Rng;
 #[cfg(test)]
 use std::{println as debug, println as warn}; // Workaround to use prinltn! for logs.
 
-use std::{collections::HashMap, io::Error, net::IpAddr, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    io::Error,
+    net::IpAddr,
+    str::FromStr,
+};
 use tokio::{
     sync::mpsc::{channel, Receiver, Sender, UnboundedSender},
     task::JoinHandle,
@@ -21,6 +27,7 @@ use libconntrack_wasm::{ConnectionKey, DnsTrackerEntry};
 use crate::{
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
     send_or_log_sync,
+    topology_client::{DataStorageMessage, DataStorageSender},
     utils::PerfMsgCheck,
 };
 use dns_parser::{self, QueryType};
@@ -46,6 +53,7 @@ pub struct DnsTracker<'a> {
     pending_lookups: EvictingHashMap<'a, IpAddr, (Vec<ConnectionKey>, ConnectionTrackerSender)>,
     pub unparsed_pkt_stats: StatHandle,
     pub failed_to_send_dns: StatHandle,
+    data_storage_client: Option<DataStorageSender>,
 }
 
 pub struct DnsTrackerStats {
@@ -89,6 +97,7 @@ impl<'a> DnsTracker<'a> {
     /// New DnsTracker
     pub fn new(
         expired_entries_capacity: usize,
+        data_storage_client: Option<DataStorageSender>,
         stats_registry: ExportedStatRegistry,
     ) -> DnsTracker<'a> {
         DnsTracker {
@@ -108,6 +117,7 @@ impl<'a> DnsTracker<'a> {
             local_dns_servers: HashMap::new(),
             // TODO: use the eviction callback to track DNS entires that never got a reply
             pending_lookups: EvictingHashMap::new(expired_entries_capacity, |_, _| {}),
+            data_storage_client,
         }
     }
 
@@ -139,10 +149,15 @@ impl<'a> DnsTracker<'a> {
 
     pub async fn spawn(
         expired_entries_capacity: usize,
+        data_storage_client: Option<DataStorageSender>,
         stats_registry: ExportedStatRegistry,
         max_queue_size: usize,
     ) -> (DnsTrackerSender, JoinHandle<()>) {
-        let mut dns_tracker = DnsTracker::new(expired_entries_capacity, stats_registry);
+        let mut dns_tracker = DnsTracker::new(
+            expired_entries_capacity,
+            data_storage_client,
+            stats_registry,
+        );
         let (tx, rx) = channel::<DnsTrackerMessage>(max_queue_size);
         let join = tokio::spawn(async move { dns_tracker.do_async_loop(rx).await });
         (tx, join)
@@ -251,6 +266,7 @@ impl<'a> DnsTracker<'a> {
 
         // cache all of the permutations so we can efficiently map from IP to A/AAAA record
         let created = Utc::now();
+        let mut new_entries = HashSet::new();
         for question in &dns_packet.questions {
             if question.qclass != dns_parser::QueryClass::IN {
                 warn!(
@@ -261,19 +277,32 @@ impl<'a> DnsTracker<'a> {
             }
 
             for answer in &dns_packet.answers {
-                self.parse_resource_record(answer, &rtt, &created);
+                self.parse_resource_record(answer, &rtt, &created, &mut new_entries)
             }
             for additional in &dns_packet.additional {
-                self.parse_resource_record(additional, &rtt, &created);
+                self.parse_resource_record(additional, &rtt, &created, &mut new_entries);
             }
+        }
+        if let Some(data_storeage_client) = &self.data_storage_client {
+            send_or_log_sync!(
+                data_storeage_client,
+                "DnsTracker::parse_dns_reply() -- sending new DNS entries",
+                DataStorageMessage::StoreDnsEntries {
+                    dns_entries: new_entries.into_iter().collect_vec()
+                }
+            );
         }
     }
 
+    /// Parse a resource record, add it to the reverse_map, and check for any
+    /// pending lookup requests.
+    /// Also adds the entry to `new_entries`.
     fn parse_resource_record(
         &mut self,
         answer: &dns_parser::ResourceRecord<'_>,
         rtt: &Option<Duration>,
         created: &DateTime<Utc>,
+        new_entries: &mut HashSet<DnsTrackerEntry>,
     ) {
         let hostname = answer.name.to_string();
         if answer.cls != dns_parser::Class::IN {
@@ -306,21 +335,21 @@ impl<'a> DnsTracker<'a> {
             | Unknown(_, _) => None,
         };
         if let Some((ip, hostname, from_ptr_record)) = reply {
+            let entry = DnsTrackerEntry {
+                hostname: hostname.clone(),
+                created: *created,
+                from_ptr_record,
+                rtt: *rtt,
+                ttl: Some(chrono::Duration::seconds(answer.ttl as i64)),
+            };
+            new_entries.insert(entry.clone());
             if !from_ptr_record || !self.reverse_map.contains_key(&ip) {
                 // only write the record if it's not a PTR or if it doesn't
                 // overwrite non-PTR data
                 // A/AAAA is preferred because that's more likely to be meaningful to humans
                 // e.g. "google.com" instead of "server463.1ee100.net"
-                self.reverse_map.insert(
-                    ip,
-                    DnsTrackerEntry {
-                        hostname: hostname.clone(),
-                        created: *created,
-                        from_ptr_record,
-                        rtt: *rtt,
-                        ttl: Some(chrono::Duration::seconds(answer.ttl as i64)),
-                    },
-                );
+
+                self.reverse_map.insert(ip, entry);
                 self.check_pending_lookups(ip, hostname);
             }
         }
@@ -723,7 +752,7 @@ mod test {
     use dns_parser::QueryType;
     use etherparse::TransportHeader;
     use libconntrack_wasm::IpProtocol;
-    use tokio::sync::mpsc::channel;
+    use tokio::sync::mpsc::{channel, error::TryRecvError};
 
     use crate::owned_packet::OwnedParsedPacket;
 
@@ -737,7 +766,8 @@ mod test {
 
     #[tokio::test]
     async fn match_dns_request_to_reply() {
-        let mut dns_tracker = DnsTracker::new(10, mk_stats_registry());
+        let (storage_tx, mut storage_rx) = channel(10);
+        let mut dns_tracker = DnsTracker::new(10, Some(storage_tx), mk_stats_registry());
         let request: [u8; 26] = [
             0x8d, 0xb9, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x6f,
             0x03, 0x73, 0x73, 0x32, 0x02, 0x75, 0x73, 0x00, 0x00, 0x01, 0x00, 0x01,
@@ -783,11 +813,28 @@ mod test {
         } else {
             panic!("No DNS entry cached!?");
         }
+        let storage_msg = storage_rx.try_recv().unwrap().skip_perf_check();
+        match storage_msg {
+            DataStorageMessage::StoreDnsEntries { dns_entries } => {
+                assert_eq!(dns_entries.len(), 1);
+                assert_eq!(dns_entries.first().unwrap().rtt.unwrap(), t1 - t0);
+                assert_eq!(
+                    dns_entries.first().unwrap(),
+                    dns_tracker
+                        .reverse_map
+                        // we could use any of the 4 IPs above.
+                        .get(&IpAddr::from_str("13.227.21.83").unwrap())
+                        .unwrap()
+                );
+            }
+            _ => panic!("Unexpected DataStorageMessage"),
+        }
+        assert_eq!(storage_rx.try_recv().unwrap_err(), TryRecvError::Empty);
     }
 
     #[tokio::test]
     async fn test_dns_expiration() {
-        let mut dns_tracker = DnsTracker::new(10, mk_stats_registry());
+        let mut dns_tracker = DnsTracker::new(10, None, mk_stats_registry());
         // 'create' the entry 2 seconds ago with a ttl of 1 second, so it should expire immediately
         dns_tracker.reverse_map.insert(
             IpAddr::from_str("1.2.3.4").unwrap(),
@@ -811,7 +858,7 @@ mod test {
      * we can parse everything and serialize/deserialize everything
      */
     async fn verify_real_dns_data() {
-        let mut dns_tracker = DnsTracker::new(10, mk_stats_registry());
+        let mut dns_tracker = DnsTracker::new(10, None, mk_stats_registry());
         let local_addrs = HashSet::from([
             IpAddr::from_str("192.168.1.103").unwrap(),
             IpAddr::from_str("2600:1700:5b20:4e10:3529:39f:19de:6434").unwrap(),
@@ -847,7 +894,7 @@ mod test {
     fn verify_windows_load_os_client_cache() {
         use std::fs::File;
 
-        let mut dns_tracker = DnsTracker::new(10, mk_stats_registry());
+        let mut dns_tracker = DnsTracker::new(10, None, mk_stats_registry());
         let input = File::open(test_dir(
             "libconntrack",
             "tests/windows_get_dnsclientcache.txt",
@@ -860,7 +907,7 @@ mod test {
     #[test]
     fn verify_load_os_client_cache() {
         use std::net::ToSocketAddrs;
-        let mut dns_tracker = DnsTracker::new(10, mk_stats_registry());
+        let mut dns_tracker = DnsTracker::new(10, None, mk_stats_registry());
         // resolve google.com to add something to the OS cache; just the first one
         #[allow(unused)] // this var won't be used if not windows
         let addr = "google.com:443".to_socket_addrs().unwrap().next();
@@ -888,7 +935,7 @@ mod test {
             io::{BufRead, BufReader},
         };
         use tokio::sync::mpsc;
-        let (dns_tx, _) = DnsTracker::spawn(100, mk_stats_registry(), 4096).await;
+        let (dns_tx, _) = DnsTracker::spawn(100, None, mk_stats_registry(), 4096).await;
         let local_addrs =
             HashSet::from([IpAddr::from_str("2600:1700:5b20:4e10:adc4:bd8f:d640:2d48").unwrap()]);
         let mut connection_tracker =
@@ -1021,7 +1068,7 @@ mod test {
             0x65, 0x74, 0x6d, 0x61, 0x6e, 0x02, 0x63, 0x73, 0x03, 0x75, 0x6d, 0x64, 0x03, 0x65,
             0x64, 0x75, 0x00,
         ];
-        let mut dns_tracker = DnsTracker::new(10, mk_stats_registry());
+        let mut dns_tracker = DnsTracker::new(10, None, mk_stats_registry());
         let key = ConnectionKey {
             local_ip: IpAddr::from_str("127.0.0.1").unwrap(),
             remote_ip: IpAddr::from_str("8.8.8.8").unwrap(),
@@ -1070,7 +1117,7 @@ mod test {
             0x65, 0x74, 0x6d, 0x61, 0x6e, 0x02, 0x63, 0x73, 0x03, 0x75, 0x6d, 0x64, 0x03, 0x65,
             0x64, 0x75, 0x00,
         ];
-        let mut dns_tracker = DnsTracker::new(10, mk_stats_registry());
+        let mut dns_tracker = DnsTracker::new(10, None, mk_stats_registry());
         let key = ConnectionKey {
             local_ip: IpAddr::from_str("127.0.0.1").unwrap(),
             remote_ip: IpAddr::from_str("8.8.8.8").unwrap(),

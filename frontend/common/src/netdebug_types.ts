@@ -573,5 +573,10 @@ export type DesktopToTopologyServer = ({
         "ping_data": (AggregatedGatewayPingData)[];
     };
 } | {
+    "tag": "PushDnsEntries";
+    "data": {
+        "dns_entries": (DnsTrackerEntry)[];
+    };
+} | {
     "tag": "Ping";
 });

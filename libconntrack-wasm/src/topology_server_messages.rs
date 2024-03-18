@@ -7,7 +7,8 @@ use serde_with::serde_as;
 use typescript_type_def::TypeDef;
 
 use crate::{
-    AggregatedGatewayPingData, ConnectionKey, ConnectionMeasurements, NetworkInterfaceState,
+    AggregatedGatewayPingData, ConnectionKey, ConnectionMeasurements, DnsTrackerEntry,
+    NetworkInterfaceState,
 };
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, TypeDef)]
@@ -67,6 +68,9 @@ pub enum DesktopToTopologyServer {
     },
     PushGatewayPingData {
         ping_data: Vec<AggregatedGatewayPingData>,
+    },
+    PushDnsEntries {
+        dns_entries: Vec<DnsTrackerEntry>,
     },
     Ping,
 }
