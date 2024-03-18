@@ -102,12 +102,16 @@ pub async fn setup_axum_http_routes(context: Context) -> Router {
 pub async fn setup_protected_rest_routes(context: Context) -> Router<Context> {
     // TODO: move the session store into the data base layer like in
     // https://github.com/maxcountryman/axum-login/blob/main/examples/sqlite/src/web/app.rs#L34
-    let (service_secret, prod) = {
+    let (production, secrets) = {
         let lock = context.read().await;
-        if lock.production {
-            (lock.secrets.clerk_auth_prod_secret.clone(), "production")
+        (lock.production, lock.secrets.clone())
+    };
+
+    let (service_secret, prod) = {
+        if production {
+            (secrets.clerk_auth_prod_secret.clone(), "production")
         } else {
-            (lock.secrets.clerk_auth_dev_secret.clone(), "dev")
+            (secrets.clerk_auth_dev_secret.clone(), "dev")
         }
     };
     let service_secret = match service_secret {
@@ -118,7 +122,9 @@ pub async fn setup_protected_rest_routes(context: Context) -> Router<Context> {
         ),
     };
     let user_service = UserServiceData::new_locked(service_secret).await;
-    let backend = NetDebugUserBackend::new(user_service);
+    let backend = NetDebugUserBackend::new(user_service, &secrets)
+        .await
+        .expect("Errors from RemoteDBClient");
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store);
 
@@ -327,7 +333,7 @@ mod test {
             user.clone(),
             NetDebugUser {
                 user_id: user.clone(),
-                company_id: 0,
+                organization_id: 0,
                 session_key: NetDebugUser::make_session_key(&user, &"random".to_string()),
             },
         );
