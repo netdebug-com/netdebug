@@ -209,11 +209,9 @@ async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
 }
 
 fn db_dir(test_name: &str) -> PathBuf {
-    let mut db_path = if let Ok(_metadata) = std::fs::metadata("/tmp") {
-        PathBuf::from("/tmp")
-    } else {
-        PathBuf::from(".")
-    };
+    let mut db_path = std::env::temp_dir();
+
     db_path.push(format!("netdebug-db-test-{}", test_name));
+    println!("Starting DB {} in {}", test_name, db_path.display());
     db_path
 }
