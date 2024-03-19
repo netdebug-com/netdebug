@@ -5,7 +5,11 @@ edition = "2021"
 
 [[bin]]
 name = "pcap-util"
-path = "src/pcap-util.rs"
+path = "src/pcap-util-main.rs"
+
+[lib]
+name = "pcap_util_lib"
+path = "src/pcap-util-lib.rs"
 
 [dependencies]
 clap = { workspace = true }
