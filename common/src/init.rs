@@ -1,3 +1,4 @@
+use colored::Colorize;
 use std::io::Write;
 
 /**
@@ -47,7 +48,10 @@ pub fn set_abort_on_panic() {
         // Eventually, we should distinguish between "expected" errors like
         // address-in-use or no permission for pcap and simply display these
         // in a nicer way.
-        eprintln!("##PANIC-MSG-START##\n{}\n##PANIC-MSG-END##", panic_info);
+        eprintln!(
+            "##PANIC-MSG-START##\n{}\n##PANIC-MSG-END##",
+            panic_info.to_string().red() //panic_info
+        );
         let _ = std::io::stderr().flush();
         orig_panic_hook(panic_info);
         std::process::abort();
