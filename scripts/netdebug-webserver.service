@@ -9,7 +9,7 @@ RestartSec=1
 User=root
 WorkingDirectory=/home/deploy/current
 # NOTE the 'current' symlink needs to point to the current best version
-ExecStart=/home/deploy/current/target/release/webserver --production --listen-port 443
+ExecStart=/home/deploy/current/target/release/webserver --production --listen-port 443 --secrets-file=/root/.secrets.toml
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=netdebug-webserver
