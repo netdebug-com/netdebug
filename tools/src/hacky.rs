@@ -1,6 +1,5 @@
-use std::{collections::HashSet, net::IpAddr, path::Path, str::FromStr, time::Instant};
+use std::{collections::HashSet, net::IpAddr, path::Path, str::FromStr};
 
-use clap::Parser;
 use common_wasm::timeseries_stats::ExportedStatRegistry;
 use libconntrack::{
     connection_tracker::{ConnectionTracker, ConnectionTrackerMsg, TimeMode},
@@ -8,14 +7,15 @@ use libconntrack::{
     owned_packet::OwnedParsedPacket,
 };
 use libconntrack_wasm::{pretty_print_si_units, ConnectionMeasurements, TrafficStatsSummary};
+
 use tokio::sync::mpsc;
 
 #[derive(clap::Parser, Debug)]
-struct Args {
+pub struct HackyCmdArgs {
     pcap_file: String,
 }
 
-pub fn stats_to_string(stats: &TrafficStatsSummary) -> String {
+fn stats_to_string(stats: &TrafficStatsSummary) -> String {
     let loss_precent = if let Some(lost_bytes) = stats.lost_bytes {
         100. * lost_bytes as f64 / stats.bytes as f64
     } else {
@@ -27,7 +27,7 @@ pub fn stats_to_string(stats: &TrafficStatsSummary) -> String {
     )
 }
 
-pub fn handle_conn_measurement(m: &ConnectionMeasurements) {
+fn handle_conn_measurement(m: &ConnectionMeasurements) {
     println!(
         "{}\n>>> rx: {:?}\n>>> tx: {:?}",
         m.key,
@@ -36,7 +36,7 @@ pub fn handle_conn_measurement(m: &ConnectionMeasurements) {
     );
 }
 
-pub fn handle_dns_msg(
+fn handle_dns_msg(
     dns_rx: &mut mpsc::Receiver<DnsTrackerMessage>,
     conn_tracker: &mut ConnectionTracker,
 ) {
@@ -48,14 +48,7 @@ pub fn handle_dns_msg(
     }
 }
 
-pub fn main() {
-    // if RUST_LOG isn't set explicitly, set RUST_LOG=debug as a default
-    if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", "debug");
-    }
-    common::init::netdebug_init();
-    let args = Args::parse();
-
+pub fn hacky_command(args: HackyCmdArgs) {
     let mut capture = pcap::Capture::from_file(Path::new(&args.pcap_file))
         .expect("Error trying to open pcap file");
 
@@ -63,7 +56,7 @@ pub fn main() {
         IpAddr::from_str("192.168.1.238").unwrap(),
         IpAddr::from_str("192.168.1.136").unwrap(),
     ]);
-    let stats_registry = ExportedStatRegistry::new("", Instant::now());
+    let stats_registry = ExportedStatRegistry::new("", std::time::Instant::now());
 
     let (prober_tx, mut prober_rx) = mpsc::channel(100);
     let mut conn_track = ConnectionTracker::new(
