@@ -54,6 +54,11 @@ const TIME_WAIT_MS: i64 = 60_000;
 /// evicted that don't have any connections
 const AGGREGATE_STAT_TIME_WAIT_MS: i64 = 300_000;
 
+/// We use this entry for AggregateStatKind::DnsDstDomain and AggregateStatKind::Application
+/// if we don't have a "real" Dns domain or application (or before the lookup for domain/app
+/// returns)
+const AGGREGATE_STAT_UNKNOWN_ENTRY: &str = "<unknown>";
+
 pub type ConnectionTrackerSender = Sender<PerfMsgCheck<ConnectionTrackerMsg>>;
 pub type ConnectionTrackerReceiver = Receiver<PerfMsgCheck<ConnectionTrackerMsg>>;
 
@@ -415,11 +420,26 @@ impl<'a> ConnectionTracker<'a> {
             process_tx: None,
             tx,
             rx,
-            // we always have at least the top-level ConnectionTracker traffic counters
+            // we always have at least the top-level ConnectionTracker traffic counters and the
+            // default / unknown trackers
             aggregate_traffic_stats: {
                 let mut map = LinkedHashMap::new();
                 map.insert(
                     AggregateStatKind::ConnectionTracker,
+                    BidirectionalStats::new(
+                        std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS),
+                        DateTime::<Utc>::UNIX_EPOCH,
+                    ),
+                );
+                map.insert(
+                    AggregateStatKind::DnsDstDomain(AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned()),
+                    BidirectionalStats::new(
+                        std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS),
+                        DateTime::<Utc>::UNIX_EPOCH,
+                    ),
+                );
+                map.insert(
+                    AggregateStatKind::Application(AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned()),
                     BidirectionalStats::new(
                         std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS),
                         DateTime::<Utc>::UNIX_EPOCH,
@@ -754,6 +774,19 @@ impl<'a> ConnectionTracker<'a> {
             .get_refresh(&AggregateStatKind::ConnectionTracker)
             .expect("AggregateStatKind::ConnectionTracker should always be there")
             .last_update_time = now;
+        // make sure the default/unknown stats are at the end of the list and don't get evicted
+        self.aggregate_traffic_stats
+            .get_refresh(&AggregateStatKind::DnsDstDomain(
+                AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned(),
+            ))
+            .expect("AggregateStatKind::DnsDstDomain(<unknown>) should always be there")
+            .last_update_time = now;
+        self.aggregate_traffic_stats
+            .get_refresh(&AggregateStatKind::Application(
+                AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned(),
+            ))
+            .expect("AggregateStatKind::Application(<unknown>) should always be there")
+            .last_update_time = now;
         while let Some((_kind, stat_entry)) = self.aggregate_traffic_stats.front() {
             let elapsed = now - stat_entry.last_update_time;
             if eviction_cnt < MAX_ENTRIES_TO_EVICT
@@ -777,6 +810,18 @@ impl<'a> ConnectionTracker<'a> {
         add_aggregate_group(
             &mut self.aggregate_traffic_stats,
             AggregateStatKind::HostIp(key.remote_ip),
+            &mut connection,
+            pkt_timestamp,
+        );
+        add_aggregate_group(
+            &mut self.aggregate_traffic_stats,
+            AggregateStatKind::DnsDstDomain(AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned()),
+            &mut connection,
+            pkt_timestamp,
+        );
+        add_aggregate_group(
+            &mut self.aggregate_traffic_stats,
+            AggregateStatKind::Application(AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned()),
             &mut connection,
             pkt_timestamp,
         );
@@ -987,6 +1032,21 @@ impl<'a> ConnectionTracker<'a> {
         let mut entries: HashMap<AggregateStatKind, AggregateStatEntry> = HashMap::new();
         let mut ip_to_hostname: HashMap<IpAddr, String> = HashMap::new();
         let now = self.get_current_timestamp(time_mode);
+        for (kind, entry) in self.aggregate_traffic_stats.iter_mut() {
+            if !match_rule(kind) {
+                continue;
+            }
+            entries.insert(
+                kind.clone(),
+                AggregateStatEntry {
+                    kind: kind.clone(),
+                    comment: None,
+                    bandwidth: bidir_bandwidth_to_chartjs(entry.as_bidir_bandwidth_history(now)),
+                    summary: entry.as_bidir_stats_summary(now),
+                    connections: Vec::new(),
+                },
+            );
+        }
         for (_key, connection) in self.connections.iter_mut() {
             // we clone aggregate_groups here. If we don't we borrow `connection` immutable, and
             // we can't call `to_connection_measurements()` later (since that requires a mut borrow)
@@ -1000,25 +1060,11 @@ impl<'a> ConnectionTracker<'a> {
                 let m = connection.to_connection_measurements(now, None);
                 // if we've already seen this kind before
                 if let Some(entry) = entries.get_mut(&kind) {
-                    // just add this connection to the list
+                    // add this connection to the list
+                    // In theory the entry should always exists. If not it means the group is not
+                    // present, which shouldn't be the case. However, we already warn!() about this when
+                    // we process a new packet so no need to do it here too
                     entry.connections.push(m);
-                } else {
-                    // else look up the traffic counters and add this connection to the new list
-                    // Don't update LRU for aggregate_traffic_stats!
-                    if let Some(traffic_stats) = self.aggregate_traffic_stats.get_mut(&kind) {
-                        entries.insert(
-                            kind.clone(),
-                            AggregateStatEntry {
-                                kind: kind.clone(),
-                                comment: None,
-                                bandwidth: bidir_bandwidth_to_chartjs(
-                                    traffic_stats.as_bidir_bandwidth_history(now),
-                                ),
-                                summary: traffic_stats.as_bidir_stats_summary(now),
-                                connections: vec![m],
-                            },
-                        );
-                    }
                 }
             }
         }
@@ -1095,6 +1141,22 @@ fn add_aggregate_group(
     connection: &mut Connection,
     timestamp: DateTime<Utc>,
 ) {
+    // Remove the default/unknown Application and DnsDstDomain entry if appropriate
+    if matches!(group, AggregateStatKind::Application(_)) {
+        connection
+            .aggregate_groups
+            .remove(&AggregateStatKind::Application(
+                AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned(),
+            ));
+    }
+    // Remove the default/unknown Application and DnsDstDomain entry if appropriate
+    if matches!(group, AggregateStatKind::DnsDstDomain(_)) {
+        connection
+            .aggregate_groups
+            .remove(&AggregateStatKind::DnsDstDomain(
+                AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned(),
+            ));
+    }
     // this is a HashSet, so a plain insert() if fine even if a name
     // already exists
     connection.aggregate_groups.insert(group.clone());
@@ -1826,7 +1888,9 @@ pub mod test {
             agg_traffic_keys,
             HashSet::from([
                 AggregateStatKind::ConnectionTracker,
-                AggregateStatKind::HostIp(remote_ip_in_trace)
+                AggregateStatKind::HostIp(remote_ip_in_trace),
+                AggregateStatKind::DnsDstDomain(AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned()),
+                AggregateStatKind::Application(AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned()),
             ])
         );
 
@@ -1891,6 +1955,8 @@ pub mod test {
                 AggregateStatKind::ConnectionTracker,
                 AggregateStatKind::HostIp(remote_ip_in_trace),
                 AggregateStatKind::HostIp(IpAddr::from_str("192.168.1.2").unwrap()),
+                AggregateStatKind::DnsDstDomain(AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned()),
+                AggregateStatKind::Application(AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned()),
             ])
         );
         // Test eviction for stats
@@ -1907,6 +1973,8 @@ pub mod test {
             HashSet::from([
                 AggregateStatKind::ConnectionTracker,
                 AggregateStatKind::HostIp(IpAddr::from_str("192.168.1.2").unwrap()),
+                AggregateStatKind::DnsDstDomain(AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned()),
+                AggregateStatKind::Application(AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned()),
             ])
         );
     }
@@ -2059,14 +2127,28 @@ pub mod test {
         });
         //take_and_process_message(&mut connection_tracker);
         let agg_app_counters = agg_counter_rx.try_recv().unwrap();
-        assert_eq!(agg_app_counters.len(), 1);
-        assert_eq!(
-            agg_app_counters[0].kind,
-            AggregateStatKind::Application("MyApp".to_owned())
-        );
+        assert_eq!(agg_app_counters.len(), 2);
+        let mut agg_app_map = HashMap::new();
+        for entry in agg_app_counters {
+            agg_app_map.insert(entry.kind.clone(), entry);
+        }
+        let my_app_kind = AggregateStatKind::Application("MyApp".to_owned());
+        assert!(agg_app_map.contains_key(&my_app_kind));
+        let unknown_app_kind =
+            AggregateStatKind::Application(AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned());
+        assert!(agg_app_map.contains_key(&unknown_app_kind));
         // Only one packet, because the aggregate only starts counting after
         // it has received the response from process_tracker
-        assert_eq!(agg_app_counters[0].summary.tx.pkts, 1);
+        assert_eq!(agg_app_map.get(&my_app_kind).unwrap().summary.tx.pkts, 1);
+        assert_eq!(agg_app_map.get(&my_app_kind).unwrap().summary.rx.pkts, 0);
+        assert_eq!(
+            agg_app_map.get(&unknown_app_kind).unwrap().summary.tx.pkts,
+            1
+        );
+        assert_eq!(
+            agg_app_map.get(&unknown_app_kind).unwrap().summary.rx.pkts,
+            0
+        );
     }
 
     #[test]
@@ -2139,20 +2221,29 @@ pub mod test {
         let dns_agg_stat_entry = rx
             .try_recv()
             .expect("No response for GetDnsTrafficCounters");
-        assert_eq!(dns_agg_stat_entry.len(), 1);
-        assert_eq!(
-            dns_agg_stat_entry[0].kind,
-            AggregateStatKind::DnsDstDomain("example.com".to_owned())
-        );
-        // Make sure that we actually tracked something for this domain
-        assert!(dns_agg_stat_entry[0].summary.tx.bytes > 0);
-        assert!(dns_agg_stat_entry[0].summary.rx.bytes > 0);
+        assert_eq!(dns_agg_stat_entry.len(), 2);
+        let mut example_com_entry = None;
+        for entry in dns_agg_stat_entry {
+            if entry.kind == AggregateStatKind::DnsDstDomain("example.com".to_owned()) {
+                // Make sure that we actually tracked something for this domain
+                assert!(entry.summary.tx.bytes > 0);
+                assert!(entry.summary.rx.bytes > 0);
+                example_com_entry = Some(entry.clone());
+            } else if entry.kind
+                == AggregateStatKind::DnsDstDomain(AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned())
+            {
+                assert_eq!(entry.summary.rx.pkts, 0);
+                assert_eq!(entry.summary.tx.pkts, 1);
+            }
+        }
 
         // while RTT stats per destination domain don't make a lot of sense (could
         // be geographically very different hosts for this domain), we track the RTT
         // for all aggregation groups. So test if they are as expected. This will test
         // that aggregated stats are properly updated
-        let rx_rtt_stat = dns_agg_stat_entry[0]
+        let rx_rtt_stat = example_com_entry
+            .as_ref()
+            .unwrap()
             .summary
             .rx
             .rtt_stats_ms
@@ -2160,7 +2251,9 @@ pub mod test {
             .expect("rx_rtt_stat should be Some(...)");
         assert_eq!(rx_rtt_stat.num_samples(), 2);
         assert_relative_eq!(rx_rtt_stat.mean(), 0.3605, epsilon = 1e-5);
-        let tx_rtt_stat = dns_agg_stat_entry[0]
+        let tx_rtt_stat = example_com_entry
+            .as_ref()
+            .unwrap()
             .summary
             .tx
             .rtt_stats_ms
@@ -2192,11 +2285,11 @@ pub mod test {
         );
         assert_eq!(
             host_agg_stat_entry[0].summary.tx.rtt_stats_ms,
-            dns_agg_stat_entry[0].summary.tx.rtt_stats_ms
+            example_com_entry.as_ref().unwrap().summary.tx.rtt_stats_ms
         );
         assert_eq!(
             host_agg_stat_entry[0].summary.rx.rtt_stats_ms,
-            dns_agg_stat_entry[0].summary.rx.rtt_stats_ms
+            example_com_entry.as_ref().unwrap().summary.rx.rtt_stats_ms
         );
     }
 
@@ -2279,12 +2372,11 @@ pub mod test {
             time_mode: TimeMode::PacketTime,
         });
         let dns_agg_counters = agg_counter_dns_rx.try_recv().unwrap();
-        assert_eq!(dns_agg_counters.len(), 1);
-        let stat_entry = dns_agg_counters.first().unwrap();
-        assert_eq!(
-            stat_entry.kind,
-            AggregateStatKind::DnsDstDomain("netdebug.com".to_owned())
-        );
+        assert_eq!(dns_agg_counters.len(), 2);
+        let stat_entry = dns_agg_counters
+            .into_iter()
+            .find(|e| e.kind == AggregateStatKind::DnsDstDomain("netdebug.com".to_owned()))
+            .expect("Expected to have a DnsDstDomain(\"netdebug.com\") entry");
         // The way conntection_tracker handles DNS lookups: on the first packet of a connection,
         // it sends a lookup request to the DNS tracker. Once the DNS tracker responds, the conn
         // tracker will start tracking the domain name. Importantly, the DNS response is a conn
