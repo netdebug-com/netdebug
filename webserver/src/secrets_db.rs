@@ -44,6 +44,20 @@ impl Secrets {
         let contents = std::fs::read_to_string(filename)?;
         Ok(toml::from_str(&contents)?)
     }
+
+    #[cfg(test)]
+    pub fn make_mock() -> Secrets {
+        let alice = "Alice".to_string();
+        let pass = "AliceSuperSecret42".to_string();
+        Secrets {
+            timescale_db_write_user: Some(alice.clone()),
+            timescale_db_write_secret: Some(pass.clone()),
+            timescale_db_read_user: Some(alice.clone()),
+            timescale_db_read_secret: Some(pass.clone()),
+            clerk_auth_dev_secret: Some(alice),
+            clerk_auth_prod_secret: Some(pass),
+        }
+    }
 }
 
 #[cfg(test)]

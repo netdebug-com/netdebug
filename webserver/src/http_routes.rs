@@ -1,6 +1,11 @@
 use std::net::{IpAddr, SocketAddr};
+use std::time::Duration;
 
 use crate::context::Context;
+use crate::mockable_dbclient::MockableDbClient;
+use crate::remotedb_client::RemoteDBClient;
+use crate::rest_routes::{get_organization_info, test_auth};
+use crate::secrets_db::Secrets;
 use crate::users::{AuthCredentials, AuthSession, NetDebugUserBackend, UserServiceData};
 use crate::{desktop_websocket, webtest};
 use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
@@ -9,12 +14,16 @@ use axum::response::IntoResponse;
 use axum::Router;
 use axum::{routing, Form};
 use axum_extra::TypedHeader;
+use axum_login::tower_sessions::cookie::SameSite;
 use axum_login::tower_sessions::{MemoryStore, SessionManagerLayer, SessionStore};
-use axum_login::{
-    predicate_required, AuthManagerLayer, AuthManagerLayerBuilder, AuthUser, AuthnBackend,
-};
+use axum_login::{predicate_required, AuthManagerLayer, AuthManagerLayerBuilder, AuthnBackend};
 use common_wasm::timeseries_stats::{CounterProvider, CounterProviderWithTimeUpdate};
+#[cfg(not(test))]
 use log::{info, warn};
+#[cfg(test)]
+use std::{println as info, println as warn};
+use tower_http::cors::CorsLayer;
+
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use uuid::Uuid;
@@ -130,18 +139,73 @@ pub async fn setup_protected_rest_routes(context: Context) -> Router<Context> {
         .await
         .expect("Errors from RemoteDBClient");
     let session_store = MemoryStore::default();
-    let session_layer = SessionManagerLayer::new(session_store);
+    let same_site_policy = if !production {
+        // Normal HTTP(s) has all sorts of smart things to prevent us from sharing cookies
+        // with bad people.  We need to turn them all off if we want to do development on our
+        // local machines in cleartext for debugging.
+        // specifically, we need to remove the 'Secure' tag when we send the cookies and
+        // *apparently* set "SameSite:None" to prevent the browser from overriding our 'no secure' setting
+        //  see https://developers.google.com/search/blog/2020/01/get-ready-for-new-samesitenone-secure
+        // this prevents us from setting 'Secure' when we issue the cookie, i.e., instead of :
+        //          set-cookie: id=XXXX; HttpOnly; SameSite=Strict; Path=/; Secure
+        // we send:
+        //          set-cookie: id=XXXX; HttpOnly; SameSite=None; Path=/
+        // this allows us to run the dev server without encryption local to our devices
+
+        info!("Disabling secure session cookies and setting SameSite=None for development mode");
+        SameSite::None
+    } else {
+        SameSite::Strict // the secure default for production
+    };
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_name("netdebug_session_id")
+        .with_secure(production)
+        .with_same_site(same_site_policy);
 
     // Auth layer
     let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
-    setup_protected_rest_routes_with_auth_layer(auth_layer)
+    let routes = setup_protected_rest_routes_with_auth_layer(auth_layer, secrets).await;
+    if production {
+        // production routes always have all of the CORS checks
+        routes
+    } else {
+        // relax CORS checks for local testing; allows us to run frontend in 'npm run dev' mode
+        info!("Relaxing CORS Permissions in Development mode for 'cd frontend/console && npm run dev'");
+        routes.layer(CorsLayer::permissive())
+    }
 }
 
-pub fn setup_protected_rest_routes_with_auth_layer<
+pub async fn db_client_loop_until_connect(secrets: &Secrets) -> MockableDbClient {
+    if cfg!(test) {
+        // TODO: decide if we always want a mock when cfg!(test) is true
+        // NOTE: cfg!(test) is false during integration tests
+        MockableDbClient::new_mock()
+    } else {
+        // reconnect infinitely with expoential backoff
+        let mut sleep_time = Duration::from_millis(100);
+        let max_sleep_time = Duration::from_secs(15);
+        loop {
+            match RemoteDBClient::make_read_only_client(secrets).await {
+                Ok(client) => return MockableDbClient::from(client),
+                Err(e) => {
+                    warn!(
+                        "Failed to connect to backend DB - retrying in {:?}- {}",
+                        sleep_time, e
+                    );
+                    tokio::time::sleep(sleep_time).await;
+                    sleep_time = std::cmp::min(2 * sleep_time, max_sleep_time);
+                }
+            }
+        }
+    }
+}
+
+pub async fn setup_protected_rest_routes_with_auth_layer<
     Backend: AuthnBackend + Clone + 'static,
     Session: SessionStore + Clone,
 >(
     auth_layer: AuthManagerLayer<Backend, Session>,
+    secrets: Secrets,
 ) -> Router<Context> {
     // This is a helper function copied out of login_requred!() macro which
     // didn't support generic types
@@ -151,9 +215,11 @@ pub fn setup_protected_rest_routes_with_auth_layer<
         auth_session.user.is_some()
     }
 
+    let client = db_client_loop_until_connect(&secrets).await;
     Router::new()
         // list the paths that need authentication here
         .route("/test_auth", routing::get(test_auth))
+        .route("/organization_info", routing::get(get_organization_info))
         // don't use the login_required!() macro : can't figure out generic types so manually expand
         .route_layer(predicate_required!(
             is_authenticated::<Backend>,
@@ -164,6 +230,7 @@ pub fn setup_protected_rest_routes_with_auth_layer<
         // TODO: decide whether having a login() function as a GET is a CSRV vulnerability
         .route("/login", routing::get(console_login))
         .layer(auth_layer)
+        .with_state(client)
 }
 
 /// The handler for the HTTP request (this gets called when the HTTP GET lands at the start
@@ -267,17 +334,6 @@ async fn console_login(
     StatusCode::OK.into_response()
 }
 
-async fn test_auth(auth_session: AuthSession) -> impl IntoResponse {
-    match auth_session.user {
-        Some(user) => (StatusCode::OK, format!("Hello {}", user.id())),
-        None => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Weird - authenticated user not found!?".to_string(),
-        ),
-    }
-    .into_response()
-}
-
 /*
 TODO: keeping this for now since it shows how to set and get cookies with axum.
 That being said. There are a lot of higher level abstractions in axum to handle
@@ -341,11 +397,14 @@ mod test {
                 session_key: NetDebugUser::make_session_key(&user, &"random".to_string()),
             },
         );
+        let mock_secrets = Secrets::make_mock();
         let context = make_test_context();
         let session_store = MemoryStore::default();
         let session_layer = SessionManagerLayer::new(session_store).with_secure(false);
         let auth_layer = AuthManagerLayerBuilder::new(mock_backend, session_layer).build();
-        setup_protected_rest_routes_with_auth_layer(auth_layer).with_state(context)
+        setup_protected_rest_routes_with_auth_layer(auth_layer, mock_secrets)
+            .await
+            .with_state(context)
         // context not needed except to make compiler happy
     }
 

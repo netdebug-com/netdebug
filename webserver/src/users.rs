@@ -11,6 +11,7 @@ use clerk_rs::{
     ClerkConfiguration,
 };
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 use thiserror::Error as ThisError;
@@ -199,16 +200,24 @@ impl AuthnBackend for NetDebugUserBackend {
             .await?
         {
             Some(clerk_user) => {
-                NetDebugUser::from_validated_clerk_user(
+                let result = NetDebugUser::from_validated_clerk_user(
                     &clerk_user,
                     &self.random_salt,
                     &self.client,
                 )
-                .await
+                .await;
+                info!("Login attempt for {:?} :: {:?}", clerk_user.id, result);
+                result
             }
-            None => Err(UserAuthError::UserNotFound {
-                jwt: creds.clerk_jwt,
-            }),
+            None => {
+                info!(
+                    "Login attempt failed: User not found with jwt={}",
+                    creds.clerk_jwt
+                );
+                Err(UserAuthError::UserNotFound {
+                    jwt: creds.clerk_jwt,
+                })
+            }
         }
     }
 
