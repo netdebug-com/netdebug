@@ -57,7 +57,4 @@ pub fn set_abort_on_panic() {
 pub fn netdebug_init() {
     set_abort_on_panic();
     init_logging();
-    // enable the tokio console by default in all of our applications
-    // https://github.com/tokio-rs/console
-    console_subscriber::init();
 }

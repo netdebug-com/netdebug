@@ -15,6 +15,7 @@ const NON_DNS_PAYLOAD_LEN: usize = 512;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     common::init::netdebug_init();
+    console_subscriber::init();
 
     let args = Args::parse();
 
