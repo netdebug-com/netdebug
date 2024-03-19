@@ -2,15 +2,60 @@ import "./App.css";
 import {
   SignOutButton,
   SignIn,
+  useAuth,
   SignedIn,
   SignedOut,
-  useAuth,
   UserButton,
   // useUser,
 } from "@clerk/clerk-react";
-import { useEffect, useState } from "react";
 
-function App() {
+import { ClerkProvider } from "@clerk/clerk-react";
+
+// non-secret key from Clerk
+const CLERK_PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+
+if (!CLERK_PUBLISHABLE_KEY) {
+  throw new Error("Missing Publishable Key");
+}
+import { useEffect, useState } from "react";
+import Home from "./pages/Home";
+import About from "./pages/About";
+import { RouterProvider } from "react-router-dom";
+
+// Import the layouts
+import RootLayout from "./layouts/RootLayout";
+import {
+  Route,
+  createHashRouter,
+  createRoutesFromElements,
+} from "react-router-dom";
+
+const router = createHashRouter(
+  createRoutesFromElements(
+    <Route path="/" element={<RootLayout />}>
+      <Route index element={<Home />} />,
+      <Route path="test" element={<TestApp />} />,
+      <Route path="about" element={<About />} />,
+    </Route>,
+  ),
+);
+
+export function App() {
+  return (
+    <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY}>
+      <SignedIn>
+        {/* If user is signed in, show the full console router */}
+        <RouterProvider router={router} />;
+      </SignedIn>
+      <SignedOut>
+        {/* If user is not logged in, only show the signin prompt */}
+        <SignIn />
+      </SignedOut>
+    </ClerkProvider>
+  );
+}
+
+export function TestApp() {
   // Get the auth information from Clerk.com
   // in theory, auth will get reloaded when the Clerk session expires.  Not sure how
   // often this is.
