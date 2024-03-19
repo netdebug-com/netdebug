@@ -928,7 +928,6 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "approx",
- "console-subscriber",
  "env_logger",
  "log",
  "nix 0.27.1",

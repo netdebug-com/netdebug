@@ -89,6 +89,10 @@ pub struct Args {
     /// electron-store npm package.
     #[arg(long, default_value=None)]
     pub local_config_file: Option<String>,
+
+    /// Whether to disable the tokio_console_subscriber for tokio debugging / investigations
+    #[arg(long)]
+    pub disable_tokio_console: bool,
 }
 
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 8192;
@@ -123,6 +127,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     common::init::netdebug_init();
 
     let args = Args::parse();
+    if !args.disable_tokio_console {
+        info!("Enabling Tokio Console");
+        // https://github.com/tokio-rs/console
+        console_subscriber::init();
+    } else {
+        info!("Tokio Console disabled");
+    }
     let config_data = get_local_config(args.local_config_file.clone()).unwrap_or_else(|err| {
         panic!(
             "Failed to read config file `{:?}`: {}",
