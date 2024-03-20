@@ -11,5 +11,5 @@ target
 **/*.md
 **/.webpack
 **/netdebug_types.ts
-electron/out
+frontend/electron/out
 **/dist
