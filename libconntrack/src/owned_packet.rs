@@ -212,6 +212,14 @@ impl OwnedParsedPacket {
         }
     }
 
+    pub fn get_src_dst_ports(&self) -> Option<(u16, u16)> {
+        match &self.transport {
+            Some(TransportHeader::Tcp(tcph)) => Some((tcph.source_port, tcph.destination_port)),
+            Some(TransportHeader::Udp(udph)) => Some((udph.source_port, udph.destination_port)),
+            _ => None,
+        }
+    }
+
     /**
      * If the connection is a TCP/UDP packet, map it to the corresponding
      * ConnectionKey, normalizing the local vs. remote port so that A-->B and B-->A
@@ -770,6 +778,7 @@ impl<'de> Deserialize<'de> for OwnedParsedPacket {
 #[cfg(test)]
 mod test {
     use chrono::TimeZone;
+    use etherparse::ip_number;
 
     use crate::connection;
 
@@ -824,6 +833,45 @@ mod test {
         let pkt = OwnedParsedPacket::try_from_fake_time(pkt_bytes).unwrap();
         assert_eq!(pkt.get_src_dst_ips().unwrap().0, IpAddr::V6(src));
         assert_eq!(pkt.get_src_dst_ips().unwrap().1, IpAddr::V6(dst));
+    }
+
+    #[test]
+    fn test_get_src_dst_ports() {
+        let mut pkt_bytes: Vec<u8> = Vec::new();
+        etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
+            .ipv4([192, 168, 1, 1], [192, 168, 1, 2], 64)
+            .udp(123, 456)
+            .write(&mut pkt_bytes, &[])
+            .unwrap();
+        let pkt = OwnedParsedPacket::try_from_fake_time(pkt_bytes).unwrap();
+        assert_eq!(pkt.get_src_dst_ports().unwrap(), (123, 456));
+
+        let mut pkt_bytes: Vec<u8> = Vec::new();
+        etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
+            .ipv4([192, 168, 1, 1], [192, 168, 1, 2], 64)
+            .tcp(4242, 2323, 0, 0)
+            .write(&mut pkt_bytes, &[])
+            .unwrap();
+        let pkt = OwnedParsedPacket::try_from_fake_time(pkt_bytes).unwrap();
+        assert_eq!(pkt.get_src_dst_ports().unwrap(), (4242, 2323));
+
+        // raw IP ==> no ports
+        let mut pkt_bytes: Vec<u8> = Vec::new();
+        etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
+            .ipv4([192, 168, 1, 1], [192, 168, 1, 2], 64)
+            .write(&mut pkt_bytes, ip_number::EXP0, &[])
+            .unwrap();
+        let pkt = OwnedParsedPacket::try_from_fake_time(pkt_bytes).unwrap();
+        assert_eq!(pkt.get_src_dst_ports(), None);
+
+        let mut pkt_bytes: Vec<u8> = Vec::new();
+        etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
+            .ipv4([192, 168, 1, 1], [192, 168, 1, 2], 64)
+            .icmpv4_echo_request(0, 0)
+            .write(&mut pkt_bytes, &[])
+            .unwrap();
+        let pkt = OwnedParsedPacket::try_from_fake_time(pkt_bytes).unwrap();
+        assert_eq!(pkt.get_src_dst_ports(), None);
     }
 
     #[test]

@@ -12,7 +12,9 @@ name = "pcap_util_lib"
 path = "src/pcap-util-lib.rs"
 
 [dependencies]
+chrono = { version = "0.4", features = ["serde"] }
 clap = { workspace = true }
+etherparse = { git = "https://github.com/robs-zeynet/etherparse", branch = "tcp_header" }
 common = { path = "../common" }
 common-wasm = { path = "../common/wasm" }
 indexmap = { workspace = true }
@@ -20,3 +22,5 @@ libconntrack = { path = "../libconntrack" }
 libconntrack-wasm = { path = "../libconntrack-wasm" }
 pcap = { workspace = true }
 tokio = { version = "1.28.2", features = ["full"] }
+strum = "0.26.2"
+strum_macros = "0.26.2"
