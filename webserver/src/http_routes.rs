@@ -61,6 +61,10 @@ pub async fn setup_axum_http_routes(context: Context) -> Router {
             "/webtest_static",
             serve_dir_and_check_path(html_root.clone() + "/webtest_static"),
         )
+        .nest_service(
+            "/static",
+            serve_dir_and_check_path(html_root.clone() + "/webtest_static"),
+        )
         .nest_service("/webclient", serve_dir_and_check_path(&wasm_root))
         // maybe we should just statically serve / as a fallback if no more spe
         .route_service("/index.html", index_html_service.clone())
