@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use pcap_util_lib::{hacky_command, HackyCmdArgs, SumdumpCmdArgs};
+use pcap_util_lib::{hacky_command, sumdump_command, HackyCmdArgs, SumdumpCmdArgs};
 
 #[derive(Debug, Subcommand)]
 enum CliCommands {
@@ -12,6 +12,8 @@ enum CliCommands {
 struct Args {
     #[command(subcommand)]
     command: CliCommands,
+    #[arg(long, global = true)]
+    pcap_filter: Option<String>,
 }
 
 pub fn main() {
@@ -23,7 +25,7 @@ pub fn main() {
     let args = Args::parse();
 
     match args.command {
-        CliCommands::Sumdump(_sumdump_args) => todo!(),
+        CliCommands::Sumdump(sumdump_args) => sumdump_command(args.pcap_filter, sumdump_args),
         CliCommands::Hacky(hacky_args) => hacky_command(hacky_args),
     }
 }
