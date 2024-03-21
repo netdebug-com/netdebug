@@ -271,7 +271,7 @@ fn icmp_ping(
     let remote_mac = remote_mac.unwrap_or([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
     let buf = make_ping_icmp_echo_request(&local_ip, &remote_ip, local_mac, remote_mac, id, seq);
     if let Err(e) = raw_sock.sendpacket(local_ip, &buf) {
-        warn!("Error sending ping in icmp_ping: {}", e);
+        warn!("Error sending ping from {} in icmp_ping: {}", local_ip, e);
     }
 }
 

@@ -476,6 +476,9 @@ pub fn dns_to_cannonical_domain(hostname: &str) -> Result<String, String> {
         // https://github.com/netdebug-com/netdebug/issues/315
         return Ok("amazonaws.com".to_owned());
     }
+    if hostname == "localhost" {
+        return Ok(hostname.to_owned());
+    }
     let domain = match psl::domain(hostname.as_bytes()) {
         Some(domain) => domain,
         None => {

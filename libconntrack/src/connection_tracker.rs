@@ -18,16 +18,15 @@ use libconntrack_wasm::{
     ExportedNeighborState,
 };
 use linked_hash_map::LinkedHashMap;
-use log::info;
 #[cfg(not(test))]
-use log::{debug, warn};
+use log::{debug, info, warn};
 
 use mac_address::MacAddress;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 #[cfg(test)]
-use std::{println as debug, println as warn}; // Workaround to use prinltn! for logs.
+use std::{println as debug, println as warn, println as info}; // Workaround to use prinltn! for logs.
 
 use crate::{
     analyze::analyze,
@@ -160,6 +159,10 @@ pub enum ConnectionTrackerMsg {
     },
     GetCachedNeighbors {
         tx: Sender<Vec<ExportedNeighborState>>,
+    },
+    /// Update the set of addresses that are local to this machine
+    UpdateLocalAddr {
+        local_addr: HashSet<IpAddr>,
     },
 }
 
@@ -608,6 +611,7 @@ impl<'a> ConnectionTracker<'a> {
             }
             LookupMacByIp { ip, tx, identifier } => self.lookup_mac_by_ip(identifier, ip, tx),
             GetCachedNeighbors { tx } => self.get_cached_neighbors(tx),
+            UpdateLocalAddr { local_addr } => self.update_local_addr(local_addr),
         }
     }
 
@@ -1126,6 +1130,27 @@ impl<'a> ConnectionTracker<'a> {
             warn!(
                 "Tried to add a ConnectionUpdateListener ({}) for {} but key not found",
                 desc, key
+            );
+        }
+    }
+
+    fn update_local_addr(&mut self, new_local_addrs: HashSet<IpAddr>) {
+        if self.local_addrs == new_local_addrs {
+            debug!("Local addresses are unchanged");
+        } else {
+            let only_in_old = self
+                .local_addrs
+                .difference(&new_local_addrs)
+                .cloned()
+                .collect_vec();
+            let only_in_new = new_local_addrs
+                .difference(&self.local_addrs)
+                .cloned()
+                .collect_vec();
+            self.local_addrs = new_local_addrs;
+            info!(
+                "Updating local addresses. Adding {:?}, removing {:?}",
+                only_in_new, only_in_old
             );
         }
     }
@@ -1691,6 +1716,58 @@ pub mod test {
                 }
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn test_update_local_addr() {
+        let mut pkts = Vec::new();
+        let mut all_ips = Vec::new();
+        // Created threee packets with different src IPs
+        for i in 1..=3 {
+            let mut pkt_buf = Vec::<u8>::new();
+            etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
+                .ipv4([192, 168, 1, i], [10, 42, 42, 42], 20)
+                .udp(1000, 2000)
+                .write(&mut pkt_buf, &[])
+                .unwrap();
+            pkts.push(OwnedParsedPacket::try_from_fake_time(pkt_buf).unwrap());
+            all_ips.push(IpAddr::V4(Ipv4Addr::new(192, 168, 1, i)));
+        }
+        let local_addrs = HashSet::from([all_ips[0], all_ips[1]]);
+        let mut connection_tracker = mk_mock_connection_tracker(local_addrs);
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::Pkt(pkts[0].clone()));
+        assert_eq!(connection_tracker.not_local_packets.get_sum(), 0);
+        assert_eq!(connection_tracker.connections.len(), 1);
+
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::Pkt(pkts[1].clone()));
+        assert_eq!(connection_tracker.connections.len(), 2);
+        assert_eq!(connection_tracker.not_local_packets.get_sum(), 0);
+
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::Pkt(pkts[2].clone()));
+        // Number of connections is unchanged since this IP is not considered a local_ip
+        assert_eq!(connection_tracker.connections.len(), 2);
+        assert_eq!(connection_tracker.not_local_packets.get_sum(), 1);
+
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::UpdateLocalAddr {
+            local_addr: HashSet::from([all_ips[1], all_ips[2]]),
+        });
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::Pkt(pkts[2].clone()));
+        assert_eq!(connection_tracker.connections.len(), 3);
+
+        connection_tracker.connections.clear();
+        assert_eq!(connection_tracker.connections.len(), 0);
+
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::Pkt(pkts[0].clone()));
+        assert_eq!(connection_tracker.not_local_packets.get_sum(), 2);
+        assert_eq!(connection_tracker.connections.len(), 0);
+
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::Pkt(pkts[1].clone()));
+        assert_eq!(connection_tracker.connections.len(), 1);
+        assert_eq!(connection_tracker.not_local_packets.get_sum(), 2);
+
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::Pkt(pkts[2].clone()));
+        assert_eq!(connection_tracker.connections.len(), 2);
+        assert_eq!(connection_tracker.not_local_packets.get_sum(), 2);
     }
 
     const REMOTE_RST: [u8; 60] = [
