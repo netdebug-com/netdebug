@@ -48,23 +48,51 @@ the cert
 
 ### Windows 
 
-tbd
+Rename the cert.pem to cert.crt, then right click and "Install Certificate".  Select "Current User" and
+hit 'Next', instead of "Automatically select the store", click "Browse" and select "Trusted Root 
+Certificate Authorities"-> "Next" -> "Finish".
 
-### Linux 
+NOTE you don't need to follow the (21!) steps from this URL : https://learn.microsoft.com/en-us/biztalk/adapters-and-accelerators/accelerator-swift/adding-certificates-to-the-certificates-store-on-the-client to import the certificate.
 
-tbd
+To update /etc/hosts in windows, follow:
+
+
+    Open the Start menu.
+
+    In the Run box, type Notepad.exe and before you hit enter you must right-click on Notepad and Run as administrator.
+    In Notepad, select File then Open.
+    Navigate to C:\Windows\System32\drivers\etc.
+    Change the file type to open from Text Documents (*.txt) to All Files (*.*).
+    Open the hosts file.
+    Read the comments in the host file. The comments begin with a # character.
+    Observe the host records stored in the file. At a minimum you should find a record for 127.0.0.1 localhost.
+
+NOTE: if you are developing in WSL, you don't need to do *any* of this... (deep sigh)
+
+### Linux or WSL
+
+Follow https://unix.stackexchange.com/questions/90450/adding-a-self-signed-certificate-to-the-trusted-list but basically it's 
+
+1. sudo apt-get install ca-certificates
+2. cp cert.pem /usr/share/ca-certificates/mozilla/netdebug-local.crt   # NOTE the new .crt extension!
+3. dpkg-reconfigure ca-certificates
+
+NOTE: if you're on WSL and you've added the 'netdebug-local' entry to /etc/hosts on the *windows* machine,
+WSL will read that automatically so you don't need to (but still can) add it to the WSL /etc/hosts.
 
 ## Add host entry to /etc/hosts 
 
-No idea how to do it under windows. There's probably a way though. 
-
 Edit `/etc/hosts` and add and entry or entries for the dns-name we used in the cert (`netdebug-local`):
+See the Windows section above for how to edit the hosts file in Windows.  Make sure to install both v4
+and v6 addresses (NOTE: especially for Windows with WSL).
+
 
 ```
 127.0.0.1   netdebug-local
 ::1   netdebug-local
 ```
 
+```ping netdebug-local``` to make sure it worked.
 ## Start the webserver
 
 * The key.pem and cert.pem files can now be passed to the webserver binary with 

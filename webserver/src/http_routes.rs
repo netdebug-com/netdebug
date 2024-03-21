@@ -14,7 +14,6 @@ use axum::response::IntoResponse;
 use axum::Router;
 use axum::{routing, Form};
 use axum_extra::TypedHeader;
-use axum_login::tower_sessions::cookie::SameSite;
 use axum_login::tower_sessions::{MemoryStore, SessionManagerLayer, SessionStore};
 use axum_login::{predicate_required, AuthManagerLayer, AuthManagerLayerBuilder, AuthnBackend};
 use common_wasm::timeseries_stats::{CounterProvider, CounterProviderWithTimeUpdate};
@@ -139,28 +138,7 @@ pub async fn setup_protected_rest_routes(context: Context) -> Router<Context> {
         .await
         .expect("Errors from RemoteDBClient");
     let session_store = MemoryStore::default();
-    let same_site_policy = if !production {
-        // Normal HTTP(s) has all sorts of smart things to prevent us from sharing cookies
-        // with bad people.  We need to turn them all off if we want to do development on our
-        // local machines in cleartext for debugging.
-        // specifically, we need to remove the 'Secure' tag when we send the cookies and
-        // *apparently* set "SameSite:None" to prevent the browser from overriding our 'no secure' setting
-        //  see https://developers.google.com/search/blog/2020/01/get-ready-for-new-samesitenone-secure
-        // this prevents us from setting 'Secure' when we issue the cookie, i.e., instead of :
-        //          set-cookie: id=XXXX; HttpOnly; SameSite=Strict; Path=/; Secure
-        // we send:
-        //          set-cookie: id=XXXX; HttpOnly; SameSite=None; Path=/
-        // this allows us to run the dev server without encryption local to our devices
-
-        info!("Disabling secure session cookies and setting SameSite=None for development mode");
-        SameSite::None
-    } else {
-        SameSite::Strict // the secure default for production
-    };
-    let session_layer = SessionManagerLayer::new(session_store)
-        .with_name("netdebug_session_id")
-        .with_secure(production)
-        .with_same_site(same_site_policy);
+    let session_layer = SessionManagerLayer::new(session_store);
 
     // Auth layer
     let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
@@ -171,7 +149,7 @@ pub async fn setup_protected_rest_routes(context: Context) -> Router<Context> {
     } else {
         // relax CORS checks for local testing; allows us to run frontend in 'npm run dev' mode
         info!("Relaxing CORS Permissions in Development mode for 'cd frontend/console && npm run dev'");
-        routes.layer(CorsLayer::permissive())
+        routes.layer(CorsLayer::very_permissive())
     }
 }
 

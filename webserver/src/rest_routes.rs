@@ -7,7 +7,7 @@ use axum::{
 };
 use axum_login::AuthUser;
 use gui_types::PublicOrganizationInfo;
-use log::{info, warn};
+use log::warn;
 
 use crate::{
     mockable_dbclient::MockableDbClient,
@@ -33,9 +33,7 @@ fn check_user(opt_user: Option<NetDebugUser>) -> Result<NetDebugUser, Response<B
 pub async fn test_auth(
     auth_session: AuthSession,
 ) -> Result<(axum::http::StatusCode, String), Response<Body>> {
-    info!("Testauth");
     let user = check_user(auth_session.user)?;
-    info!("Testauth: {}", user.user_id);
     Ok((StatusCode::OK, format!("Hello {}", user.id())))
 }
 
