@@ -12,10 +12,17 @@ import {
 import { ClerkProvider } from "@clerk/clerk-react";
 
 // non-secret key from Clerk
-const CLERK_PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+const CLERK_PUBLISHABLE_KEY =
+  import.meta.env.MODE == "development"
+    ? import.meta.env.VITE_CLERK_PUBLISHABLE_DEV_KEY
+    : import.meta.env.VITE_CLERK_PUBLISHABLE_PROD_KEY;
 
 if (!CLERK_PUBLISHABLE_KEY) {
   throw new Error("Missing Publishable Key");
+}
+
+if (import.meta.env.MODE == "development") {
+  console.log("Running in development mode");
 }
 import { useEffect, useState } from "react";
 import Home from "./pages/Home";
@@ -82,26 +89,26 @@ export function TestApp() {
   // and (for this code at least) every time we get a REST API token, test it
   const [test, setTest] = useState<string | null>(null);
   useEffect(() => {
-    if (auth === null) {
+    if (login === null) {
       setTest(null);
     } else {
       fetch(get_rest_url("api/test_auth"))
         .then((resp) => resp.text())
         .then((t) => setTest(t));
     }
-  }, [auth]);
+  }, [login]);
 
   // and (for this code at least) every time we get a REST API token, test it
   const [organization, setOrganization] = useState<string | null>(null);
   useEffect(() => {
-    if (auth === null) {
+    if (login === null) {
       setOrganization(null);
     } else {
       fetch(get_rest_url("api/organization_info"))
         .then((resp) => resp.json())
         .then((org) => setOrganization(JSON.stringify(org, undefined, 2)));
     }
-  }, [auth]);
+  }, [login]);
 
   return (
     <div>
