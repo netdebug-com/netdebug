@@ -180,7 +180,12 @@ fn pcap_monitor_all_interfaces(options: PcapMonitorOptions) -> Result<(), pcap::
             }
         }
         // for each active device, make sure we've launched a pcap thread for it
+        // and record all local IPs.
+        let mut local_addr = HashSet::new();
         for dev in pcap::Device::list()? {
+            for addr in &dev.addresses {
+                local_addr.insert(addr.addr);
+            }
             // start a new pcap thread if not already setup and is connected
             if dev.flags.connection_status == ConnectionStatus::Connected
                 && !device_thread_handle_map.contains_key(&dev.name)
@@ -197,6 +202,9 @@ fn pcap_monitor_all_interfaces(options: PcapMonitorOptions) -> Result<(), pcap::
                 device_thread_handle_map.insert(dev.name.clone(), join_handle);
             }
         }
+        let _ = options.connection_tracker_tx.try_send(PerfMsgCheck::new(
+            ConnectionTrackerMsg::UpdateLocalAddr { local_addr },
+        ));
         std::thread::sleep(std::time::Duration::from_millis(
             PCAP_INTERFACE_MONITOR_INTERVAL_MS,
         ));
