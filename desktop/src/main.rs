@@ -161,7 +161,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let local_addrs = pcap_find_all_local_addrs()?;
     // TODO! Change this logic so that the binding to the interface can change over time
-    let raw_sock = libconntrack::pcap::bind_writable_pcap();
+    let raw_sock = libconntrack::pcap::bind_writable_pcap(local_addrs.clone());
     let prober_tx = spawn_raw_prober(raw_sock, MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
 
     let (topology_rpc_client, data_storage_client) = TopologyServerConnection::spawn(

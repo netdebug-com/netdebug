@@ -4,6 +4,7 @@ use libconntrack::connection_tracker::ConnectionTrackerMsg;
 use libconntrack::pcap::{find_interesting_pcap_interfaces, run_blocking_pcap_loop_in_thread};
 use libconntrack::utils::PerfMsgCheck;
 use log::{error, info, warn};
+use std::collections::HashSet;
 use std::io;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -95,6 +96,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         v6_src_addr: to_socket_addr_v6(v6_sock.local_addr()?).unwrap(),
         if_name: dev.name.clone(),
     };
+    let local_addrs = HashSet::from([
+        IpAddr::V4(*outgoing_addr_config.v4_src_addr.ip()),
+        IpAddr::V6(*outgoing_addr_config.v6_src_addr.ip()),
+    ]);
 
     let (pkt_tx, pkt_rx) = tokio::sync::mpsc::channel::<PerfMsgCheck<ConnectionTrackerMsg>>(
         MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
@@ -111,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the first probe. So lets simply wait a bit after starting the pcap polling
     // loop to ensure we won't miss the very first probe
     tokio::time::sleep(Duration::from_millis(400)).await;
-    let raw_sock = Box::new(libconntrack::pcap::bind_writable_pcap());
+    let raw_sock = Box::new(libconntrack::pcap::bind_writable_pcap(local_addrs));
 
     let ips_to_probe: Vec<String> = if args.ips_from_stdin {
         io::stdin().lines().map_while(Result::ok).collect()

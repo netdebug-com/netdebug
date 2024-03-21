@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     error::Error,
     io::{Cursor, Write},
     net::IpAddr,
@@ -19,6 +20,9 @@ pub type ProberSender = Sender<PerfMsgCheck<ProbeMessage>>;
 
 #[derive(Clone, Debug)]
 pub enum ProbeMessage {
+    UpdateLocalAddrs {
+        local_addrs: HashSet<IpAddr>,
+    },
     SendProbe {
         packet: Box<OwnedParsedPacket>,
         min_ttl: u8,
@@ -81,6 +85,7 @@ pub fn prober_handle_one_message(raw_sock: &mut dyn RawSocketWriter, message: Pr
             local_ip,
             target_ip,
         } => send_neighbor_discovery(raw_sock, local_ip, local_mac, target_ip),
+        UpdateLocalAddrs { local_addrs } => raw_sock.update_local_addrs(local_addrs),
     }
 }
 

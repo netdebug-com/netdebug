@@ -164,8 +164,10 @@ impl WebServerContext {
                         Uuid::new_v5(&Uuid::NAMESPACE_DNS, UUID_DNS_NAME_FOR_SERVER_CONN),
                     )
                 });
-                let prober_tx =
-                    spawn_raw_prober(bind_writable_pcap(), MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
+                let prober_tx = spawn_raw_prober(
+                    bind_writable_pcap(local_ips.clone()),
+                    MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,
+                );
                 info!("Launching the connection tracker (single instance for now)");
                 let mut connection_tracker = ConnectionTracker::new(
                     optional_conn_storage_tx,
