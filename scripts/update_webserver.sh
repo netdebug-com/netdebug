@@ -42,4 +42,6 @@ tar xzvf pre-prod-release.tgz
 dir=`tar tzf pre-prod-release.tgz | tail -1 | cut -d/ -f1`
 # the -f here is important to overwrite the previous link
 echo Marking \"$dir\" as the current version
-ln -sf $dir current
+rm -f current
+ln -s $dir current
+ln -srf updates_dir $dir/webserver/html/webtest_static/updater_235235
