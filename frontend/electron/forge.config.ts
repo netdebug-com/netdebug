@@ -15,7 +15,6 @@ const config: ForgeConfig = {
   packagerConfig: {
     osxSign: {}, // object needs to exist even if empty
     osxNotarize: {
-      tool: "notarytool",
       // TODO: Use Gregor's personal appleId & developer account for now until
       // we can figure out the corp one.
       // I've store my credentials in my keychain with:
