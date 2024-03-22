@@ -135,7 +135,9 @@ export function TestApp() {
 
 function get_rest_url(path: string): string {
   if (import.meta.env.MODE == "development") {
-    return "http://localhost:3030/" + path;
+    // if you've followed ./docs/self-signed-ssl.md, 'netdebug-local' will
+    // be a valid hostname for local host with certificate installed
+    return "https://netdebug-local:3030/" + path;
   } else {
     // e.g., "https://hostname:port"
     return window.location.origin + "/" + path;
