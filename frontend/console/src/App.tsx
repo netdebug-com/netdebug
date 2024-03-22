@@ -91,6 +91,18 @@ export function TestApp() {
     }
   }, [auth]);
 
+  // and (for this code at least) every time we get a REST API token, test it
+  const [organization, setOrganization] = useState<string | null>(null);
+  useEffect(() => {
+    if (auth === null) {
+      setOrganization(null);
+    } else {
+      fetch(get_rest_url("api/organization_info"))
+        .then((resp) => resp.json())
+        .then((org) => setOrganization(JSON.stringify(org, undefined, 2)));
+    }
+  }, [auth]);
+
   return (
     <div>
       <SignedOut>
@@ -109,7 +121,11 @@ export function TestApp() {
             <li>SessionId={auth.sessionId}</li>
             <li> jWt={jwt && jwt} </li>
             <li> login={login && login.headers && login.status} </li>
-            <li> TestStatus={test && test}</li>
+            <li> Test: {test && test} </li>
+            <li>
+              organization:
+              {organization && organization}{" "}
+            </li>
           </ul>
         </div>
       </SignedIn>
@@ -118,8 +134,12 @@ export function TestApp() {
 }
 
 function get_rest_url(path: string): string {
-  // e.g., "https://hostname:port"
-  return window.location.origin + "/" + path;
+  if (import.meta.env.MODE == "development") {
+    return "http://localhost:3030/" + path;
+  } else {
+    // e.g., "https://hostname:port"
+    return window.location.origin + "/" + path;
+  }
 }
 
 export default App;

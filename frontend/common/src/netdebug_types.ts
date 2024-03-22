@@ -578,3 +578,14 @@ export type DesktopToTopologyServer = ({
 } | {
     "tag": "Ping";
 });
+
+/**
+ * The elements of OrganizationInfo that are safe for anyone to read
+ * i.e., "public" in the GUI frontend
+ */
+export type PublicOrganizationInfo = {
+    "id": I64;
+    "name": (string | null);
+    "description": (string | null);
+    "admin_contact": (string | null);
+};
