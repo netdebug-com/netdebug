@@ -138,7 +138,12 @@ pub async fn setup_protected_rest_routes(context: Context) -> Router<Context> {
         .await
         .expect("Errors from RemoteDBClient");
     let session_store = MemoryStore::default();
-    let session_layer = SessionManagerLayer::new(session_store);
+    // this sets or doesn't set the 'Secure' line in the SetCookie :
+    // https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies
+    let secure_cookie = production;
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_name("netdebug_session_cookie")
+        .with_secure(secure_cookie);
 
     // Auth layer
     let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
