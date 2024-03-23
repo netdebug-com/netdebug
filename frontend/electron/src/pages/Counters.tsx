@@ -82,7 +82,7 @@ const Counters: React.FC = () => {
   return (
     <>
       <SwitchHelper
-        text="Thousands Seperator"
+        text="Thousands Separator"
         state={thousandsSep}
         updateFn={setThousandsSep}
       />
