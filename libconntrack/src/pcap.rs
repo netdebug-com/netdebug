@@ -480,6 +480,8 @@ pub trait RawSocketWriter: Send {
     /// Send the ethernet packet (with L2 headers) out the interface that matches
     /// [`src_ip]
     fn sendpacket(&mut self, interface_ip: IpAddr, buf: &[u8]) -> Result<(), pcap::Error>;
+    /// Update the IpAddresses we know to be local to this machine
+    fn update_local_addrs(&mut self, local_addr: HashSet<IpAddr>);
 }
 
 /**
@@ -487,18 +489,30 @@ pub trait RawSocketWriter: Send {
  */
 struct PcapRawSocketWriter {
     interface_map: HashMap<IpAddr, Capture<pcap::Active>>,
+    /// IpAddresses we know to be local to this machine
+    local_addrs: HashSet<IpAddr>,
 }
 
 impl PcapRawSocketWriter {
-    pub fn new() -> PcapRawSocketWriter {
+    pub fn new(local_addrs: HashSet<IpAddr>) -> PcapRawSocketWriter {
         PcapRawSocketWriter {
             interface_map: HashMap::new(),
+            local_addrs,
         }
     }
 }
 
 impl RawSocketWriter for PcapRawSocketWriter {
     fn sendpacket(&mut self, interface_ip: IpAddr, buf: &[u8]) -> Result<(), pcap::Error> {
+        if !self.local_addrs.contains(&interface_ip) {
+            // This can happen if the system_tracker is still sending pings and hasn't yet detected that
+            // an interface has gone away.
+            debug!(
+                "Interface IP {} for outgoing packet is not a local IP -- skipping",
+                interface_ip
+            );
+            return Ok(());
+        }
         let start = std::time::Instant::now();
         // include the lookup time in the performance check
         let capture = match self.interface_map.get_mut(&interface_ip) {
@@ -525,6 +539,17 @@ impl RawSocketWriter for PcapRawSocketWriter {
         );
         result
     }
+
+    fn update_local_addrs(&mut self, local_addrs: HashSet<IpAddr>) {
+        let current_ips = self.interface_map.keys().cloned().collect_vec();
+        for ip in &current_ips {
+            if !local_addrs.contains(ip) {
+                info!("Removing raw_socket capture for IP {}", ip);
+                self.interface_map.remove(ip);
+            }
+        }
+        self.local_addrs = local_addrs;
+    }
 }
 
 /**
@@ -534,8 +559,8 @@ impl RawSocketWriter for PcapRawSocketWriter {
  * that same instance does NOT actually see the outgoing packet.  We get around this by
  * binding a different instance for reading vs. writing packets.
  */
-pub fn bind_writable_pcap() -> impl RawSocketWriter {
-    PcapRawSocketWriter::new()
+pub fn bind_writable_pcap(local_addrs: HashSet<IpAddr>) -> impl RawSocketWriter {
+    PcapRawSocketWriter::new(local_addrs)
 }
 
 #[cfg(test)]
@@ -597,6 +622,10 @@ pub mod test {
         fn sendpacket(&mut self, _interface_ip: IpAddr, buf: &[u8]) -> Result<(), pcap::Error> {
             self.captured.push(buf.to_vec());
             Ok(())
+        }
+
+        fn update_local_addrs(&mut self, _local_addrs: HashSet<IpAddr>) {
+            unimplemented!()
         }
     }
 }

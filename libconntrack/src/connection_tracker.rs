@@ -1147,7 +1147,13 @@ impl<'a> ConnectionTracker<'a> {
                 .difference(&self.local_addrs)
                 .cloned()
                 .collect_vec();
-            self.local_addrs = new_local_addrs;
+            self.local_addrs = new_local_addrs.clone();
+            // ignore return value
+            let _ = self.prober_helper.tx().try_send(PerfMsgCheck::new(
+                ProbeMessage::UpdateLocalAddrs {
+                    local_addrs: new_local_addrs,
+                },
+            ));
             info!(
                 "Updating local addresses. Adding {:?}, removing {:?}",
                 only_in_new, only_in_old
@@ -1225,11 +1231,11 @@ pub mod test {
 
     pub fn mk_mock_connection_tracker<'a>(local_addrs: HashSet<IpAddr>) -> ConnectionTracker<'a> {
         let mock_prober = MockRawSocketProber::new();
-        mk_mock_connection_tracker_with_prober(local_addrs, mock_prober)
+        mk_mock_connection_tracker_with_prober(local_addrs, mock_prober.tx.clone())
     }
     fn mk_mock_connection_tracker_with_prober<'a>(
         local_addrs: HashSet<IpAddr>,
-        mock_prober: MockRawSocketProber,
+        mock_prober_tx: Sender<PerfMsgCheck<ProbeMessage>>,
     ) -> ConnectionTracker<'a> {
         let storage_service_client = None;
         let max_connections_per_tracker = 32;
@@ -1237,7 +1243,7 @@ pub mod test {
             storage_service_client,
             max_connections_per_tracker,
             local_addrs,
-            mock_prober.tx.clone(),
+            mock_prober_tx,
             128,
             ExportedStatRegistry::new("test.conn_tracker", Instant::now()),
             true,
@@ -1734,7 +1740,9 @@ pub mod test {
             all_ips.push(IpAddr::V4(Ipv4Addr::new(192, 168, 1, i)));
         }
         let local_addrs = HashSet::from([all_ips[0], all_ips[1]]);
-        let mut connection_tracker = mk_mock_connection_tracker(local_addrs);
+        let (prober_tx, mut prober_rx) = mpsc::channel(10);
+        let mut connection_tracker = mk_mock_connection_tracker_with_prober(local_addrs, prober_tx);
+
         connection_tracker.handle_one_msg(ConnectionTrackerMsg::Pkt(pkts[0].clone()));
         assert_eq!(connection_tracker.not_local_packets.get_sum(), 0);
         assert_eq!(connection_tracker.connections.len(), 1);
@@ -1751,6 +1759,17 @@ pub mod test {
         connection_tracker.handle_one_msg(ConnectionTrackerMsg::UpdateLocalAddr {
             local_addr: HashSet::from([all_ips[1], all_ips[2]]),
         });
+        match prober_rx
+            .try_recv()
+            .expect("Expected a message from prober_rx")
+            .skip_perf_check()
+        {
+            ProbeMessage::UpdateLocalAddrs { local_addrs } => {
+                assert_eq!(local_addrs, HashSet::from([all_ips[1], all_ips[2]]))
+            }
+            other => panic!("Got unexpected ProbeMessage: {:?}", other),
+        }
+
         connection_tracker.handle_one_msg(ConnectionTrackerMsg::Pkt(pkts[2].clone()));
         assert_eq!(connection_tracker.connections.len(), 3);
 
@@ -1920,7 +1939,6 @@ pub mod test {
 
     #[test]
     fn test_time_wait_eviction() {
-        let mut mock_prober = MockRawSocketProber::new();
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
         let (evict_tx, mut evict_rx) = mpsc::channel(10);
         let mut connection_tracker = mk_mock_connection_tracker(local_addrs.clone());
@@ -1943,16 +1961,14 @@ pub mod test {
         assert!(packets[9].clone().transport.unwrap().tcp().unwrap().fin);
 
         // Read the first couple of packets. Ensure connection is created.
+        // Also make sure we have at least one data packet ==> probes are sent
+        // ==> probe report will be generated
         let mut last_packet_time = DateTime::<Utc>::UNIX_EPOCH;
         for pkt in packets.iter().take(5) {
             last_packet_time = pkt.timestamp;
             connection_tracker.add(pkt.clone());
         }
         assert_eq!(connection_tracker.connections.len(), 1);
-
-        // feed the mock'd probes into the connection tracker so it thinks
-        // it has a valid ProbeReport
-        mock_prober.redirect_into_connection_tracker(&mut connection_tracker);
 
         // expect the connection tracker stats and the AggregateStatKind::Host stat.
         let remote_ip_in_trace = IpAddr::from_str("34.121.150.27").unwrap();
