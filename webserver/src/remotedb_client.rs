@@ -56,6 +56,7 @@ pub const LOGS_TABLE_NAME: &str = "desktop_logs";
 pub const CONNECTIONS_TABLE_NAME: &str = "desktop_connections";
 pub const USERS_TABLE_NAME: &str = "users";
 pub const ORGANIZATION_TABLE_NAME: &str = "organizations";
+pub const DEVICE_TABLE_NAME: &str = "devices";
 
 pub const INITIAL_RETRY_TIME_MS: u64 = 100;
 

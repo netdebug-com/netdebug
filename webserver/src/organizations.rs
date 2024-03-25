@@ -1,15 +1,17 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use gui_types::PublicOrganizationInfo;
+use gui_types::{OrganizationId, PublicOrganizationInfo};
 use tokio_postgres::Client;
 
 use crate::remotedb_client::{RemoteDBClientError, ORGANIZATION_TABLE_NAME};
 
+pub const NETDEBUG_EMPLOYEE_ORG_ID: OrganizationId = 1;
+
 /// A struct with all of the info in the 'organizations' DB table
 /// (public and private)
 pub(crate) struct OrganizationInfo {
-    pub(crate) id: i64, // NOTE: SQL does not support u64
+    pub(crate) id: OrganizationId, // NOTE: SQL does not support u64
     pub(crate) name: Option<String>,
     pub(crate) admin_contact: Option<String>,
     /// Created time of an org could be sensitive

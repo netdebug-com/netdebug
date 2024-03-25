@@ -589,3 +589,28 @@ export type PublicOrganizationInfo = {
     "description": (string | null);
     "admin_contact": (string | null);
 };
+
+/**
+ * The elements of DeviceInfo that are safe for anyone to read
+ * i.e., "public" in the GUI frontend
+ */
+export type PublicDeviceInfo = {
+
+    /**
+     * The unique ID of this device; note we intentionally have it as a string to not force
+     * the Uuid dependency into this crate
+     */
+    "uuid": string;
+
+    /**
+     * E.g., hostname
+     */
+    "name": (string | null);
+
+    /**
+     * Which organization does this belong to by internal ID
+     */
+    "organization_id": I64;
+    "description": (string | null);
+    "created": string;
+};

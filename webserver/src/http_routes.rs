@@ -4,7 +4,7 @@ use std::time::Duration;
 use crate::context::Context;
 use crate::mockable_dbclient::MockableDbClient;
 use crate::remotedb_client::RemoteDBClient;
-use crate::rest_routes::{get_organization_info, test_auth};
+use crate::rest_routes::{get_device, get_devices, get_organization_info, test_auth};
 use crate::secrets_db::Secrets;
 use crate::users::{AuthCredentials, AuthSession, NetDebugUserBackend, UserServiceData};
 use crate::{desktop_websocket, webtest};
@@ -202,6 +202,8 @@ pub async fn setup_protected_rest_routes_with_auth_layer<
     Router::new()
         // list the paths that need authentication here
         .route("/test_auth", routing::get(test_auth))
+        .route("/get_device/:uuid", routing::get(get_device))
+        .route("/get_devices", routing::get(get_devices))
         .route("/organization_info", routing::get(get_organization_info))
         // don't use the login_required!() macro : can't figure out generic types so manually expand
         .route_layer(predicate_required!(
