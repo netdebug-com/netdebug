@@ -1,6 +1,5 @@
-use std::sync::Arc;
-mod db_utils;
-use crate::db_utils::mk_test_db;
+pub mod db_utils;
+use crate::db_utils::{add_fake_users, make_mock_protected_routes, mk_test_db};
 
 /// Following examples from https://github.com/tokio-rs/axum/blob/main/examples/testing/src/main.rs#L85
 /// and
@@ -9,25 +8,12 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
     response::Response,
-    Router,
 };
-use axum_login::{
-    tower_sessions::{cookie, MemoryStore, SessionManagerLayer},
-    AuthManagerLayerBuilder,
-};
-use db_utils::{TEST_DB_PASSWD, TEST_DB_USER};
+use axum_login::tower_sessions::cookie;
 use http_body_util::BodyExt;
-use pg_embed::postgres::PgEmbed;
-use tokio_postgres::Client;
 use tower::ServiceExt; // for `call`, `oneshot`, and `ready`
 
-use libwebserver::{
-    context::make_test_context,
-    http_routes::setup_protected_rest_routes_with_auth_layer,
-    remotedb_client::RemoteDBClient,
-    secrets_db::Secrets,
-    users::{NetDebugUserBackend, UserServiceData},
-};
+use libwebserver::remotedb_client::RemoteDBClient;
 
 fn get_session_cookie(res: &Response<Body>) -> Option<String> {
     res.headers()
@@ -37,49 +23,6 @@ fn get_session_cookie(res: &Response<Body>) -> Option<String> {
             let cookie = cookie::Cookie::parse(cookie_str);
             cookie.map(|c| c.to_string()).ok()
         })
-}
-
-async fn make_mock_protected_routes(test_db: &PgEmbed) -> Router {
-    let mut mock_secrets = Secrets::make_mock();
-    mock_secrets.timescale_db_read_user = Some(TEST_DB_USER.to_string());
-    mock_secrets.timescale_db_read_secret = Some(TEST_DB_PASSWD.to_string());
-    // this is the postgres://user@host:port/path?options=stuff
-    // we just want everything after the '@'
-    let url = test_db
-        .db_uri
-        .clone()
-        .split('@')
-        .collect::<Vec<&str>>()
-        .get(1)
-        .unwrap()
-        .to_string();
-    mock_secrets.timescale_db_base_url = Some(url);
-    let context = make_test_context();
-
-    let session_store = MemoryStore::default();
-    let session_layer = SessionManagerLayer::new(session_store).with_secure(false);
-    // Start the user service in 'auth disabled' mode where jwt=$username
-    let user_service = UserServiceData::disable_auth_for_testing();
-    let mock_backend = NetDebugUserBackend::new(Arc::new(user_service), &mock_secrets)
-        .await
-        .unwrap();
-    let auth_layer = AuthManagerLayerBuilder::new(mock_backend, session_layer).build();
-    setup_protected_rest_routes_with_auth_layer(auth_layer, mock_secrets)
-        .await
-        .with_state(context)
-    // context not needed except to make compiler happy
-}
-
-async fn add_fake_users(db_client: &Client) {
-    for (user, org_id) in [("Alice", 0i64), ("Bob", 1)] {
-        db_client
-            .execute(
-                "INSERT INTO users (clerk_id, name, organization) VALUES ($1, $2, $3)",
-                &[&user, &user, &org_id],
-            )
-            .await
-            .unwrap();
-    }
 }
 
 #[tokio::test]

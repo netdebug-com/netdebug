@@ -7,7 +7,7 @@ use libwebserver::remotedb_client::{RemoteDBClient, RemoteDBClientMessages, Stor
 use tokio_postgres::types::ToSql;
 use uuid::Uuid;
 
-mod db_utils;
+pub mod db_utils;
 
 use db_utils::mk_test_db;
 /**

@@ -1,4 +1,4 @@
-mod db_utils;
+pub mod db_utils;
 use std::sync::Arc;
 
 use clerk_rs::models::User as ClerkUser;
