@@ -32,6 +32,8 @@ pub struct Secrets {
     pub timescale_db_read_user: Option<String>,
     /// Secret for the timescale_db account with READ permissions
     pub timescale_db_read_secret: Option<String>,
+    /// Secret for the timescale_db account with READ permissions
+    pub timescale_db_base_url: Option<String>,
     /// Secret for Clerk.com auth service for the dev deployment
     pub clerk_auth_dev_secret: Option<String>,
     /// Secret for Clerk.com auth service for the production deployment
@@ -45,7 +47,7 @@ impl Secrets {
         Ok(toml::from_str(&contents)?)
     }
 
-    #[cfg(test)]
+    // NOTE: can't be #[cfg(test)] as we need it in integrationt tests
     pub fn make_mock() -> Secrets {
         let alice = "Alice".to_string();
         let pass = "AliceSuperSecret42".to_string();
@@ -54,6 +56,7 @@ impl Secrets {
             timescale_db_write_secret: Some(pass.clone()),
             timescale_db_read_user: Some(alice.clone()),
             timescale_db_read_secret: Some(pass.clone()),
+            timescale_db_base_url: None, // force tests to fill in
             clerk_auth_dev_secret: Some(alice),
             clerk_auth_prod_secret: Some(pass),
         }

@@ -13,7 +13,7 @@ use clerk_rs::{
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use log::info;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc};
 use thiserror::Error as ThisError;
 use tokio_postgres::Client;
 
@@ -261,7 +261,9 @@ pub struct UserServiceData {
     /// A wrappper around the auth and REST APIs to clerk
     client: Arc<Clerk>,
     /// A cached list of the Clerk public keys
-    jwks_models: Arc<JwksModel>,
+    jwks_models: Option<Arc<JwksModel>>,
+    /// for testing, we can disable auth and approve everything
+    disable_auth_for_testing: bool,
 }
 
 impl UserServiceData {
@@ -275,7 +277,26 @@ impl UserServiceData {
         let jwks_models = Arc::new(Jwks::get_jwks(&client).await.unwrap());
         UserServiceData {
             client,
-            jwks_models,
+            jwks_models: Some(jwks_models),
+            disable_auth_for_testing: false,
+        }
+    }
+
+    /// Setting this means that the user can pass a jwt String equal to the
+    /// name of the person they want to authenticate as and it will return
+    /// true if that user exists
+    ///
+    /// ONLY USE IN TESTING!
+    /// NOTE: we don't wrap this in #[cfg(test)] b/c we need to use it
+    /// in the integration tests which don't complile with #[cfg(test)]
+    pub fn disable_auth_for_testing() -> UserServiceData {
+        let config = ClerkConfiguration::new(None, None, None, None);
+        let client = Arc::new(Clerk::new(config.clone()));
+        // TODO: decide if we want to/can cache the JWT models; still not super sure what they are
+        UserServiceData {
+            client,
+            jwks_models: None,
+            disable_auth_for_testing: true,
         }
     }
 
@@ -318,10 +339,54 @@ impl UserServiceData {
     ) -> Result<Option<clerk_rs::models::User>, UserAuthError> {
         // TODO: remove the unwrap()s! and return a joined error code
         // TODO: need to write custom validator - clerk_rs has a validator for Actix but that's not what we want
-        let jwt = self.validate_clerk_jwt(jwt)?;
-        let user_id = jwt.sub; // With Clerk's JWT, the 'sub' is the user_id
-        let user = self.get_user(&user_id).await?;
-        Ok(Some(user))
+        if self.disable_auth_for_testing {
+            // with auth disabled for testing, the user can just pass their name in the jwt
+            // ... wish this implemented Default()
+            Ok(Some(clerk_rs::models::User {
+                id: Some(jwt.to_string()),
+                object: None,
+                external_id: None,
+                primary_email_address_id: None,
+                primary_phone_number_id: None,
+                primary_web3_wallet_id: None,
+                username: Some(Some(jwt.to_string())),
+                first_name: Some(Some(jwt.to_string())),
+                last_name: None,
+                profile_image_url: None,
+                image_url: None,
+                has_image: None,
+                public_metadata: None,
+                private_metadata: None,
+                unsafe_metadata: None,
+                gender: None,
+                birthday: None,
+                email_addresses: None,
+                phone_numbers: None,
+                web3_wallets: None,
+                password_enabled: None,
+                two_factor_enabled: None,
+                totp_enabled: None,
+                backup_code_enabled: None,
+                external_accounts: None,
+                saml_accounts: None,
+                last_sign_in_at: None,
+                banned: None,
+                locked: None,
+                lockout_expires_in_seconds: None,
+                verification_attempts_remaining: None,
+                updated_at: None,
+                created_at: None,
+                delete_self_enabled: None,
+                create_organization_enabled: None,
+                last_active_at: None,
+            }))
+        } else {
+            // for production, we validate the jwt against Clerk
+            let jwt = self.validate_clerk_jwt(jwt)?;
+            let user_id = jwt.sub; // With Clerk's JWT, the 'sub' is the user_id
+            let user = self.get_user(&user_id).await?;
+            Ok(Some(user))
+        }
     }
 
     /// Parse and Validate the JWT from Clerk
@@ -335,7 +400,15 @@ impl UserServiceData {
             None => return Err(UserAuthError::JwtHeaderNoKeyId),
         };
         // Step #2: Find the public key that matches the signature key
-        let pub_key = match self.jwks_models.keys.iter().find(|k| k.kid == kid) {
+        let pub_key = match self
+            .jwks_models
+            .as_ref()
+            // NOTE: these are cached when creating the UserService unless we're a Mock
+            .expect("Cached jwks_models")
+            .keys
+            .iter()
+            .find(|k| k.kid == kid)
+        {
             Some(key) => key,
             None => return Err(UserAuthError::PublicKeyNotFound(kid)),
         };
@@ -353,38 +426,6 @@ impl UserServiceData {
         // This call validates both the crypto and the timestamps, AFAICT
         let parsed_jwt = jsonwebtoken::decode::<ClerkJwt>(jwt, &decoding_key, &validation)?;
         Ok(parsed_jwt.claims)
-    }
-}
-
-/// Mock version of [NetDebugAuthBackend]
-#[derive(Debug, Clone, Default)]
-pub struct MockAuthBackend {
-    pub user_db: HashMap<String, NetDebugUser>,
-}
-
-impl MockAuthBackend {
-    #[allow(unused)] // odd that this complains that it's unused but also 'pub'
-    pub fn add_user(&mut self, user_id: String, user: NetDebugUser) {
-        self.user_db.insert(user_id, user);
-    }
-}
-
-#[async_trait]
-impl AuthnBackend for MockAuthBackend {
-    type User = NetDebugUser;
-    type Credentials = AuthCredentials;
-    type Error = UserAuthError;
-
-    async fn authenticate(
-        &self,
-        creds: Self::Credentials,
-    ) -> Result<Option<Self::User>, Self::Error> {
-        // fake auth - assume the jwt is the user name and if it exists in our db, just accept it
-        Ok(self.user_db.get(&creds.clerk_jwt).cloned())
-    }
-
-    async fn get_user(&self, user_id: &UserId<Self>) -> Result<Option<Self::User>, Self::Error> {
-        Ok(self.user_db.get(user_id).cloned())
     }
 }
 
