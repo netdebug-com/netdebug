@@ -57,14 +57,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .parse()?;
     let listen_addr = std::net::SocketAddr::new(ip, args.listen_port);
 
-    // Chrome and other browsers have so many safe-guards that it's seemingly
-    // impossible (Rob spent many hours) to do cookies/session keys unencrypted.
-    // As a result, we run encrypted even in development mode
-    let run_encrypted = if !args.force_unencrypted {
-        info!("Running with TLS/Encypted mode");
-        true
+    let run_encrypted = if args.production {
+        if !args.force_unencrypted {
+            info!("Running with TLS/Encypted mode");
+            true
+        } else {
+            warn!("--force-unencrypted set in PROD!?, hope you know what you're doing!?");
+            false
+        }
     } else {
-        warn!("--force-unencrypted set, hope you know what you're doing!?");
+        info!("Running unencrypted in dev mode");
         false
     };
 
