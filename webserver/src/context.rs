@@ -1,5 +1,10 @@
 use std::{
-    collections::HashSet, error::Error, net::IpAddr, str::FromStr, sync::Arc, time::Duration,
+    collections::HashSet,
+    error::Error,
+    net::IpAddr,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
 use clap::Parser;
@@ -320,39 +325,35 @@ impl UserDb {
     }
 }
 
+pub const TEST_PASSWD: &str = "test";
+pub fn make_test_context() -> Context {
+    let test_pass = TEST_PASSWD;
+    let test_hash = UserDb::new_password(test_pass).unwrap();
+    // create trackers but don't connect them to anything...
+    let (connection_tracker_tx, _rx) = tokio::sync::mpsc::channel(128);
+    let (topology_server_tx, _rx) = tokio::sync::mpsc::channel(128);
+    let (remotedb_client, _rx) = tokio::sync::mpsc::channel(128);
+    let counter_registries = SuperRegistry::new(Instant::now()).registries();
+    Arc::new(RwLock::new(WebServerContext {
+        user_db: UserDb::testing_demo(test_hash),
+        html_root: "html".to_string(),
+        wasm_root: "web-client/pkg".to_string(),
+        pcap_device: libconntrack::pcap::lookup_egress_device().unwrap(),
+        local_tcp_listen_port: 3030,
+        local_ips: HashSet::new(),
+        connection_tracker: connection_tracker_tx,
+        topology_server: topology_server_tx,
+        max_connections_per_tracker: 4096,
+        counter_registries,
+        remotedb_client: Some(remotedb_client),
+        secrets: Secrets::default(),
+        production: false,
+    }))
+}
+
 #[cfg(test)]
 pub mod test {
     use super::*;
-
-    use crate::context::{UserDb, WebServerContext};
-    use std::{sync::Arc, time::Instant};
-    use tokio::sync::RwLock;
-
-    pub const TEST_PASSWD: &str = "test";
-    pub fn make_test_context() -> Context {
-        let test_pass = TEST_PASSWD;
-        let test_hash = UserDb::new_password(test_pass).unwrap();
-        // create trackers but don't connect them to anything...
-        let (connection_tracker_tx, _rx) = tokio::sync::mpsc::channel(128);
-        let (topology_server_tx, _rx) = tokio::sync::mpsc::channel(128);
-        let (remotedb_client, _rx) = tokio::sync::mpsc::channel(128);
-        let counter_registries = SuperRegistry::new(Instant::now()).registries();
-        Arc::new(RwLock::new(WebServerContext {
-            user_db: UserDb::testing_demo(test_hash),
-            html_root: "html".to_string(),
-            wasm_root: "web-client/pkg".to_string(),
-            pcap_device: libconntrack::pcap::lookup_egress_device().unwrap(),
-            local_tcp_listen_port: 3030,
-            local_ips: HashSet::new(),
-            connection_tracker: connection_tracker_tx,
-            topology_server: topology_server_tx,
-            max_connections_per_tracker: 4096,
-            counter_registries,
-            remotedb_client: Some(remotedb_client),
-            secrets: Secrets::default(),
-            production: false,
-        }))
-    }
 
     #[test]
     fn uuid_for_webserver_conn_log() {

@@ -114,7 +114,7 @@ pub enum RemoteDBClientMessages {
 
 // full URL is postgres://rw_user:PASSWORD@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require
 const PRODUCTION_DB_DRIVER: &str = "postgres";
-const PRODUCTION_DB_URL_BASE: &str =
+pub const PRODUCTION_DB_URL_BASE: &str =
     "ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require";
 /// Create the URL to the production DB server.  There are different URLs for
 /// connections with read-only vs. write priviledges
@@ -159,10 +159,14 @@ fn make_db_url(secrets: &Secrets, is_readonly: bool) -> MakeDbUrl {
         )
     };
 
+    let base_url = secrets
+        .timescale_db_base_url
+        .clone()
+        .expect("Need to specify timescaledb_base_url in secrets");
     MakeDbUrl {
         url_with_auth: format!(
             "{}://{}:{}@{}",
-            PRODUCTION_DB_DRIVER, user, passwd, PRODUCTION_DB_URL_BASE
+            PRODUCTION_DB_DRIVER, user, passwd, base_url
         ),
         url_without_auth: format!(
             "{}://{}:{}@{}",

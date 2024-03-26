@@ -2,11 +2,14 @@ use pg_embed::pg_fetch::{PgFetchSettings, PG_V13};
 use pg_embed::pg_types::PgResult;
 use pg_embed::postgres::{PgEmbed, PgSettings};
 use rand::Rng;
+use std::time::Instant;
 use std::{path::PathBuf, time::Duration};
 
 use pg_embed::pg_enums::PgAuthMethod;
 use tokio_postgres::Client;
 
+pub const TEST_DB_USER: &str = "postgres";
+pub const TEST_DB_PASSWD: &str = "postgres";
 /// Wrap the pg_embed crate to get a convenient 'download on demand' postgres
 /// database for testing.  
 pub async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
@@ -19,8 +22,8 @@ pub async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
         // Where to store the postgresql database
         database_dir: db_dir.clone(),
         port,
-        user: "postgres".to_string(),
-        password: "password".to_string(),
+        user: TEST_DB_USER.to_string(),
+        password: TEST_DB_PASSWD.to_string(),
         // authentication method
         auth_method: PgAuthMethod::Plain,
         persistent: false, // clean up after done
@@ -40,18 +43,23 @@ pub async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
         ..Default::default()
     };
 
+    let start = Instant::now();
+    println!("DB_PERF: Start: {:?}", start.elapsed());
     // Create a new instance
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
-
+    println!("DB_PERF: Done new(): {:?}", start.elapsed());
     // Download, unpack, create password file and database cluster
     pg.setup().await?;
+    println!("DB_PERF: Done setup(): {:?}", start.elapsed());
 
     // start postgresql database
     pg.start_db().await?;
+    println!("DB_PERF: Done start(): {:?}", start.elapsed());
 
     // create a new database
     // to enable migrations view the [Usage] section for details
     pg.create_database(database_name).await?;
+    println!("DB_PERF: Done create_database(): {:?}", start.elapsed());
 
     // drop a database
     // to enable migrations view [Usage] for details
@@ -81,6 +89,7 @@ pub async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
     tokio::spawn(async move {
         connection.await.unwrap();
     });
+    println!("DB_PERF: Done connect(): {:?}", start.elapsed());
     Ok((client, pg))
 }
 
