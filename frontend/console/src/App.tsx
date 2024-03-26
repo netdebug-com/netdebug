@@ -36,6 +36,8 @@ import {
   createHashRouter,
   createRoutesFromElements,
 } from "react-router-dom";
+import { get_rest_url, loadDataWithAuth } from "./console_utlils";
+import { DataLoadingState, PublicOrganizationInfo } from "./common";
 
 const router = createHashRouter(
   createRoutesFromElements(
@@ -101,14 +103,19 @@ export function TestApp() {
   // and (for this code at least) every time we get a REST API token, test it
   const [organization, setOrganization] = useState<string | null>(null);
   useEffect(() => {
-    if (login === null) {
-      setOrganization(null);
-    } else {
-      fetch(get_rest_url("api/organization_info"))
-        .then((resp) => resp.json())
-        .then((org) => setOrganization(JSON.stringify(org, undefined, 2)));
-    }
-  }, [login]);
+    loadDataWithAuth(
+      "api/organization_info",
+      (resp: DataLoadingState<PublicOrganizationInfo>) => {
+        if (resp.isPending) {
+          setOrganization("Pending...");
+        } else if (resp.error) {
+          setOrganization("Error: " + resp.error);
+        } else {
+          setOrganization(resp.data.name);
+        }
+      },
+    );
+  }, []);
 
   return (
     <div>
@@ -129,20 +136,10 @@ export function TestApp() {
             <li> jWt={jwt && jwt} </li>
             <li> login={login && login.headers && login.status} </li>
             <li> Test: {test && test} </li>
-            <li>
-              organization:
-              {organization && organization}{" "}
-            </li>
+            <li> yay organization: {organization && organization}</li>
           </ul>
         </div>
       </SignedIn>
     </div>
   );
 }
-
-function get_rest_url(path: string): string {
-  // e.g., "https://hostname:port"
-  return window.location.origin + "/" + path;
-}
-
-export default App;
