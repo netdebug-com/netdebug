@@ -36,7 +36,7 @@ pub struct PublicOrganizationInfo {
 pub type OrganizationId = i64;
 /// The elements of DeviceInfo that are safe for anyone to read
 /// i.e., "public" in the GUI frontend
-#[derive(Debug, Serialize, Deserialize, TypeDef)]
+#[derive(Debug, Serialize, Deserialize, TypeDef, PartialEq, PartialOrd)]
 pub struct PublicDeviceInfo {
     /// The unique ID of this device; note we intentionally have it as a string to not force
     /// the Uuid dependency into this crate

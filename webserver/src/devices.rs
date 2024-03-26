@@ -37,7 +37,7 @@ impl DeviceInfo {
         let rows = client
             .query(
                 &format!(
-                    "SELECT uuid, organization, salt, crypt, name, description, created {} WHERE id = $1",
+                    "SELECT uuid, organization, salt, crypt, name, description, created FROM {} WHERE uuid = $1",
                     DEVICE_TABLE_NAME
                 ),
                 &[&uuid],
@@ -90,7 +90,7 @@ impl DeviceInfo {
         let rows = client
             .query(
                 &format!(
-                    "SELECT uuid, organization, salt, crypt, name, description, created {} {}",
+                    "SELECT uuid, organization, salt, crypt, name, description, created FROM {} {}",
                     DEVICE_TABLE_NAME, where_clause
                 ),
                 &[],
