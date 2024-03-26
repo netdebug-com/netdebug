@@ -14,7 +14,7 @@ use crate::{
 #[cfg(not(windows))]
 use futures_util::StreamExt;
 use itertools::Itertools;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use pcap::Capture;
 
 use crate::owned_packet::OwnedParsedPacket;
@@ -273,6 +273,7 @@ pub fn blocking_pcap_loop(
     let mut capture = match capture_res {
         Ok(capture) => capture,
         Err(e) => {
+            error!("Failed to open and init pcap device: {}", e);
             return Err(PcapLoopError::OpenDevice(e));
         }
     };

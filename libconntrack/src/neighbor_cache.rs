@@ -226,7 +226,7 @@ impl<'a> NeighborCache<'a> {
     ///
     /// See https://en.wikipedia.org/wiki/Neighbor_Discovery_Protocol#Messages_formats for format
     /// but it's basically: first 4 bytes are reserved, second 16 bytes at the target address
-    pub(crate) fn process_ndp_packet(
+    pub fn process_ndp_packet(
         &mut self,
         packet: Box<OwnedParsedPacket>,
     ) -> Result<(), NeighborParseError> {

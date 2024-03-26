@@ -3022,6 +3022,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
+name = "pingtree"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "common",
+ "common-wasm",
+ "libconntrack",
+ "libconntrack-wasm",
+ "log",
+ "mac_address 1.1.5 (git+https://github.com/netdebug-com/mac_address?branch=master)",
+ "tokio",
+]
+
+[[package]]
 name = "pkg-config"
 version = "0.3.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
