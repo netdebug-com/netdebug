@@ -1,4 +1,4 @@
-import { GridColDef } from "@mui/x-data-grid";
+import { GridColDef, GridValueFormatterParams } from "@mui/x-data-grid";
 import { neverReached, prettyPrintSiUnits, sortCmpWithNull } from "./utils";
 import {
   AggregateStatEntry,
@@ -15,7 +15,8 @@ export function getDefaultGridColDefWithUnits(unitSuffix: string): {
   sortComparator: GridColDef["sortComparator"];
 } {
   return {
-    valueFormatter: (params) => prettyPrintSiUnits(params.value, unitSuffix),
+    valueFormatter: (params: GridValueFormatterParams) =>
+      prettyPrintSiUnits(params.value, unitSuffix),
     align: "right",
     flex: FLEX_VALUE_FOR_NUMERIC_COLS,
     headerAlign: "right",
@@ -31,7 +32,7 @@ export function getDefaultRttGridColDef(): {
   sortComparator: GridColDef["sortComparator"];
 } {
   return {
-    valueFormatter: (params) => {
+    valueFormatter: (params: GridValueFormatterParams) => {
       if (params.value === null || params.value === undefined) {
         return "-";
       } else {
@@ -53,7 +54,7 @@ export function getDefaultPercentageGridColDef(): {
   sortComparator: GridColDef["sortComparator"];
 } {
   return {
-    valueFormatter: (params) => {
+    valueFormatter: (params: GridValueFormatterParams) => {
       const percent = params.value;
       return percent === null
         ? "None"
@@ -85,6 +86,10 @@ export function aggregateStatEntryDefaultSortFn(entries: AggregateStatEntry[]) {
   );
 }
 
+interface AggregatesStatsParams {
+  row: AggregateStatEntry;
+}
+
 export function getColumns(fieldsToInclude: string[]) {
   const defaultColumns: GridColDef[] = [
     {
@@ -92,84 +97,98 @@ export function getColumns(fieldsToInclude: string[]) {
       headerName: "Name",
       hideable: false,
       flex: 60,
-      valueGetter: (params) => getNameFromAggKind(params.row.kind),
+      valueGetter: (params: AggregatesStatsParams) =>
+        getNameFromAggKind(params.row.kind),
     },
     {
       field: "send_bw",
       headerName: "Send B/W",
-      valueGetter: (params) => params.row.summary.tx?.last_min_byte_rate,
+      valueGetter: (params: AggregatesStatsParams) =>
+        params.row.summary.tx?.last_min_byte_rate,
       ...getDefaultGridColDefWithUnits("B/s"),
     },
     {
       field: "recv_bw",
       headerName: "Recv B/W",
-      valueGetter: (params) => params.row.summary.rx?.last_min_byte_rate,
+      valueGetter: (params: AggregatesStatsParams) =>
+        params.row.summary.rx?.last_min_byte_rate,
       ...getDefaultGridColDefWithUnits("B/s"),
     },
     {
       field: "send_burst_bw",
       headerName: "Send Burst B/W",
-      valueGetter: (params) => params.row.summary.tx?.burst_byte_rate,
+      valueGetter: (params: AggregatesStatsParams) =>
+        params.row.summary.tx?.burst_byte_rate,
       ...getDefaultGridColDefWithUnits("B/s"),
     },
     {
       field: "recv_burst_bw",
       headerName: "Recv Burst B/W",
-      valueGetter: (params) => params.row.summary.rx?.burst_byte_rate,
+      valueGetter: (params: AggregatesStatsParams) =>
+        params.row.summary.rx?.burst_byte_rate,
       ...getDefaultGridColDefWithUnits("B/s"),
     },
     {
       field: "send_bytes",
       headerName: "Send Bytes",
-      valueGetter: (params) => params.row.summary.tx?.bytes,
+      valueGetter: (params: AggregatesStatsParams) =>
+        params.row.summary.tx?.bytes,
       ...getDefaultGridColDefWithUnits("B"),
     },
     {
       field: "recv_bytes",
       headerName: "Recv Bytes",
-      valueGetter: (params) => params.row.summary.rx?.bytes,
+      valueGetter: (params: AggregatesStatsParams) =>
+        params.row.summary.rx?.bytes,
       ...getDefaultGridColDefWithUnits("B"),
     },
     {
       field: "send_lost_bytes",
       headerName: "Send Lost Bytes",
-      valueGetter: (params) => params.row.summary.tx?.lost_bytes,
+      valueGetter: (params: AggregatesStatsParams) =>
+        params.row.summary.tx?.lost_bytes,
       ...getDefaultGridColDefWithUnits("B"),
     },
     {
       field: "recv_lost_bytes",
       headerName: "Recv Lost Bytes",
-      valueGetter: (params) => params.row.summary.rx?.lost_bytes,
+      valueGetter: (params: AggregatesStatsParams) =>
+        params.row.summary.rx?.lost_bytes,
       ...getDefaultGridColDefWithUnits("B"),
     },
     {
       field: "send_loss",
       headerName: "Send Loss",
-      valueGetter: (params) => calculateLossPercentage(params.row.summary.tx),
+      valueGetter: (params: AggregatesStatsParams) =>
+        calculateLossPercentage(params.row.summary.tx),
       ...getDefaultPercentageGridColDef(),
     },
     {
       field: "recv_loss",
       headerName: "Recv Loss",
-      valueGetter: (params) => calculateLossPercentage(params.row.summary.rx),
+      valueGetter: (params: AggregatesStatsParams) =>
+        calculateLossPercentage(params.row.summary.rx),
       ...getDefaultPercentageGridColDef(),
     },
     {
       field: "min_rtt",
       headerName: "min RTT",
-      valueGetter: (params) => params.row.summary.tx.rtt_stats_ms?.min,
+      valueGetter: (params: AggregatesStatsParams) =>
+        params.row.summary.tx.rtt_stats_ms?.min,
       ...getDefaultRttGridColDef(),
     },
     {
       field: "mean_rtt",
       headerName: "avg RTT",
-      valueGetter: (params) => params.row.summary.tx.rtt_stats_ms?.mean,
+      valueGetter: (params: AggregatesStatsParams) =>
+        params.row.summary.tx.rtt_stats_ms?.mean,
       ...getDefaultRttGridColDef(),
     },
     {
       field: "max_rtt",
       headerName: "max RTT",
-      valueGetter: (params) => params.row.summary.tx.rtt_stats_ms?.max,
+      valueGetter: (params: AggregatesStatsParams) =>
+        params.row.summary.tx.rtt_stats_ms?.max,
       ...getDefaultRttGridColDef(),
     },
   ];
