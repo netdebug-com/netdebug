@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/clerk-react";
 import { DataLoadingCallback } from "./common";
 // Make rest calls back to the URL that served us the page
 // This allows us to not worry about dev vs. prod URLs
@@ -42,26 +41,24 @@ export function loadDataWithAuth<T>(
       } else {
         if (resp.status == 401) {
           // no valid session cookie: try to get a new session cookie and retry route
-          const auth = useAuth(); // magic from Clerk.com
-          auth.getToken().then((jwt) => {
-            fetch(get_rest_url("api/login?clerk_jwt=" + jwt)).then(
-              (auth_resp) => {
-                if (auth_resp.ok) {
-                  // got a new session token, retry route
-                  return fetch(get_rest_url(route));
-                } else {
-                  // failed to get the auth; report the error
-                  throw Error(
-                    "Failed to re-authenticate to " +
-                      get_rest_url(route) +
-                      " status=" +
-                      auth_resp.status +
-                      " " +
-                      auth_resp.text(),
-                  );
-                }
-              },
-            );
+          // if the user is logged in via clerk, then they will have a __session
+          // cookie already set, so we just need to call the login API which translates
+          // that into a netdebug session cookie (once we validate they have an account)
+          fetch(get_rest_url("api/login")).then((auth_resp) => {
+            if (auth_resp.ok) {
+              // got a new session token, retry route
+              return fetch(get_rest_url(route));
+            } else {
+              // failed to get the auth; report the error
+              throw Error(
+                "Failed to re-authenticate to " +
+                  get_rest_url(route) +
+                  " status=" +
+                  auth_resp.status +
+                  " " +
+                  auth_resp.text(),
+              );
+            }
           });
         } else {
           // didn't get 200 or 401 from the original call, just report error
