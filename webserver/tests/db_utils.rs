@@ -1,7 +1,15 @@
+use axum::Router;
+use axum_login::tower_sessions::{MemoryStore, SessionManagerLayer};
+use axum_login::AuthManagerLayerBuilder;
+use libwebserver::context::make_test_context;
+use libwebserver::http_routes::setup_protected_rest_routes_with_auth_layer;
+use libwebserver::secrets_db::Secrets;
+use libwebserver::users::{NetDebugUserBackend, UserServiceData};
 use pg_embed::pg_fetch::{PgFetchSettings, PG_V13};
 use pg_embed::pg_types::PgResult;
 use pg_embed::postgres::{PgEmbed, PgSettings};
 use rand::Rng;
+use std::sync::Arc;
 use std::time::Instant;
 use std::{path::PathBuf, time::Duration};
 
@@ -99,4 +107,47 @@ fn db_dir(test_name: &str) -> PathBuf {
     db_path.push(format!("netdebug-db-test-{}", test_name));
     println!("Starting DB {} in {}", test_name, db_path.display());
     db_path
+}
+
+pub async fn make_mock_protected_routes(test_db: &PgEmbed) -> Router {
+    let mut mock_secrets = Secrets::make_mock();
+    mock_secrets.timescale_db_read_user = Some(TEST_DB_USER.to_string());
+    mock_secrets.timescale_db_read_secret = Some(TEST_DB_PASSWD.to_string());
+    // this is the postgres://user@host:port/path?options=stuff
+    // we just want everything after the '@'
+    let url = test_db
+        .db_uri
+        .clone()
+        .split('@')
+        .collect::<Vec<&str>>()
+        .get(1)
+        .unwrap()
+        .to_string();
+    mock_secrets.timescale_db_base_url = Some(url);
+    let context = make_test_context();
+
+    let session_store = MemoryStore::default();
+    let session_layer = SessionManagerLayer::new(session_store).with_secure(false);
+    // Start the user service in 'auth disabled' mode where jwt=$username
+    let user_service = UserServiceData::disable_auth_for_testing();
+    let mock_backend = NetDebugUserBackend::new(Arc::new(user_service), &mock_secrets)
+        .await
+        .unwrap();
+    let auth_layer = AuthManagerLayerBuilder::new(mock_backend, session_layer).build();
+    setup_protected_rest_routes_with_auth_layer(auth_layer, mock_secrets)
+        .await
+        .with_state(context)
+    // context not needed except to make compiler happy
+}
+
+pub async fn add_fake_users(db_client: &Client) {
+    for (user, org_id) in [("Alice", 0i64), ("Bob", 1)] {
+        db_client
+            .execute(
+                "INSERT INTO users (clerk_id, name, organization) VALUES ($1, $2, $3)",
+                &[&user, &user, &org_id],
+            )
+            .await
+            .unwrap();
+    }
 }
