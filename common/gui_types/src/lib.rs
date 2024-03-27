@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use libconntrack_wasm::{
     topology_server_messages::{CongestionSummary, DesktopToTopologyServer},
     AggregateStatEntry, ChartJsBandwidth, ConnectionMeasurements, DnsTrackerEntry,
@@ -10,6 +11,7 @@ use libconntrack_wasm::{
  */
 use serde::{Deserialize, Serialize};
 use typescript_type_def::TypeDef;
+use uuid::Uuid;
 
 pub fn get_git_hash_version() -> String {
     env!("GIT_HASH").to_string()
@@ -31,6 +33,24 @@ pub struct PublicOrganizationInfo {
     pub admin_contact: Option<String>,
 }
 
+pub type OrganizationId = i64;
+/// The elements of DeviceInfo that are safe for anyone to read
+/// i.e., "public" in the GUI frontend
+#[derive(Debug, Serialize, Deserialize, TypeDef)]
+pub struct PublicDeviceInfo {
+    /// The unique ID of this device; note we intentionally have it as a string to not force
+    /// the Uuid dependency into this crate
+    #[type_def(type_of = "String")]
+    pub uuid: Uuid,
+    /// E.g., hostname
+    pub name: Option<String>,
+    /// Which organization does this belong to by internal ID
+    pub organization_id: OrganizationId,
+    pub description: Option<String>,
+    #[type_def(type_of = "String")]
+    pub created: DateTime<Utc>,
+}
+
 // A helper type alias. It list all the types that are used in the UI
 pub type GuiApiTypes = (
     ConnectionMeasurements,
@@ -42,4 +62,5 @@ pub type GuiApiTypes = (
     ExportedNeighborState,
     DesktopToTopologyServer,
     PublicOrganizationInfo,
+    PublicDeviceInfo,
 );

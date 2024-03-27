@@ -1,15 +1,17 @@
 use axum::{
     body::Body,
-    extract::State,
+    extract::{Path, State},
     http::{Response, StatusCode},
     response::IntoResponse,
     Json,
 };
 use axum_login::AuthUser;
-use gui_types::PublicOrganizationInfo;
+use gui_types::{PublicDeviceInfo, PublicOrganizationInfo};
 use log::warn;
+use uuid::Uuid;
 
 use crate::{
+    devices::DeviceInfo,
     mockable_dbclient::MockableDbClient,
     organizations::OrganizationInfo,
     users::{AuthSession, NetDebugUser},
@@ -35,6 +37,53 @@ pub async fn test_auth(
 ) -> Result<(axum::http::StatusCode, String), Response<Body>> {
     let user = check_user(auth_session.user)?;
     Ok((StatusCode::OK, format!("Hello {}", user.id())))
+}
+
+/// Get a list of devices in the user's org
+/// By default, a user can only get devices in their own org
+pub async fn get_devices(
+    auth_session: AuthSession,
+    State(client): State<MockableDbClient>,
+) -> Result<Json<Vec<PublicDeviceInfo>>, Response<Body>> {
+    let user = check_user(auth_session.user)?;
+    match DeviceInfo::get_devices(Some(user.organization_id), client.get_client()).await {
+        Ok(devices) => {
+            let pub_devices: Vec<PublicDeviceInfo> =
+                devices.iter().map(|d| d.clone().into()).collect();
+            Ok(Json(pub_devices))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Backend database error: {}", e),
+        )
+            .into_response()),
+    }
+}
+
+/// Get a list of devices in the user's org
+/// By default, a user can only get devices in their own org
+pub async fn get_device(
+    Path(uuid): Path<Uuid>,
+    auth_session: AuthSession,
+    State(client): State<MockableDbClient>,
+) -> Result<Json<PublicDeviceInfo>, Response<Body>> {
+    let user = check_user(auth_session.user)?;
+    // security check is done inside DeviceInfo::from_uuid()
+    match DeviceInfo::from_uuid(uuid, &user, client.get_client()).await {
+        Ok(d_opt) => match d_opt {
+            Some(d) => Ok(Json(d.into())),
+            None => Err((
+                StatusCode::NOT_FOUND,
+                format!("Uuid {} not found for your org", uuid),
+            )
+                .into_response()),
+        },
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Backend database error: {}", e),
+        )
+            .into_response()),
+    }
 }
 
 pub async fn get_organization_info(

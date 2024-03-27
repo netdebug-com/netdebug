@@ -10,6 +10,7 @@ use clerk_rs::{
     validators::actix::ClerkJwt,
     ClerkConfiguration,
 };
+use gui_types::OrganizationId;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,7 @@ use thiserror::Error as ThisError;
 use tokio_postgres::Client;
 
 use crate::{
+    organizations::NETDEBUG_EMPLOYEE_ORG_ID,
     remotedb_client::{RemoteDBClient, RemoteDBClientError},
     secrets_db::Secrets,
 };
@@ -119,6 +121,11 @@ impl NetDebugUser {
                 user_id
             ))),
         }
+    }
+    /// Is the user with user_org_id allowed to see the object with object_org_id?
+    /// Yes if they are the same and yes if the user's org is the special netdebug employee
+    pub fn check_org_allowed(&self, object_org_id: OrganizationId) -> bool {
+        self.organization_id == object_org_id || self.organization_id == NETDEBUG_EMPLOYEE_ORG_ID
     }
 }
 

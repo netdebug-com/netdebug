@@ -1642,6 +1642,7 @@ dependencies = [
  "serde",
  "serde_json",
  "typescript-type-def",
+ "uuid",
 ]
 
 [[package]]
