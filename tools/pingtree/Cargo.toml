@@ -17,4 +17,4 @@ libconntrack = { path = "../../libconntrack" }
 libconntrack-wasm = { path = "../../libconntrack-wasm" }
 log = "0.4"
 mac_address = { workspace = true }
-tokio = { workspace = "true", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
