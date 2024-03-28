@@ -11,8 +11,8 @@ use crate::{desktop_websocket, webtest};
 use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use axum::routing;
 use axum::Router;
-use axum::{routing, Form};
 use axum_extra::TypedHeader;
 use axum_login::tower_sessions::{MemoryStore, SessionManagerLayer, SessionStore};
 use axum_login::{predicate_required, AuthManagerLayer, AuthManagerLayerBuilder, AuthnBackend};
@@ -211,7 +211,6 @@ pub async fn setup_protected_rest_routes_with_auth_layer<
             StatusCode::UNAUTHORIZED
         ))
         // these are unauthenticated routes to get the auth token
-        .route("/login", routing::post(console_login))
         // TODO: decide whether having a login() function as a GET is a CSRV vulnerability
         .route("/login", routing::get(console_login))
         .layer(auth_layer)
@@ -297,26 +296,39 @@ async fn get_counters_handler(State(context): State<Context>) -> String {
     serde_json::to_string_pretty(&map).unwrap()
 }
 
+pub const CLERK_JWT_COOKIE_NAME: &str = "__session";
 async fn console_login(
     mut auth_session: AuthSession,
-    Form(creds): Form<AuthCredentials>,
+    TypedHeader(raw_cookie): TypedHeader<headers::Cookie>,
 ) -> impl IntoResponse {
-    let user = match auth_session.authenticate(creds.clone()).await {
-        Ok(Some(user)) => user,
-        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
-        Err(e) => {
-            warn!("console_login error: {}", e);
-            // don't return the error message to the user for 'security' reasons
-            return (StatusCode::INTERNAL_SERVER_ERROR, "".to_string()).into_response();
+    let cookie = raw_cookie.get(CLERK_JWT_COOKIE_NAME);
+    if let Some(clerk_jwt) = cookie {
+        let clerk_jwt = clerk_jwt.to_string();
+        let user = match auth_session
+            .authenticate(AuthCredentials { clerk_jwt })
+            .await
+        {
+            Ok(Some(user)) => user,
+            Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+            Err(e) => {
+                warn!("console_login error: {}", e);
+                // don't return the error message to the user for 'security' reasons
+                return (StatusCode::INTERNAL_SERVER_ERROR, "".to_string()).into_response();
+            }
+        };
+
+        if auth_session.login(&user).await.is_err() {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
-    };
-
-    if auth_session.login(&user).await.is_err() {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        // Redirect::to("/protected").into_response()
+        StatusCode::OK.into_response()
+    } else {
+        warn!(
+            "Called /api/console_login without {} cookie set",
+            CLERK_JWT_COOKIE_NAME
+        );
+        StatusCode::UNAUTHORIZED.into_response()
     }
-
-    // Redirect::to("/protected").into_response()
-    StatusCode::OK.into_response()
 }
 
 /*

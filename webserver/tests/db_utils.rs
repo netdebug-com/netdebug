@@ -5,7 +5,9 @@ use axum_login::tower_sessions::cookie::{self, Cookie};
 use axum_login::tower_sessions::{MemoryStore, SessionManagerLayer};
 use axum_login::AuthManagerLayerBuilder;
 use libwebserver::context::make_test_context;
-use libwebserver::http_routes::setup_protected_rest_routes_with_auth_layer;
+use libwebserver::http_routes::{
+    setup_protected_rest_routes_with_auth_layer, CLERK_JWT_COOKIE_NAME,
+};
 use libwebserver::secrets_db::Secrets;
 use libwebserver::users::{NetDebugUserBackend, UserServiceData};
 use pg_embed::pg_fetch::{PgFetchSettings, PG_V13};
@@ -188,7 +190,13 @@ pub async fn get_auth_token_from_rest_router(router: Router, user: &str) -> Stri
     let response = router
         .oneshot(
             Request::builder()
-                .uri(format!("/login?clerk_jwt={}", user))
+                .header(
+                    header::COOKIE,
+                    // in Mock mode, with UserServiceData.disable_auth_check
+                    // just set the JWT to the user you want to auth as
+                    format!("{}={}", CLERK_JWT_COOKIE_NAME, user),
+                )
+                .uri("/login")
                 .body(Body::empty())
                 .unwrap(),
         )
