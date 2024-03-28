@@ -25,13 +25,13 @@ import { RouterProvider } from "react-router-dom";
 import RootLayout from "./layouts/RootLayout";
 import {
   Route,
-  createHashRouter,
+  createBrowserRouter,
   createRoutesFromElements,
 } from "react-router-dom";
 import { DefaultErrorElement } from "./common";
 
 // TODO: change to createBrowserRouter()
-const router = createHashRouter(
+const router = createBrowserRouter(
   createRoutesFromElements(
     <Route
       path="/"
