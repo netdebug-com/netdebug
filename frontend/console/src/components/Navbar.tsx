@@ -7,7 +7,7 @@ import Box from "@mui/material/Box";
 
 const TAB_NAV_INFO = [
   { label: "Home", to: "/", exactMatch: true },
-  { label: "Test", to: "/test" },
+  { label: "Devices", to: "/devices" },
   { label: "About", to: "/about" },
 ];
 
