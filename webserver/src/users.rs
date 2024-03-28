@@ -335,7 +335,11 @@ impl UserServiceData {
         &self,
         user_id: &str,
     ) -> Result<clerk_rs::models::User, Error<GetUserError>> {
-        User::get_user(&self.client, user_id).await
+        if self.disable_auth_for_testing {
+            Ok(UserServiceData::make_mock_user(user_id))
+        } else {
+            User::get_user(&self.client, user_id).await
+        }
     }
 
     /// Parse the JWT and if it's valid, extract the 'sub' id and use that to lookup
@@ -349,50 +353,54 @@ impl UserServiceData {
         if self.disable_auth_for_testing {
             // with auth disabled for testing, the user can just pass their name in the jwt
             // ... wish this implemented Default()
-            Ok(Some(clerk_rs::models::User {
-                id: Some(jwt.to_string()),
-                object: None,
-                external_id: None,
-                primary_email_address_id: None,
-                primary_phone_number_id: None,
-                primary_web3_wallet_id: None,
-                username: Some(Some(jwt.to_string())),
-                first_name: Some(Some(jwt.to_string())),
-                last_name: None,
-                profile_image_url: None,
-                image_url: None,
-                has_image: None,
-                public_metadata: None,
-                private_metadata: None,
-                unsafe_metadata: None,
-                gender: None,
-                birthday: None,
-                email_addresses: None,
-                phone_numbers: None,
-                web3_wallets: None,
-                password_enabled: None,
-                two_factor_enabled: None,
-                totp_enabled: None,
-                backup_code_enabled: None,
-                external_accounts: None,
-                saml_accounts: None,
-                last_sign_in_at: None,
-                banned: None,
-                locked: None,
-                lockout_expires_in_seconds: None,
-                verification_attempts_remaining: None,
-                updated_at: None,
-                created_at: None,
-                delete_self_enabled: None,
-                create_organization_enabled: None,
-                last_active_at: None,
-            }))
+            Ok(Some(UserServiceData::make_mock_user(jwt)))
         } else {
             // for production, we validate the jwt against Clerk
             let jwt = self.validate_clerk_jwt(jwt)?;
             let user_id = jwt.sub; // With Clerk's JWT, the 'sub' is the user_id
             let user = self.get_user(&user_id).await?;
             Ok(Some(user))
+        }
+    }
+
+    fn make_mock_user(user: &str) -> clerk_rs::models::User {
+        clerk_rs::models::User {
+            id: Some(user.to_string()),
+            object: None,
+            external_id: None,
+            primary_email_address_id: None,
+            primary_phone_number_id: None,
+            primary_web3_wallet_id: None,
+            username: Some(Some(user.to_string())),
+            first_name: Some(Some(user.to_string())),
+            last_name: None,
+            profile_image_url: None,
+            image_url: None,
+            has_image: None,
+            public_metadata: None,
+            private_metadata: None,
+            unsafe_metadata: None,
+            gender: None,
+            birthday: None,
+            email_addresses: None,
+            phone_numbers: None,
+            web3_wallets: None,
+            password_enabled: None,
+            two_factor_enabled: None,
+            totp_enabled: None,
+            backup_code_enabled: None,
+            external_accounts: None,
+            saml_accounts: None,
+            last_sign_in_at: None,
+            banned: None,
+            locked: None,
+            lockout_expires_in_seconds: None,
+            verification_attempts_remaining: None,
+            updated_at: None,
+            created_at: None,
+            delete_self_enabled: None,
+            create_organization_enabled: None,
+            last_active_at: None,
         }
     }
 

@@ -1,4 +1,7 @@
+use axum::body::Body;
+use axum::http::{header, Request, Response, StatusCode};
 use axum::Router;
+use axum_login::tower_sessions::cookie::{self, Cookie};
 use axum_login::tower_sessions::{MemoryStore, SessionManagerLayer};
 use axum_login::AuthManagerLayerBuilder;
 use libwebserver::context::make_test_context;
@@ -12,12 +15,15 @@ use rand::Rng;
 use std::sync::Arc;
 use std::time::Instant;
 use std::{path::PathBuf, time::Duration};
+use tower::ServiceExt;
+use uuid::Uuid;
 
 use pg_embed::pg_enums::PgAuthMethod;
 use tokio_postgres::Client;
 
 pub const TEST_DB_USER: &str = "postgres";
 pub const TEST_DB_PASSWD: &str = "postgres";
+pub const TEST_NETDEBUG_SESSION_COOKIE: &str = "TestNetDebugSessionCookie";
 /// Wrap the pg_embed crate to get a convenient 'download on demand' postgres
 /// database for testing.  
 pub async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
@@ -104,7 +110,13 @@ pub async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
 fn db_dir(test_name: &str) -> PathBuf {
     let mut db_path = std::env::temp_dir();
 
-    db_path.push(format!("netdebug-db-test-{}", test_name));
+    // Put the PID back in the DB path now that I understand this is
+    // not the directory where things are cached
+    db_path.push(format!(
+        "netdebug-db-test-{}-{}",
+        test_name,
+        std::process::id()
+    ));
     println!("Starting DB {} in {}", test_name, db_path.display());
     db_path
 }
@@ -127,7 +139,9 @@ pub async fn make_mock_protected_routes(test_db: &PgEmbed) -> Router {
     let context = make_test_context();
 
     let session_store = MemoryStore::default();
-    let session_layer = SessionManagerLayer::new(session_store).with_secure(false);
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(false)
+        .with_name(TEST_NETDEBUG_SESSION_COOKIE);
     // Start the user service in 'auth disabled' mode where jwt=$username
     let user_service = UserServiceData::disable_auth_for_testing();
     let mock_backend = NetDebugUserBackend::new(Arc::new(user_service), &mock_secrets)
@@ -150,4 +164,66 @@ pub async fn add_fake_users(db_client: &Client) {
             .await
             .unwrap();
     }
+}
+
+pub async fn add_fake_devices(db_client: &Client) {
+    for (uuid, name, org_id) in [
+        (Uuid::new_v4(), "Alice's dev1", 0i64),
+        (Uuid::new_v4(), "Bob's dev2", 1),
+        (Uuid::new_v4(), "Cathy's dev3", 2),
+    ] {
+        db_client
+            .execute(
+                "INSERT INTO devices (uuid, name, organization) VALUES ($1, $2, $3)",
+                &[&uuid, &name, &org_id],
+            )
+            .await
+            .unwrap();
+    }
+}
+
+pub async fn get_auth_token_from_rest_router(router: Router, user: &str) -> String {
+    // `Router` implements `tower::Service<Request<Body>>` so we can
+    // call it like any tower service, no need to run an HTTP server.
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri(format!("/login?clerk_jwt={}", user))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    assert_eq!(status, StatusCode::OK);
+    let cookie = get_session_cookie(&response).unwrap().unwrap().clone();
+    assert_eq!(cookie.name(), TEST_NETDEBUG_SESSION_COOKIE);
+    cookie.value().to_string()
+}
+
+pub async fn get_resp_from_rest_router(
+    router: Router,
+    url: &str,
+    session_token: &str,
+) -> Response<Body> {
+    // `Router` implements `tower::Service<Request<Body>>` so we can
+    // call it like any tower service, no need to run an HTTP server.
+    let request = Request::builder()
+        .header(
+            header::COOKIE,
+            format!("{}={}", TEST_NETDEBUG_SESSION_COOKIE, session_token),
+        )
+        .uri(url)
+        .body(Body::empty())
+        .unwrap();
+    println!("Making request {:?}", request);
+    router.oneshot(request).await.unwrap()
+}
+
+pub fn get_session_cookie(res: &Response<Body>) -> Option<Result<Cookie, cookie::ParseError>> {
+    res.headers()
+        .get(header::SET_COOKIE)
+        .and_then(|h| h.to_str().ok())
+        .map(cookie::Cookie::parse)
 }

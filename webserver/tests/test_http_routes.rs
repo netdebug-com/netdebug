@@ -1,30 +1,20 @@
 pub mod db_utils;
-use crate::db_utils::{add_fake_users, make_mock_protected_routes, mk_test_db};
+use crate::db_utils::{
+    add_fake_users, get_auth_token_from_rest_router, get_session_cookie,
+    make_mock_protected_routes, mk_test_db,
+};
 
 /// Following examples from https://github.com/tokio-rs/axum/blob/main/examples/testing/src/main.rs#L85
 /// and
 /// https://docs.rs/axum-login/latest/src/axum_login/middleware.rs.html#303
 use axum::{
     body::Body,
-    http::{header, Request, StatusCode},
-    response::Response,
+    http::{Request, StatusCode},
 };
-use axum_login::tower_sessions::cookie;
 use http_body_util::BodyExt;
 use tower::ServiceExt; // for `call`, `oneshot`, and `ready`
 
 use libwebserver::remotedb_client::RemoteDBClient;
-
-fn get_session_cookie(res: &Response<Body>) -> Option<String> {
-    res.headers()
-        .get(header::SET_COOKIE)
-        .and_then(|h| h.to_str().ok())
-        .and_then(|cookie_str| {
-            let cookie = cookie::Cookie::parse(cookie_str);
-            cookie.map(|c| c.to_string()).ok()
-        })
-}
-
 #[tokio::test]
 async fn auth_check_no_auth() {
     let (db_client, test_db) = mk_test_db("test_http_routes_no_auth").await.unwrap();
@@ -66,24 +56,8 @@ async fn auth_check_with_get_auth() {
     add_fake_users(&db_client).await;
     let protected_routes = make_mock_protected_routes(&test_db).await;
 
-    // `Router` implements `tower::Service<Request<Body>>` so we can
-    // call it like any tower service, no need to run an HTTP server.
-    let response = protected_routes
-        .oneshot(
-            Request::builder()
-                .uri("/login?clerk_jwt=Alice")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    let status = response.status();
-    let cookie = get_session_cookie(&response);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    println!("Response={:#?}", body);
-    println!("Cookie={:?}", cookie);
-    assert_eq!(status, StatusCode::OK);
+    // this function will assert if we don't get the cookie
+    let _session_cookie = get_auth_token_from_rest_router(protected_routes, "Alice").await;
 }
 
 #[tokio::test]
@@ -113,8 +87,8 @@ async fn auth_check_with_post_auth() {
 
     let status = response.status();
     let cookie = get_session_cookie(&response);
+    println!("Cookie={:?}", cookie);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     println!("Response={:#?}", body);
-    println!("Cookie={:?}", cookie);
     assert_eq!(status, StatusCode::OK);
 }
