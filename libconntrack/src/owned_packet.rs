@@ -831,6 +831,7 @@ impl<'de> Deserialize<'de> for OwnedParsedPacket {
 mod test {
     use chrono::TimeZone;
     use etherparse::ip_number;
+    use itertools::Itertools;
 
     use crate::connection;
 
@@ -1031,6 +1032,14 @@ mod test {
             .icmpv4_echo_reply(10, 2);
         let payload = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
+        assert_eq!(echo_request_pkt.get_icmp_echo_info().unwrap().id, 10);
+        assert_eq!(echo_request_pkt.get_icmp_echo_info().unwrap().seq, 2);
+        assert!(!echo_request_pkt.get_icmp_echo_info().unwrap().is_reply,);
+        assert_eq!(
+            echo_request_pkt.get_icmp_echo_info().unwrap().payload,
+            (1u8..=10).collect_vec()
+        );
+
         // now build the reply
         let mut echo_reply = Vec::<u8>::with_capacity(builder.size(payload.len()));
         builder.write(&mut echo_reply, &payload).unwrap();
@@ -1039,6 +1048,14 @@ mod test {
             echo_reply_pkt.to_connection_key(&local_addrs).unwrap();
         assert!(!src_is_local);
         assert_eq!(echo_reply_key, echo_request_key);
+
+        assert_eq!(echo_reply_pkt.get_icmp_echo_info().unwrap().id, 10);
+        assert_eq!(echo_reply_pkt.get_icmp_echo_info().unwrap().seq, 2);
+        assert!(echo_reply_pkt.get_icmp_echo_info().unwrap().is_reply,);
+        assert_eq!(
+            echo_reply_pkt.get_icmp_echo_info().unwrap().payload,
+            (1u8..=10).collect_vec()
+        );
     }
 
     /**
@@ -1082,5 +1099,15 @@ mod test {
         assert_eq!(echo_reply_key, echo_request_key);
     }
 
-    // TODO: add tests for ICMP packets and to_connection_key() !!
+    #[test]
+    fn test_get_icmp_info_from_non_ping() {
+        let mut pkt_bytes: Vec<u8> = Vec::new();
+        etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
+            .ipv4([192, 168, 1, 1], [192, 168, 1, 2], 64)
+            .udp(1, 1)
+            .write(&mut pkt_bytes, &[])
+            .unwrap();
+        let pkt = OwnedParsedPacket::try_from_fake_time(pkt_bytes).unwrap();
+        assert!(pkt.get_icmp_echo_info().is_none());
+    }
 }

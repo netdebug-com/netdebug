@@ -1,6 +1,5 @@
 use common_wasm::timeseries_stats::StatHandle;
 use libconntrack_wasm::{ConnectionKey, NetworkInterfaceState};
-use log::{info, warn};
 use mac_address::MacAddress;
 use std::{
     collections::{HashMap, HashSet},
@@ -10,6 +9,12 @@ use std::{
 };
 use tokio::time::Instant;
 use tokio::time::{sleep_until, Duration};
+use uuid::Uuid;
+
+#[cfg(not(test))]
+use log::{debug, info, warn};
+#[cfg(test)]
+use std::{println as debug, println as warn, println as info}; // Workaround to use prinltn! for logs.
 
 use crate::{
     connection::ConnectionUpdateReceiver,
@@ -186,7 +191,7 @@ pub struct PingTreeConfig {
     /// tracks the number of echo replies we see without the associated request.
     /// This indicates performance issues (with the pcap capture or connection tracker
     /// since we should observe every request.
-    pub echo_reply_without_request: StatHandle,
+    pub pingtree_no_request: StatHandle,
 }
 
 impl PingTreeConfig {
@@ -208,7 +213,7 @@ impl PingTreeConfig {
 
 /// Actually run the pingtree and return the result.
 pub async fn run_pingtree(cfg: PingTreeConfig) -> PingTreeResult {
-    let mut pt = PingTreeImpl::new(cfg);
+    let mut pt = PingTreeImpl::new(cfg, Uuid::new_v4());
 
     pt.send_next_round();
     let mut next_wakeup_time = Some(Instant::now() + pt.cfg.time_between_rounds);
@@ -258,14 +263,14 @@ struct PingTreeImpl {
 }
 
 impl PingTreeImpl {
-    pub fn new(cfg: PingTreeConfig) -> Self {
+    pub fn new(cfg: PingTreeConfig, uuid: Uuid) -> Self {
         // size the channel based on number of IPs. With 2x number of IPs
         // we have space for request + response per round. Add some additional
         // space since we might also get stray pings from system tracker.
         // so 3x number of IPs it is.
         let (pkt_tx, pkt_rx) = tokio::sync::mpsc::channel(3 * cfg.ips.len());
         let mut conn_keys_to_listen_to = Vec::new();
-        let conn_listener_desc = "pingtree".to_owned();
+        let conn_listener_desc = format!("pingtree--{}", uuid.hyphenated());
         for ip in &cfg.ips {
             let egress_info = cfg.get_egress_info_or_die(ip);
 
@@ -287,7 +292,7 @@ impl PingTreeImpl {
         }
         let mut ping_payload = Vec::new();
         ping_payload.extend(b"PingTree-");
-        ping_payload.extend(uuid::Uuid::new_v4().as_hyphenated().to_string().as_bytes());
+        ping_payload.extend(uuid.hyphenated().to_string().as_bytes());
         ping_payload.extend(vec![0u8; 128 - ping_payload.len()]);
         // sanity check:
         assert_eq!(ping_payload.len(), 128);
@@ -323,9 +328,11 @@ impl PingTreeImpl {
                 return;
             }
             let prev = if info.is_reply {
+                debug!("Received response from {} seq {}", key.remote_ip, info.seq);
                 self.echo_recv_times
                     .insert((key.remote_ip, info.seq), Instant::now())
             } else {
+                debug!("Received request to {} seq {}", key.remote_ip, info.seq);
                 self.echo_sent_times
                     .insert((key.remote_ip, info.seq), Instant::now())
             };
@@ -384,9 +391,9 @@ impl PingTreeImpl {
                 let t_recv = self.echo_recv_times.get(&(*ip, round));
                 let rtt = match (t_sent, t_recv) {
                     (Some(t_sent), Some(t_recv)) => Some(*t_recv - *t_sent),
-                    (None, Some(_t_recv)) => {
-                        // reply without response. That should not happen!
-                        self.cfg.echo_reply_without_request.bump();
+                    (None, _) => {
+                        // No request seen.
+                        self.cfg.pingtree_no_request.bump();
                         None
                     }
                     _ => None,
@@ -410,5 +417,196 @@ impl Drop for PingTreeImpl {
                 }
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    use common_wasm::timeseries_stats::{StatType, SuperRegistry, Units};
+    use tokio::sync::mpsc::error::TryRecvError;
+
+    use crate::prober::{make_ping_icmp_echo_reply, make_ping_icmp_echo_request};
+
+    fn mkip(ip_str: &str) -> IpAddr {
+        IpAddr::from_str(ip_str).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_pingtree_impl() {
+        let v4_egress_info = EgressInfo {
+            gateway_ip: mkip("10.0.0.1"),
+            gateway_mac: MacAddress::new([1, 2, 3, 4, 5, 6]),
+            local_ip: mkip("10.0.0.42"),
+            local_mac: MacAddress::new([42, 42, 42, 0, 0, 0]),
+        };
+        let (conn_track_tx, mut conn_track_rx) = tokio::sync::mpsc::channel(100);
+        let (prober_tx, mut prober_rx) = tokio::sync::mpsc::channel(100);
+        let pingtree_no_request = SuperRegistry::new(std::time::Instant::now())
+            .new_registry("test-pingtree")
+            .add_stat("pingtree_no_request", Units::None, [StatType::COUNT]);
+        let cfg = PingTreeConfig {
+            ips: [mkip("8.8.8.8"), mkip("7.7.7.7")].into_iter().collect(),
+            v4_egress_info: Some(v4_egress_info.clone()),
+            v6_egress_info: None,
+            num_rounds: 2,
+            time_between_rounds: Duration::from_millis(500),
+            final_probe_wait: Duration::from_millis(2000),
+            connection_tracker_tx: conn_track_tx,
+            prober_tx,
+            ping_id: 42,
+            pingtree_no_request: pingtree_no_request.clone(),
+        };
+
+        let uuid_str = "42000000-0000-0000-0000-12340000abcd";
+        let mut pt = PingTreeImpl::new(cfg, Uuid::from_str(uuid_str).unwrap());
+
+        let key7 = ConnectionKey::make_icmp_echo_key(v4_egress_info.local_ip, mkip("7.7.7.7"), 42);
+        let key8 = ConnectionKey::make_icmp_echo_key(v4_egress_info.local_ip, mkip("8.8.8.8"), 42);
+        let expected_conn_keys: HashSet<ConnectionKey> =
+            [key7.clone(), key8.clone()].into_iter().collect();
+        let mut conn_keys = HashSet::new();
+        for _ in 0..2 {
+            let msg = conn_track_rx.try_recv().unwrap().skip_perf_check();
+            match msg {
+                ConnectionTrackerMsg::AddConnectionUpdateListener { desc, key, .. } => {
+                    assert_eq!(desc, format!("pingtree--{}", uuid_str));
+                    conn_keys.insert(key);
+                }
+                _ => panic!("Unexpected message"),
+            }
+        }
+        assert_eq!(conn_track_rx.try_recv().unwrap_err(), TryRecvError::Empty);
+        assert_eq!(conn_keys, expected_conn_keys);
+
+        // run a round. Prober should get requests to send pings
+        pt.send_next_round();
+        let mut pinged_ips = HashSet::new();
+        let mut echo_payload = Vec::new();
+        for _ in 0..2 {
+            let msg = prober_rx.try_recv().unwrap().skip_perf_check();
+            match msg {
+                ProbeMessage::SendPing {
+                    local_mac,
+                    local_ip,
+                    remote_mac,
+                    remote_ip,
+                    id,
+                    seq,
+                    payload,
+                } => {
+                    assert_eq!(local_mac, v4_egress_info.local_mac.bytes());
+                    assert_eq!(remote_mac, Some(v4_egress_info.gateway_mac.bytes()));
+                    assert_eq!(local_ip, v4_egress_info.local_ip);
+                    pinged_ips.insert(remote_ip);
+                    assert_eq!(id, 42);
+                    assert_eq!(seq, 0);
+                    echo_payload = payload.unwrap();
+                }
+                _ => panic!("Unexpected message"),
+            }
+        }
+
+        // Feed actual echo requests and recho replies into pingtree
+        tokio::time::pause();
+        let pkt = OwnedParsedPacket::try_from_fake_time(make_ping_icmp_echo_request(
+            &v4_egress_info.local_ip,
+            &mkip("7.7.7.7"),
+            v4_egress_info.local_mac.bytes(),
+            v4_egress_info.gateway_mac.bytes(),
+            42,
+            0,
+            echo_payload.clone(),
+        ))
+        .unwrap();
+        pt.handle_response(pkt, &key7);
+        let pkt = OwnedParsedPacket::try_from_fake_time(make_ping_icmp_echo_request(
+            &v4_egress_info.local_ip,
+            &mkip("8.8.8.8"),
+            v4_egress_info.local_mac.bytes(),
+            v4_egress_info.gateway_mac.bytes(),
+            42,
+            0,
+            echo_payload.clone(),
+        ))
+        .unwrap();
+        pt.handle_response(pkt, &key8);
+
+        tokio::time::advance(Duration::from_millis(123)).await;
+
+        // Only 8.8.8.8 replies
+        let pkt = OwnedParsedPacket::try_from_fake_time(make_ping_icmp_echo_reply(
+            &v4_egress_info.local_ip,
+            &mkip("8.8.8.8"),
+            v4_egress_info.local_mac.bytes(),
+            v4_egress_info.gateway_mac.bytes(),
+            42,
+            0,
+            echo_payload.clone(),
+        ))
+        .unwrap();
+        pt.handle_response(pkt, &key8);
+
+        // send the next round.
+        pt.send_next_round();
+        // we don't check the prober_tx here but we could. Maybe we should
+        // make pingtree see just the 7.7.7.7 request
+        let pkt = OwnedParsedPacket::try_from_fake_time(make_ping_icmp_echo_request(
+            &v4_egress_info.local_ip,
+            &mkip("7.7.7.7"),
+            v4_egress_info.local_mac.bytes(),
+            v4_egress_info.gateway_mac.bytes(),
+            42,
+            1,
+            echo_payload.clone(),
+        ))
+        .unwrap();
+
+        pt.handle_response(pkt, &key7);
+        // ... and the 8.8.8.8 reply
+        let pkt = OwnedParsedPacket::try_from_fake_time(make_ping_icmp_echo_reply(
+            &v4_egress_info.local_ip,
+            &mkip("8.8.8.8"),
+            v4_egress_info.local_mac.bytes(),
+            v4_egress_info.gateway_mac.bytes(),
+            42,
+            1,
+            echo_payload.clone(),
+        ))
+        .unwrap();
+        pt.handle_response(pkt, &key8);
+
+        // check the results we should have:
+        // round 0: 7.7.7.7 and 8.8.8.8 had a request, 8.8.8.8 had a response 123ms later
+        // round 1: 7.7.7.7 had a request, 8.8.8.8 had a response.
+        assert!(pt.all_rounds_sent());
+        let res = pt.aggregate_results();
+        assert_eq!(pingtree_no_request.get_sum(), 1);
+        assert_eq!(
+            res.keys().cloned().collect::<HashSet<IpAddr>>(),
+            HashSet::from([mkip("7.7.7.7"), mkip("8.8.8.8")])
+        );
+        assert_eq!(res.get(&mkip("7.7.7.7")).unwrap(), &[None, None]);
+        assert_eq!(
+            res.get(&mkip("8.8.8.8")).unwrap(),
+            &[Some(Duration::from_millis(123)), None]
+        );
+
+        // the pt.aggregate() call will cause `pt` to get dropped, so we can now
+        // check that it has unregistered itself from the connection updater
+        conn_keys.clear();
+        for _ in 0..2 {
+            let msg = conn_track_rx.try_recv().unwrap().skip_perf_check();
+            match msg {
+                ConnectionTrackerMsg::DelConnectionUpdateListener { desc, key } => {
+                    assert_eq!(desc, format!("pingtree--{}", uuid_str));
+                    conn_keys.insert(key);
+                }
+                _ => panic!("Unexpected message"),
+            }
+        }
+        assert!(conn_track_rx.try_recv().is_err());
+        assert_eq!(conn_keys, expected_conn_keys);
     }
 }
