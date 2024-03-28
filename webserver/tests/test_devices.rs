@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
-use gui_types::PublicDeviceInfo;
+use common::init::netdebug_init;
+use gui_types::{PublicDeviceDetails, PublicDeviceInfo};
 use http_body_util::BodyExt;
 use libwebserver::remotedb_client::RemoteDBClient;
 
@@ -12,6 +13,7 @@ pub mod db_utils;
 
 #[tokio::test]
 async fn devices_non_netdebug_employee() {
+    // netdebug_init(); // enable for logging; can't always have unit tests log b/c logging init is dumb
     let (db_client, test_db) = mk_test_db("devices_non_netdebug_employee").await.unwrap();
     let remotedb_client = RemoteDBClient::mk_mock(&test_db.db_uri);
     remotedb_client
@@ -44,8 +46,9 @@ async fn devices_non_netdebug_employee() {
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let alice_device: PublicDeviceInfo = serde_json::from_slice(&body).unwrap();
-    assert_eq!(*device, alice_device);
+    let alice_device: PublicDeviceDetails = serde_json::from_slice(&body).unwrap();
+    assert_eq!(alice_device.num_flows_stored, 0);
+    assert_eq!(alice_device.newest_flow_time, None);
 }
 
 #[tokio::test]

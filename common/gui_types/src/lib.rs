@@ -38,8 +38,7 @@ pub type OrganizationId = i64;
 /// i.e., "public" in the GUI frontend
 #[derive(Debug, Serialize, Deserialize, TypeDef, PartialEq, PartialOrd)]
 pub struct PublicDeviceInfo {
-    /// The unique ID of this device; note we intentionally have it as a string to not force
-    /// the Uuid dependency into this crate
+    /// The unique ID of this device
     #[type_def(type_of = "String")]
     pub uuid: Uuid,
     /// E.g., hostname
@@ -51,7 +50,27 @@ pub struct PublicDeviceInfo {
     pub created: DateTime<Utc>,
 }
 
-// A helper type alias. It list all the types that are used in the UI
+#[derive(Debug, Serialize, Deserialize, TypeDef, PartialEq, PartialOrd)]
+pub struct PublicDeviceDetails {
+    /// Details is a superset of DeviceInfo
+    pub device_info: PublicDeviceInfo,
+    /// Number of flows for this device in DB
+    pub num_flows_stored: u64,
+    /// Number of with sent packet loss; None if No flows
+    pub num_flows_with_send_loss: Option<u64>,
+    /// Number of with recv packet loss; None if No flows
+    pub num_flows_with_recv_loss: Option<u64>,
+    /// Timestamp of the oldest flow; None if No flows
+    #[type_def(type_of = "String")]
+    pub oldest_flow_time: Option<DateTime<Utc>>,
+    /// Timestamp of the newest flow; None if No flows
+    #[type_def(type_of = "String")]
+    pub newest_flow_time: Option<DateTime<Utc>>,
+}
+
+/// A helper type alias. It list all the types that are used in the UI
+/// This is the magic that exports anything with #[derive(TypeDef)] into
+/// netdebug_types.ts
 pub type GuiApiTypes = (
     ConnectionMeasurements,
     DnsTrackerEntry,
@@ -63,4 +82,5 @@ pub type GuiApiTypes = (
     DesktopToTopologyServer,
     PublicOrganizationInfo,
     PublicDeviceInfo,
+    PublicDeviceDetails,
 );
