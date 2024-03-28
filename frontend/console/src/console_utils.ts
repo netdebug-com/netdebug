@@ -62,24 +62,30 @@ export async function fetchAndCheckResultWithAuth(
         // cookie already set, so we just need to call the login API which translates
         // that into a netdebug session cookie (once we validate they have an account)
         console.log("Refreshing netdebug session token");
-        return fetch(get_rest_url("api/login")).then((auth_resp) => {
-          if (auth_resp.ok) {
-            // got a new session token, retry route
-            return fetch(get_rest_url(url)).then((resp2) => {
-              if (!resp2.ok) {
-                makeResponseError(
-                  "Non-auth Error (2nd try) talking to ",
-                  resp2,
-                  url,
-                );
-              }
-              return resp2;
-            });
-          } else {
-            // failed to get the auth; report the error
-            makeResponseError("Failed to re-authenticate to ", auth_resp, url);
-          }
-        });
+        return fetch(get_rest_url("api/login"), { method: "POST" }).then(
+          (auth_resp) => {
+            if (auth_resp.ok) {
+              // got a new session token, retry route
+              return fetch(get_rest_url(url)).then((resp2) => {
+                if (!resp2.ok) {
+                  makeResponseError(
+                    "Non-auth Error (2nd try) talking to ",
+                    resp2,
+                    url,
+                  );
+                }
+                return resp2;
+              });
+            } else {
+              // failed to get the auth; report the error
+              makeResponseError(
+                "Failed to re-authenticate to ",
+                auth_resp,
+                url,
+              );
+            }
+          },
+        );
       } else {
         // didn't get 200 or 401 from the original call, just report error
         makeResponseError("Non-auth Error talking to ", resp, url);

@@ -212,7 +212,7 @@ pub async fn setup_protected_rest_routes_with_auth_layer<
         ))
         // these are unauthenticated routes to get the auth token
         // TODO: decide whether having a login() function as a GET is a CSRV vulnerability
-        .route("/login", routing::get(console_login))
+        .route("/login", routing::post(console_login))
         .layer(auth_layer)
         .with_state(client)
 }
