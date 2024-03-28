@@ -17,19 +17,21 @@ use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
 
 /// The salient information from ICMPv4 of ICMPv6 echo request /
 /// echo reply packet.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IcmpEchoInfo {
     pub id: u16,
     pub seq: u16,
     pub is_reply: bool,
+    pub payload: Vec<u8>,
 }
 
 impl IcmpEchoInfo {
-    fn new(hdr: IcmpEchoHeader, is_reply: bool) -> Self {
+    fn new(hdr: IcmpEchoHeader, is_reply: bool, payload: Vec<u8>) -> Self {
         Self {
             id: hdr.id,
             seq: hdr.seq,
             is_reply,
+            payload,
         }
     }
 }
@@ -245,16 +247,24 @@ impl OwnedParsedPacket {
             Some(TransportHeader::Icmpv4(icmp4)) => {
                 use etherparse::Icmpv4Type::*;
                 match icmp4.icmp_type {
-                    EchoRequest(ping_hdr) => Some(IcmpEchoInfo::new(ping_hdr, false)),
-                    EchoReply(ping_hdr) => Some(IcmpEchoInfo::new(ping_hdr, true)),
+                    EchoRequest(ping_hdr) => {
+                        Some(IcmpEchoInfo::new(ping_hdr, false, self.payload.clone()))
+                    }
+                    EchoReply(ping_hdr) => {
+                        Some(IcmpEchoInfo::new(ping_hdr, true, self.payload.clone()))
+                    }
                     _ => None,
                 }
             }
             Some(TransportHeader::Icmpv6(icmp6)) => {
                 use etherparse::Icmpv6Type::*;
                 match icmp6.icmp_type {
-                    EchoRequest(ping_hdr) => Some(IcmpEchoInfo::new(ping_hdr, false)),
-                    EchoReply(ping_hdr) => Some(IcmpEchoInfo::new(ping_hdr, true)),
+                    EchoRequest(ping_hdr) => {
+                        Some(IcmpEchoInfo::new(ping_hdr, false, self.payload.clone()))
+                    }
+                    EchoReply(ping_hdr) => {
+                        Some(IcmpEchoInfo::new(ping_hdr, true, self.payload.clone()))
+                    }
                     _ => None,
                 }
             }

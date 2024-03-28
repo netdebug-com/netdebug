@@ -252,6 +252,9 @@ struct PingTreeImpl {
     echo_recv_times: HashMap<(IpAddr, u16), Instant>,
     /// The current probe round (i.e., ping_seq)
     cur_round: u16,
+    /// The payload to send in the echo request. Used to make sure that received echo requests
+    /// and replies are associated with this pingtree instance
+    ping_payload: Vec<u8>,
 }
 
 impl PingTreeImpl {
@@ -282,6 +285,12 @@ impl PingTreeImpl {
                 }
             );
         }
+        let mut ping_payload = Vec::new();
+        ping_payload.extend(b"PingTree-");
+        ping_payload.extend(uuid::Uuid::new_v4().as_hyphenated().to_string().as_bytes());
+        ping_payload.extend(vec![0u8; 128 - ping_payload.len()]);
+        // sanity check:
+        assert_eq!(ping_payload.len(), 128);
 
         Self {
             cfg,
@@ -291,6 +300,7 @@ impl PingTreeImpl {
             echo_sent_times: HashMap::new(),
             echo_recv_times: HashMap::new(),
             cur_round: 0,
+            ping_payload,
         }
     }
 
@@ -301,6 +311,10 @@ impl PingTreeImpl {
     fn handle_response(&mut self, pkt: Box<OwnedParsedPacket>, key: &ConnectionKey) {
         if let Some(info) = pkt.get_icmp_echo_info() {
             assert_eq!(info.id, self.cfg.ping_id);
+            if info.payload != self.ping_payload {
+                // not for us
+                return;
+            }
             if info.seq >= self.cfg.num_rounds {
                 warn!(
                     "Received echo reply with seq_no {} that's larger than num_rounds ({})",
@@ -354,6 +368,7 @@ impl PingTreeImpl {
                     remote_ip: *dst_ip,
                     id: self.cfg.ping_id,
                     seq: self.cur_round,
+                    payload: Some(self.ping_payload.clone()),
                 }
             );
         }

@@ -35,6 +35,9 @@ pub enum ProbeMessage {
         remote_ip: IpAddr,
         id: u16,
         seq: u16,
+        /// The payload to include in the echo request. If none uses a default
+        /// payload
+        payload: Option<Vec<u8>>,
     },
     /// Send an Arp or an IPv6 ICMP Neighbor solicitation message to lookup this address
     SendIpLookup {
@@ -76,8 +79,9 @@ pub fn prober_handle_one_message(raw_sock: &mut dyn RawSocketWriter, message: Pr
             remote_ip,
             id,
             seq,
+            payload,
         } => icmp_ping(
-            raw_sock, local_mac, local_ip, remote_mac, remote_ip, id, seq,
+            raw_sock, local_mac, local_ip, remote_mac, remote_ip, id, seq, payload,
         ),
         // leave as TODO until next diff
         SendIpLookup {
@@ -197,9 +201,10 @@ pub fn make_ping_icmp_echo_request(
     remote_mac: [u8; 6],
     id: u16,
     seq: u16,
+    payload: Vec<u8>,
 ) -> Vec<u8> {
-    let payload = [0u8; 128];
     let builder = etherparse::PacketBuilder::ethernet2(local_mac, remote_mac);
+
     match (local_ip, remote_ip) {
         (IpAddr::V4(local_ip4), IpAddr::V4(remote_ip4)) => {
             let builder = builder
@@ -234,8 +239,8 @@ pub fn make_ping_icmp_echo_reply(
     remote_mac: [u8; 6],
     id: u16,
     seq: u16,
+    payload: Vec<u8>,
 ) -> Vec<u8> {
-    let payload = [0u8; 128];
     let builder = etherparse::PacketBuilder::ethernet2(local_mac, remote_mac);
     match (local_ip, remote_ip) {
         (IpAddr::V4(local_ip4), IpAddr::V4(remote_ip4)) => {
@@ -263,6 +268,7 @@ pub fn make_ping_icmp_echo_reply(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn icmp_ping(
     raw_sock: &mut dyn RawSocketWriter,
     local_mac: [u8; 6],
@@ -271,10 +277,17 @@ fn icmp_ping(
     remote_ip: IpAddr,
     id: u16,
     seq: u16,
+    payload: Option<Vec<u8>>,
 ) {
+    let payload = match payload {
+        Some(payload) => payload,
+        None => vec![0u8; 128],
+    };
     // If we don't know the remote_mac address, fall back to broadcast
     let remote_mac = remote_mac.unwrap_or([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
-    let buf = make_ping_icmp_echo_request(&local_ip, &remote_ip, local_mac, remote_mac, id, seq);
+    let buf = make_ping_icmp_echo_request(
+        &local_ip, &remote_ip, local_mac, remote_mac, id, seq, payload,
+    );
     if let Err(e) = raw_sock.sendpacket(local_ip, &buf) {
         warn!("Error sending ping from {} in icmp_ping: {}", local_ip, e);
     }

@@ -140,6 +140,9 @@ pub struct SystemTracker {
     neighbor_listener_tx: Option<NeighborCacheSender>,
     /// The ID we put into all of our ping packets to mark it from us, just our $PID
     ping_id: u16,
+    /// The payload we add to echo requests. We use this to ensure that responses we receive are
+    /// from the system tracker (and not pingtree for example).
+    ping_payload: Vec<u8>,
     /// A pointer to our prober task that manages rate limiting, etc.
     prober_tx: ProberSender,
     /// counter for number of network device changes
@@ -153,6 +156,8 @@ pub struct SystemTracker {
     /// Number of times the ping RTT was too short to be "real" or even negative
     /// e.g., due to clock skew or clock going backwards
     ping_rtt_too_low: StatHandle,
+    /// Number of pings that weren't for us (i.e., payload didn't match what we expected)
+    ping_not_for_us: StatHandle,
     /// Channel to send messages to the topology server
     data_storage_client: Option<DataStorageSender>,
     last_ping_data_sent_time: Instant,
@@ -198,6 +203,12 @@ impl SystemTracker {
                 }
             );
         }
+        let mut ping_payload = Vec::new();
+        ping_payload.extend(b"SystemTracker");
+        ping_payload.extend(vec![0u8; 128 - ping_payload.len()]);
+        // sanity check
+        assert_eq!(ping_payload.len(), 128);
+
         SystemTracker {
             network_history: VecDeque::from([current_network]),
             network_device_changes: stats_registry.add_stat(
@@ -232,8 +243,14 @@ impl SystemTracker {
                 Units::None,
                 [StatType::COUNT],
             ),
+            ping_not_for_us: stats_registry.add_stat(
+                "ping_not_for_us",
+                Units::None,
+                [StatType::COUNT],
+            ),
             data_storage_client,
             last_ping_data_sent_time: Instant::now(),
+            ping_payload,
         }
     }
 
@@ -578,7 +595,12 @@ impl SystemTracker {
     /// be careful what you do here
     fn handle_ping_recv(&mut self, pkt: Box<OwnedParsedPacket>, key: ConnectionKey) {
         // extract the relevant info
-        let IcmpEchoInfo { id, seq, is_reply } = match pkt.get_icmp_echo_info() {
+        let IcmpEchoInfo {
+            id,
+            seq,
+            is_reply,
+            payload,
+        } = match pkt.get_icmp_echo_info() {
             Some(info) => info,
             None => {
                 warn!("Ignnoring weird non-echo request/reply pkt in handle_ping_recv()");
@@ -586,6 +608,11 @@ impl SystemTracker {
             }
         };
         assert_eq!(id, self.ping_id); // ConnectionTracker is broken if they sent us this with wrong ID
+        if payload != self.ping_payload {
+            // Not for us.
+            self.ping_not_for_us.bump();
+            return;
+        }
         let gateway = key.remote_ip;
         let max_pings_per_gateway = self.max_pings_per_gateway;
         // now, lookup the ping state and update it
@@ -776,7 +803,8 @@ impl SystemTracker {
                     remote_mac: Some(gateway_mac),
                     remote_ip: key.remote_ip,
                     id: self.ping_id,
-                    seq: seqno
+                    seq: seqno,
+                    payload: Some(self.ping_payload.clone()),
                 }
             );
         } else {
@@ -1160,6 +1188,7 @@ mod test {
                 gateway_mac,
                 system_tracker.ping_id,
                 0,
+                system_tracker.ping_payload.clone(),
             ),
             now,
         )
@@ -1193,6 +1222,7 @@ mod test {
                 gateway_mac,
                 system_tracker.ping_id,
                 12345, // expecting zero
+                system_tracker.ping_payload.clone(),
             ),
             now,
         )
@@ -1200,6 +1230,24 @@ mod test {
         assert_eq!(system_tracker.out_of_sequence_ping.get_sum(), 0);
         system_tracker.handle_ping_recv(ping, key.clone());
         assert_eq!(system_tracker.out_of_sequence_ping.get_sum(), 1);
+
+        // second test, if we receive a ping with wrong seq, do we bump the duplicate_ping counter?
+        let ping = OwnedParsedPacket::try_from_timestamp(
+            make_ping_icmp_echo_request(
+                &local_ip,
+                &gateway,
+                local_mac,
+                gateway_mac,
+                system_tracker.ping_id,
+                0,              // we expect seq 0
+                vec![42u8; 64], // not the payload we expect
+            ),
+            now,
+        )
+        .unwrap();
+        assert_eq!(system_tracker.ping_not_for_us.get_sum(), 0);
+        system_tracker.handle_ping_recv(ping, key.clone());
+        assert_eq!(system_tracker.ping_not_for_us.get_sum(), 1);
 
         // third, check what happens if we get a ping for an unknown gateway
         // rather than setting up everything for a new gateway, just remove this gateway's state
@@ -1215,6 +1263,7 @@ mod test {
                 gateway_mac,
                 system_tracker.ping_id,
                 12345, // expecting zero
+                system_tracker.ping_payload.clone(),
             ),
             now,
         )
@@ -1265,6 +1314,7 @@ mod test {
                 gateway_mac,
                 system_tracker.ping_id,
                 0,
+                system_tracker.ping_payload.clone(),
             ),
             now,
         )
@@ -1294,6 +1344,7 @@ mod test {
                 local_mac,
                 system_tracker.ping_id,
                 0,
+                system_tracker.ping_payload.clone(),
             ),
             reply_time,
         )
