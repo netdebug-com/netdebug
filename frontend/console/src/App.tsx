@@ -29,6 +29,7 @@ import {
   createRoutesFromElements,
 } from "react-router-dom";
 import { DefaultErrorElement } from "./common";
+import Device, { deviceLoader } from "./pages/Device";
 
 // TODO: change to createBrowserRouter()
 const router = createBrowserRouter(
@@ -39,6 +40,12 @@ const router = createBrowserRouter(
       errorElement={<DefaultErrorElement />}
     >
       <Route index element={<Home />} errorElement={<DefaultErrorElement />} />,
+      <Route
+        path="devices/device/:uuid"
+        loader={deviceLoader}
+        element={<Device />}
+        errorElement={<DefaultErrorElement />}
+      />
       <Route
         path="devices"
         loader={devicesLoader}

@@ -2,7 +2,7 @@ import { PublicDeviceInfo } from "../common";
 
 import { dataGridDefaultSxProp, sortCmpWithNull } from "../common/utils";
 
-import { Box } from "@mui/material";
+import { Box, Link } from "@mui/material";
 import { DataGrid, GridColDef, GridToolbar } from "@mui/x-data-grid";
 import { fetchAndCheckResultWithAuth } from "../console_utils";
 import { useLoaderData } from "react-router";
@@ -29,6 +29,9 @@ const columns: GridColDef[] = [
     field: "uuid",
     headerName: "Uuid",
     flex: 25,
+    renderCell: (params) => (
+      <Link href={"/devices/device/" + params.value}>{params.value}</Link>
+    ),
   },
   {
     field: "organization_id",
