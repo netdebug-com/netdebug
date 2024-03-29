@@ -127,6 +127,10 @@ impl NetDebugUser {
     pub fn check_org_allowed(&self, object_org_id: OrganizationId) -> bool {
         self.organization_id == object_org_id || self.organization_id == NETDEBUG_EMPLOYEE_ORG_ID
     }
+
+    pub fn check_org_superuser(&self) -> bool {
+        self.organization_id == NETDEBUG_EMPLOYEE_ORG_ID
+    }
 }
 
 /// Translation layer to tell Axum how to get our user's IDs and session auth token

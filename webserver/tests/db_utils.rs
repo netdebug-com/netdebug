@@ -4,10 +4,13 @@ use axum::Router;
 use axum_login::tower_sessions::cookie::{self, Cookie};
 use axum_login::tower_sessions::{MemoryStore, SessionManagerLayer};
 use axum_login::AuthManagerLayerBuilder;
+use gui_types::OrganizationId;
+use libconntrack_wasm::ConnectionMeasurements;
 use libwebserver::context::make_test_context;
 use libwebserver::http_routes::{
     setup_protected_rest_routes_with_auth_layer, CLERK_JWT_COOKIE_NAME,
 };
+use libwebserver::remotedb_client::{RemoteDBClient, StorageSourceType};
 use libwebserver::secrets_db::Secrets;
 use libwebserver::users::{NetDebugUserBackend, UserServiceData};
 use pg_embed::pg_fetch::{PgFetchSettings, PG_V13};
@@ -168,20 +171,50 @@ pub async fn add_fake_users(db_client: &Client) {
     }
 }
 
+pub fn mk_uuid_from_string(user: &str) -> Uuid {
+    Uuid::new_v3(&Uuid::NAMESPACE_DNS, user.as_bytes())
+}
+
+const FAKE_PEOPLE_DATA: [(&str, OrganizationId); 3] = [
+    ("Alice's dev1", 0i64),
+    ("Bob's dev2", 1),
+    ("Cathy's dev3", 2),
+];
 pub async fn add_fake_devices(db_client: &Client) {
-    for (uuid, name, org_id) in [
-        (Uuid::new_v4(), "Alice's dev1", 0i64),
-        (Uuid::new_v4(), "Bob's dev2", 1),
-        (Uuid::new_v4(), "Cathy's dev3", 2),
-    ] {
+    for (name, org_id) in FAKE_PEOPLE_DATA {
         db_client
             .execute(
                 "INSERT INTO devices (uuid, name, organization) VALUES ($1, $2, $3)",
-                &[&uuid, &name, &org_id],
+                &[&mk_uuid_from_string(name), &name, &org_id],
             )
             .await
             .unwrap();
     }
+}
+
+pub async fn add_fake_connection_logs(db_client: &Client) -> Result<(), tokio_postgres::Error> {
+    // make two flows for each person; one happy, one sad
+    for (name, org_id) in FAKE_PEOPLE_DATA {
+        let device_uuid = &mk_uuid_from_string(name);
+        let mut m1 = ConnectionMeasurements::make_mock_with_ips(
+            &format!("{}.{}.{}.{}", org_id, org_id, org_id, org_id),
+            "128.8.128.38",
+        );
+        let m2 = m1.clone();
+        // The mock by default sets lost_bytes= 1500; make this flow 'good' by marking it zero
+        m1.tx_stats.lost_bytes = Some(0);
+        m1.key.local_l4_port = 6667; // and give it a different source port
+        for m in &[m1, m2] {
+            RemoteDBClient::handle_store_connection_measurement(
+                db_client,
+                m,
+                device_uuid,
+                &StorageSourceType::Desktop,
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 pub async fn get_auth_token_from_rest_router(router: Router, user: &str) -> String {

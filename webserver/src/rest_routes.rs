@@ -41,12 +41,14 @@ pub async fn test_auth(
 
 /// Get a list of devices in the user's org
 /// By default, a user can only get devices in their own org
+/// Compared to [`get_devices_details()`] this is a cheap call which just reads
+/// a single row in the much shorter 'devices' Table
 pub async fn get_devices(
     auth_session: AuthSession,
     State(client): State<MockableDbClient>,
 ) -> Result<Json<Vec<PublicDeviceInfo>>, Response<Body>> {
     let user = check_user(auth_session.user)?;
-    match DeviceInfo::get_devices(Some(user.organization_id), client.get_client()).await {
+    match DeviceInfo::get_devices(&user, Some(user.organization_id), client.get_client()).await {
         Ok(devices) => {
             let pub_devices: Vec<PublicDeviceInfo> =
                 devices.iter().map(|d| d.clone().into()).collect();
@@ -57,6 +59,33 @@ pub async fn get_devices(
             format!("Backend database error: {}", e),
         )
             .into_response()),
+    }
+}
+
+/// Get a list of devices with flow details in the user's org
+/// By default, a user can only get devices in their own org
+/// Compared to [`get_devices()`] this is a much more expensive call
+/// because it walks the entire desktop_connections Table
+pub async fn get_devices_details(
+    auth_session: AuthSession,
+    State(client): State<MockableDbClient>,
+) -> Result<Json<Vec<PublicDeviceDetails>>, Response<Body>> {
+    let user = check_user(auth_session.user)?;
+    // [`DeviceDetails::get_device_details`] always does auth checks
+    // even if in this case, a user is always allowed to see the devices
+    // in their own org
+    match DeviceDetails::get_devices_details(&user, Some(user.organization_id), client.get_client())
+        .await
+    {
+        Ok(devices) => Ok(Json(devices)),
+        Err(e) => {
+            warn!("/api/get_devices_detail {:?} :: {}", user, e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Backend database error: {}", e),
+            )
+                .into_response())
+        }
     }
 }
 
@@ -79,7 +108,7 @@ pub async fn get_device(
                 .into_response()),
         },
         Err(e) => {
-            warn!("/api/get_device {} --> {}", uuid, e);
+            warn!("/api/get_device {} {:?} --> {}", uuid, user, e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Backend database error: {}", e),

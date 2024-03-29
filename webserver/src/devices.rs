@@ -78,14 +78,31 @@ impl DeviceInfo {
     }
 
     pub async fn get_devices(
+        user: &NetDebugUser,
         org_id: Option<i64>,
         client: Arc<Client>,
     ) -> Result<Vec<DeviceInfo>, RemoteDBClientError> {
         // NOTE: we don't need to worry about input validation as much here as
         // org_id will always be an int and can't be, e.g., a Little-Bobby-Tables-esque SQL statement
         let where_clause = if let Some(org_id) = org_id {
+            if !user.check_org_allowed(org_id) {
+                return Err(RemoteDBClientError::PermissionDenied {
+                    err: format!(
+                        "User {} with org {} tried to access org {}",
+                        user.user_id, user.organization_id, org_id
+                    ),
+                });
+            }
             format!("WHERE organization = {}", org_id)
         } else {
+            if !user.check_org_superuser() {
+                return Err(RemoteDBClientError::PermissionDenied {
+                    err: format!(
+                        "User {} with org {} tried to access all orgs",
+                        user.user_id, user.organization_id
+                    ),
+                });
+            }
             String::new()
         };
         let rows = client
@@ -121,6 +138,13 @@ pub struct DeviceDetails {
     // no state for now
 }
 
+/// The shared parts of the DeviceDetails query, e.g., that
+/// the [`DeviceDetails::rows_to_device_infos()`] expects
+const DEVICE_DETAILS_PARTIAL_QUERY: &str = "SELECT 
+            COUNT(*), MIN(time), MAX(time), 
+            SUM(CASE WHEN tx_loss > 0 THEN 1 ELSE 0 END), 
+            SUM(CASE WHEN rx_loss > 0 THEN 1 ELSE 0 END) ,
+            device_uuid";
 impl DeviceDetails {
     /// Pull the PublicDeviceDetails struct from the remote database, if the user is allowed to see it
     /// TODO: currently implemented over multiple SQL queries... monitor this to see if it becomes
@@ -131,26 +155,21 @@ impl DeviceDetails {
         client: Arc<Client>,
     ) -> Result<Option<PublicDeviceDetails>, RemoteDBClientError> {
         // lookup the org_id from the devices table
-        let device = DeviceInfo::from_uuid(uuid, user, client.clone()).await?;
-        if device.is_none() {
+        let device_info = DeviceInfo::from_uuid(uuid, user, client.clone()).await?;
+        if device_info.is_none() {
             return Ok(None); // device either missing or this user is not allowed to see it
         }
-        let device = device.unwrap();
+        let device = device_info.unwrap();
         let db_statement = client
             .prepare(&format!(
-                "SELECT 
-            COUNT(*), MIN(time), MAX(time), 
-            SUM(CASE WHEN tx_loss > 0 THEN 1 ELSE 0 END), 
-            SUM(CASE WHEN rx_loss > 0 THEN 1 ELSE 0 END) ,
-            client_uuid
-            from {} WHERE client_uuid=$1 GROUP BY client_uuid",
-                CONNECTIONS_TABLE_NAME
+                "{} from {} WHERE device_uuid=$1 GROUP BY device_uuid",
+                DEVICE_DETAILS_PARTIAL_QUERY, CONNECTIONS_TABLE_NAME
             ))
             .await?;
         // Do NOT call .query_one() here as if there are no flows in desktop_connections, then zero rows will return
         let rows = client.query(&db_statement, &[&uuid]).await?;
         let mut device_details =
-            DeviceDetails::rows_to_device_infos(&[device.clone()], &rows).await;
+            DeviceDetails::rows_to_device_details(&[device.clone()], &rows).await;
         match device_details.len() {
             // case: no flows recored in desktop_connections
             0 => Ok(Some(PublicDeviceDetails {
@@ -170,7 +189,7 @@ impl DeviceDetails {
     }
 
     /// Join the data from DeviceInfo's and rows from the Details query into a single unified PublicDeviceDetails struct
-    async fn rows_to_device_infos(
+    async fn rows_to_device_details(
         device_infos: &[DeviceInfo],
         rows: &[Row],
     ) -> Vec<PublicDeviceDetails> {
@@ -182,7 +201,7 @@ impl DeviceDetails {
                 // we could in theory do a join at the DB level rather than two queries at the rust level
                 // but since we already need the data from the first query and I'm a little concerned about
                 // the performance of the query once we hit scale anyway, let's leave it as it is...
-                let uuid = row.get::<_, Uuid>(5); // extract the client_uuid
+                let uuid = row.get::<_, Uuid>(5); // extract the device_uuid
                 if let Some(device_info) = uuid2info.get(&uuid) {
                     let public_device_info: PublicDeviceInfo = (*device_info).clone().into();
                     Some(PublicDeviceDetails {
@@ -203,5 +222,50 @@ impl DeviceDetails {
                 }
             })
             .collect::<Vec<PublicDeviceDetails>>()
+    }
+
+    /// Query DB and return a list of complex details about all devices
+    /// If org_id is not None, then only return devices in that org_id
+    pub(crate) async fn get_devices_details(
+        user: &NetDebugUser,
+        org_id: Option<i64>,
+        client: Arc<Client>,
+    ) -> Result<Vec<PublicDeviceDetails>, RemoteDBClientError> {
+        let device_infos = DeviceInfo::get_devices(user, org_id, client.clone()).await?;
+        // OK to use unescaped formatting here b/c it's just an int
+        let org_qualifier = if let Some(org_id) = org_id {
+            if !user.check_org_allowed(org_id) {
+                return Err(RemoteDBClientError::PermissionDenied {
+                    err: format!(
+                        "User in org {} tried to access {}",
+                        user.organization_id, org_id
+                    ),
+                });
+            }
+            format!("WHERE devices.organization = {}", org_id)
+        } else {
+            if !user.check_org_superuser() {
+                return Err(RemoteDBClientError::PermissionDenied {
+                    err: format!(
+                        "User in org {} tried to access all orgs devices",
+                        user.organization_id
+                    ),
+                });
+            }
+            "".to_string()
+        };
+        // TODO: monitor the perf of this JOIN and see if we need to put the 'org_id' directly
+        // into the desktop_connections schema
+        let db_statement = client
+            .prepare(&format!(
+                "{} from {} 
+                INNER JOIN devices ON desktop_connections.device_uuid = devices.uuid 
+                {} -- WHERE clause, if org_id isn't None
+                GROUP BY device_uuid",
+                DEVICE_DETAILS_PARTIAL_QUERY, CONNECTIONS_TABLE_NAME, org_qualifier
+            ))
+            .await?;
+        let rows = client.query(&db_statement, &[]).await?;
+        Ok(DeviceDetails::rows_to_device_details(&device_infos, &rows).await)
     }
 }
