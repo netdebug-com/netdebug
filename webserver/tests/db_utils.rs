@@ -197,6 +197,7 @@ pub async fn get_auth_token_from_rest_router(router: Router, user: &str) -> Stri
                     format!("{}={}", CLERK_JWT_COOKIE_NAME, user),
                 )
                 .uri("/login")
+                .method("POST")
                 .body(Body::empty())
                 .unwrap(),
         )
