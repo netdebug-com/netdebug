@@ -5,6 +5,7 @@ pub mod dns_tracker;
 pub mod neighbor_cache;
 pub mod owned_packet;
 pub mod pcap;
+pub mod pingtree;
 pub mod prober;
 pub mod prober_helper;
 pub mod process_tracker;

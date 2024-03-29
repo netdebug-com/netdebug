@@ -10,6 +10,7 @@ path = "src/pingtree-main.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0.81"
 clap = { workspace = true }
 common = { path = "../../common" }
 common-wasm = { path = "../../common/wasm" }

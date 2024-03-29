@@ -15,6 +15,25 @@ use log::warn;
 use mac_address::MacAddress;
 use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
 
+/// The salient information from ICMPv4 of ICMPv6 echo request /
+/// echo reply packet.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+pub struct IcmpEchoInfo {
+    pub id: u16,
+    pub seq: u16,
+    pub is_reply: bool,
+}
+
+impl IcmpEchoInfo {
+    fn new(hdr: IcmpEchoHeader, is_reply: bool) -> Self {
+        Self {
+            id: hdr.id,
+            seq: hdr.seq,
+            is_reply,
+        }
+    }
+}
+
 /// Errors when trying to create a `ConnectionKey` from a OwnedParsedPacket
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionKeyError {
@@ -216,6 +235,29 @@ impl OwnedParsedPacket {
         match &self.transport {
             Some(TransportHeader::Tcp(tcph)) => Some((tcph.source_port, tcph.destination_port)),
             Some(TransportHeader::Udp(udph)) => Some((udph.source_port, udph.destination_port)),
+            _ => None,
+        }
+    }
+
+    pub fn get_icmp_echo_info(&self) -> Option<IcmpEchoInfo> {
+        // extract the relevant info
+        match &self.transport {
+            Some(TransportHeader::Icmpv4(icmp4)) => {
+                use etherparse::Icmpv4Type::*;
+                match icmp4.icmp_type {
+                    EchoRequest(ping_hdr) => Some(IcmpEchoInfo::new(ping_hdr, false)),
+                    EchoReply(ping_hdr) => Some(IcmpEchoInfo::new(ping_hdr, true)),
+                    _ => None,
+                }
+            }
+            Some(TransportHeader::Icmpv6(icmp6)) => {
+                use etherparse::Icmpv6Type::*;
+                match icmp6.icmp_type {
+                    EchoRequest(ping_hdr) => Some(IcmpEchoInfo::new(ping_hdr, false)),
+                    EchoReply(ping_hdr) => Some(IcmpEchoInfo::new(ping_hdr, true)),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }

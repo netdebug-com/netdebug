@@ -7,6 +7,7 @@ use std::{
 };
 
 use crate::{
+    owned_packet::IcmpEchoInfo,
     topology_client::{DataStorageMessage, DataStorageSender},
     utils::PerfMsgCheck,
 };
@@ -17,7 +18,6 @@ use common_wasm::{
     stats_helper::{NaiivePercentiles, SimpleStats},
     timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units},
 };
-use etherparse::TransportHeader;
 use itertools::Itertools;
 use libconntrack_wasm::{
     AggregatedGatewayPingData, ConnectionKey, NetworkGatewayPingProbe, NetworkGatewayPingState,
@@ -578,33 +578,12 @@ impl SystemTracker {
     /// be careful what you do here
     fn handle_ping_recv(&mut self, pkt: Box<OwnedParsedPacket>, key: ConnectionKey) {
         // extract the relevant info
-        let (id, seq, is_reply) = match &pkt.transport {
-            Some(TransportHeader::Icmpv4(icmp4)) => {
-                use etherparse::Icmpv4Type::*;
-                match icmp4.icmp_type {
-                    EchoRequest(ping_hdr) => (ping_hdr.id, ping_hdr.seq, false),
-                    EchoReply(ping_hdr) => (ping_hdr.id, ping_hdr.seq, true),
-                    _ => {
-                        warn!("Ignoring weird non-echo request/reply pkt in handle_ping_recv() :: {:?}", pkt);
-                        return;
-                    }
-                }
+        let IcmpEchoInfo { id, seq, is_reply } = match pkt.get_icmp_echo_info() {
+            Some(info) => info,
+            None => {
+                warn!("Ignnoring weird non-echo request/reply pkt in handle_ping_recv()");
+                return;
             }
-            Some(TransportHeader::Icmpv6(icmp6)) => {
-                use etherparse::Icmpv6Type::*;
-                match icmp6.icmp_type {
-                    EchoRequest(ping_hdr) => (ping_hdr.id, ping_hdr.seq, false),
-                    EchoReply(ping_hdr) => (ping_hdr.id, ping_hdr.seq, true),
-                    _ => {
-                        warn!("Ignoring weird non-echo request/reply pkt6 in handle_ping_recv() :: {:?}", pkt);
-                        return;
-                    }
-                }
-            }
-            _ => panic!(
-                "Called SystemTracker::handle_ping_recv() with a non-ICMP4/6 pkt: {:?}",
-                pkt
-            ),
         };
         assert_eq!(id, self.ping_id); // ConnectionTracker is broken if they sent us this with wrong ID
         let gateway = key.remote_ip;

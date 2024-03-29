@@ -11,6 +11,8 @@ use tokio::{
 
 use crate::{owned_packet::OwnedParsedPacket, pcap::lookup_egress_device};
 
+pub const GOOGLE_DNS_IPV6: &str = "2001:4860:4860::8888";
+
 /***
  * Given a remote IP address, figure out which local ip the local host
  * stack would use to connect to it.
@@ -517,7 +519,7 @@ pub fn dns_to_cannonical_domain(hostname: &str) -> Result<String, String> {
 ///
 pub fn link_local_ip_to_interface_index(link_local_ipv6: IpAddr) -> Result<u32, std::io::Error> {
     let sock = std::net::UdpSocket::bind((link_local_ipv6, 0))?;
-    let google_v6_dns = IpAddr::from_str("2001:4860:4860::8888").unwrap();
+    let google_v6_dns = IpAddr::from_str(GOOGLE_DNS_IPV6).unwrap();
     sock.connect((google_v6_dns, 53))?;
     use std::net::SocketAddr::*;
     match sock.local_addr()? {

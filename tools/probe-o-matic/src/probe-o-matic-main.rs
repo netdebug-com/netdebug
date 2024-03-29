@@ -2,7 +2,7 @@ use clap::Parser;
 use lib_probe_o_matic::*;
 use libconntrack::connection_tracker::ConnectionTrackerMsg;
 use libconntrack::pcap::{find_interesting_pcap_interfaces, run_blocking_pcap_loop_in_thread};
-use libconntrack::utils::PerfMsgCheck;
+use libconntrack::utils::{PerfMsgCheck, GOOGLE_DNS_IPV6};
 use log::{error, info, warn};
 use std::collections::HashSet;
 use std::io;
@@ -47,7 +47,6 @@ struct Args {
     pub ips: Vec<String>,
 }
 
-const GOOGLE_DNS_IPV6: &str = "2001:4860:4860::8888";
 const MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE: usize = 4096;
 
 #[tokio::main]
