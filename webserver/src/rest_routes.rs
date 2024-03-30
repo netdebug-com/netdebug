@@ -6,12 +6,12 @@ use axum::{
     Json,
 };
 use axum_login::AuthUser;
-use gui_types::{PublicDeviceInfo, PublicOrganizationInfo};
+use gui_types::{PublicDeviceDetails, PublicDeviceInfo, PublicOrganizationInfo};
 use log::warn;
 use uuid::Uuid;
 
 use crate::{
-    devices::DeviceInfo,
+    devices::{DeviceDetails, DeviceInfo},
     mockable_dbclient::MockableDbClient,
     organizations::OrganizationInfo,
     users::{AuthSession, NetDebugUser},
@@ -66,23 +66,26 @@ pub async fn get_device(
     Path(uuid): Path<Uuid>,
     auth_session: AuthSession,
     State(client): State<MockableDbClient>,
-) -> Result<Json<PublicDeviceInfo>, Response<Body>> {
+) -> Result<Json<PublicDeviceDetails>, Response<Body>> {
     let user = check_user(auth_session.user)?;
     // security check is done inside DeviceInfo::from_uuid()
-    match DeviceInfo::from_uuid(uuid, &user, client.get_client()).await {
+    match DeviceDetails::from_uuid(uuid, &user, client.get_client()).await {
         Ok(d_opt) => match d_opt {
-            Some(d) => Ok(Json(d.into())),
+            Some(d) => Ok(Json(d)),
             None => Err((
                 StatusCode::NOT_FOUND,
                 format!("Uuid {} not found for your org", uuid),
             )
                 .into_response()),
         },
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Backend database error: {}", e),
-        )
-            .into_response()),
+        Err(e) => {
+            warn!("/api/get_device {} --> {}", uuid, e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Backend database error: {}", e),
+            )
+                .into_response())
+        }
     }
 }
 

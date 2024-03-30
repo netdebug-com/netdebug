@@ -78,6 +78,8 @@ pub enum RemoteDBClientError {
     TlsError(#[from] native_tls::Error),
     #[error("Postgresql Error {0}")]
     PostgresqlError(#[from] tokio_postgres::Error),
+    #[error("Database Invariate Error {err}")]
+    DbInvariateError { err: String },
 }
 
 impl Display for StorageSourceType {

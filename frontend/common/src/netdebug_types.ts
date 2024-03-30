@@ -597,8 +597,7 @@ export type PublicOrganizationInfo = {
 export type PublicDeviceInfo = {
 
     /**
-     * The unique ID of this device; note we intentionally have it as a string to not force
-     * the Uuid dependency into this crate
+     * The unique ID of this device
      */
     "uuid": string;
 
@@ -613,4 +612,36 @@ export type PublicDeviceInfo = {
     "organization_id": I64;
     "description": (string | null);
     "created": string;
+};
+export type PublicDeviceDetails = {
+
+    /**
+     * Details is a superset of DeviceInfo
+     */
+    "device_info": PublicDeviceInfo;
+
+    /**
+     * Number of flows for this device in DB
+     */
+    "num_flows_stored": U64;
+
+    /**
+     * Number of with sent packet loss; None if No flows
+     */
+    "num_flows_with_send_loss": (U64 | null);
+
+    /**
+     * Number of with recv packet loss; None if No flows
+     */
+    "num_flows_with_recv_loss": (U64 | null);
+
+    /**
+     * Timestamp of the oldest flow; None if No flows
+     */
+    "oldest_flow_time": string;
+
+    /**
+     * Timestamp of the newest flow; None if No flows
+     */
+    "newest_flow_time": string;
 };

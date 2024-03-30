@@ -6,7 +6,7 @@ import {
   useParams,
 } from "react-router";
 import { fetchAndCheckResultWithAuth } from "../console_utils";
-import { PublicDeviceInfo } from "../common";
+import { PublicDeviceDetails } from "../common";
 
 interface DeviceLoaderArgs extends ActionFunctionArgs {
   params: Params<ParamParseKey<string>>;
@@ -19,12 +19,12 @@ export const deviceLoader = async ({ params }: DeviceLoaderArgs) => {
 };
 export function Device() {
   const { uuid } = useParams();
-  const device = useLoaderData() as PublicDeviceInfo;
+  const device = useLoaderData() as PublicDeviceDetails;
   return (
     <div>
       Placeholder until next diff!
       <h3> {uuid} </h3>
-      {device && JSON.stringify(device)}
+      <pre>{device && JSON.stringify(device, null, 2)}</pre>
     </div>
   );
 }
