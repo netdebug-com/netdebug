@@ -374,6 +374,7 @@ pub mod test {
 
     use super::*;
     use etherparse::{IpHeader, PacketBuilder};
+    use itertools::Itertools;
     use mac_address::MacAddress;
 
     use crate::neighbor_cache::{self, ArpOperation, NeighborCache};
@@ -514,6 +515,72 @@ pub mod test {
             &mut neighbor_cache,
             local_ip,
             MacAddress::from(local_mac),
+        );
+    }
+
+    #[test]
+    fn test_send_ping() {
+        let mut mock_raw_sock = MockRawSocketProber::new();
+        let local_mac = [0, 1, 2, 3, 4, 5];
+        let local_ip = IpAddr::from_str("2600:1700:5b20:4e10:78eb:ea4d:7d28:8d7").unwrap();
+        let gateway_mac = [5, 5, 5, 6, 6, 6];
+        let remote_ip = IpAddr::from_str("2001:db8::1").unwrap();
+        icmp_ping(
+            &mut mock_raw_sock,
+            local_mac,
+            local_ip,
+            Some(gateway_mac),
+            remote_ip,
+            42u16,
+            23u16,
+            Some((0u8..10).collect_vec()),
+        );
+        // make sure we got 1 packet
+        assert_eq!(mock_raw_sock.captured.len(), 1);
+        let pkt =
+            OwnedParsedPacket::try_from_fake_time(mock_raw_sock.captured.pop().unwrap()).unwrap();
+        assert_eq!(pkt.clone().link.unwrap().source, local_mac);
+        assert_eq!(pkt.clone().link.unwrap().destination, gateway_mac);
+        assert_eq!(pkt.clone().get_src_dst_ips(), Some((local_ip, remote_ip)));
+        assert_eq!(pkt.clone().get_icmp_echo_info().unwrap().id, 42);
+        assert_eq!(pkt.clone().get_icmp_echo_info().unwrap().seq, 23);
+        assert!(!pkt.clone().get_icmp_echo_info().unwrap().is_reply);
+        assert_eq!(
+            pkt.clone().get_icmp_echo_info().unwrap().payload,
+            (0u8..10).collect_vec()
+        );
+    }
+
+    #[test]
+    fn test_send_default_payload() {
+        let mut mock_raw_sock = MockRawSocketProber::new();
+        let local_mac = [0, 1, 2, 3, 4, 5];
+        let local_ip = IpAddr::from_str("2600:1700:5b20:4e10:78eb:ea4d:7d28:8d7").unwrap();
+        let gateway_mac = [5, 5, 5, 6, 6, 6];
+        let remote_ip = IpAddr::from_str("2001:db8::1").unwrap();
+        icmp_ping(
+            &mut mock_raw_sock,
+            local_mac,
+            local_ip,
+            Some(gateway_mac),
+            remote_ip,
+            42u16,
+            23u16,
+            None,
+        );
+        // make sure we got 1 packet
+        assert_eq!(mock_raw_sock.captured.len(), 1);
+        let pkt =
+            OwnedParsedPacket::try_from_fake_time(mock_raw_sock.captured.pop().unwrap()).unwrap();
+        assert_eq!(pkt.clone().link.unwrap().source, local_mac);
+        assert_eq!(pkt.clone().link.unwrap().destination, gateway_mac);
+        assert_eq!(pkt.clone().get_src_dst_ips(), Some((local_ip, remote_ip)));
+        assert_eq!(pkt.clone().get_icmp_echo_info().unwrap().id, 42);
+        assert_eq!(pkt.clone().get_icmp_echo_info().unwrap().seq, 23);
+        assert!(!pkt.clone().get_icmp_echo_info().unwrap().is_reply);
+        assert_eq!(
+            pkt.clone().get_icmp_echo_info().unwrap().payload,
+            vec![0u8; 128]
         );
     }
 }

@@ -931,7 +931,7 @@ impl StatHandle {
     }
 
     /// Helper function to simplify testing b/c Rob can never remember what Gregor does to test these
-    pub fn get_sum(&mut self) -> u64 {
+    pub fn get_sum(&self) -> u64 {
         self.registry.stats.lock().unwrap()[self.idx]
             .data
             .all_time

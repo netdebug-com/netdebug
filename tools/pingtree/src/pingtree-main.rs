@@ -134,8 +134,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .unwrap_or("None".to_owned()),
     );
 
-    let echo_reply_without_request = counter_registries.new_registry("pingtree").add_stat(
-        "echo_reply_without_request",
+    let pingtree_no_request = counter_registries.new_registry("pingtree").add_stat(
+        "pingtree_no_request",
         Units::None,
         [StatType::COUNT],
     );
@@ -150,7 +150,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         connection_tracker_tx,
         prober_tx,
         ping_id: std::process::id() as u16,
-        echo_reply_without_request: echo_reply_without_request.clone(),
+        pingtree_no_request: pingtree_no_request.clone(),
     })
     .await;
 
