@@ -29,7 +29,7 @@ async fn test_remotedb_client() {
         .handle_store_counters(
             &client,
             &alice_counters,
-            &"alice".to_string(),
+            &Uuid::from_u128(0x1234_5678_9abc_0000_1234),
             &now,
             &"testOS".to_string(),
             &get_git_hash_version(),
@@ -46,7 +46,7 @@ async fn test_remotedb_client() {
         .handle_store_counters(
             &client,
             &bob_counters,
-            &"bob".to_string(),
+            &Uuid::from_u128(0x1234_0000_cafe_dead_beef),
             &now,
             &"testOS2".to_string(),
             &get_git_hash_version(),
@@ -67,7 +67,7 @@ async fn test_remotedb_client() {
                 level: DesktopLogLevel::Debug,
                 os: "TestOS".to_string(),
                 version: "1".to_string(),
-                device_uuid: "JOemama".to_string(),
+                device_uuid: Uuid::from_u128(0x1111_2222_3333_4444_5555),
                 time: Utc::now(),
             },
         )
@@ -83,7 +83,7 @@ async fn test_remotedb_client() {
         .handle_store_connection_measurement(
             &client,
             &ConnectionMeasurements::make_mock(),
-            &Uuid::new_v4(),
+            &Uuid::from_u128(0x1234_1234_1234_1234),
             &StorageSourceType::Desktop,
         )
         .await

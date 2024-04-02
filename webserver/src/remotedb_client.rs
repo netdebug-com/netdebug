@@ -100,7 +100,7 @@ pub enum RemoteDBClientMessages {
     },
     StoreCounters {
         counters: IndexMap<String, u64>,
-        source: String,
+        device_uuid: Uuid,
         os: String,
         version: String,
         time: DateTime<Utc>,
@@ -110,7 +110,7 @@ pub enum RemoteDBClientMessages {
         level: DesktopLogLevel,
         os: String,
         version: String,
-        device_uuid: String,
+        device_uuid: Uuid,
         time: DateTime<Utc>,
     },
 }
@@ -283,13 +283,20 @@ impl RemoteDBClient {
                 if let Err(e) = match &msg {
                     StoreCounters {
                         counters,
-                        source,
+                        device_uuid,
                         time,
                         os,
                         version,
                     } => {
-                        self.handle_store_counters(&client, counters, source, time, os, version)
-                            .await
+                        self.handle_store_counters(
+                            &client,
+                            counters,
+                            device_uuid,
+                            time,
+                            os,
+                            version,
+                        )
+                        .await
                     }
                     StoreLog { .. } => self.handle_store_log(&client, msg).await,
                     StoreConnectionMeasurements {
@@ -320,7 +327,7 @@ impl RemoteDBClient {
         &self,
         client: &Client,
         counters: &IndexMap<String, u64>,
-        source: &String,
+        device_uuid: &Uuid,
         time: &DateTime<Utc>,
         os: &String,
         version: &String,
@@ -353,7 +360,7 @@ impl RemoteDBClient {
         client.execute("BEGIN", &[]).await?;
         let statement = client
             .prepare(&format!(
-                "INSERT INTO {} (counter, value, source, time, os, version) VALUES ($1, $2, $3, $4, $5, $6)",
+                "INSERT INTO {} (counter, value, device_uuid, time, os, version) VALUES ($1, $2, $3, $4, $5, $6)",
                 self.counters_table_name
             ))
             .await?;
@@ -361,7 +368,7 @@ impl RemoteDBClient {
             let v_i64 = *v as i64; // TODO: change this conversion once we move to i64 counters
                                    // NOTE: converting DateTime<UTC> to postgres requires the magical 'with-chrono-0_4' feature
             client
-                .query(&statement, &[c, &v_i64, &source, &time, &os, &version])
+                .query(&statement, &[c, &v_i64, &device_uuid, &time, &os, &version])
                 .await?;
         }
         // NOTE: if we hit an error in the above loop and never get here, that's ok b/c we'll
@@ -437,7 +444,7 @@ impl RemoteDBClient {
                 time,
             } => {
                 client.execute(
-                format!("INSERT INTO {} (msg, level, source, time, os, version) VALUES ($1, $2, $3, $4, $5, $6)",self.logs_table_name).as_str(),
+                format!("INSERT INTO {} (msg, level, device_uuid, time, os, version) VALUES ($1, $2, $3, $4, $5, $6)",self.logs_table_name).as_str(),
             &[&msg, &level.to_string(), &device_uuid, &time, &os, &version  ]
         ).await?;
             }
@@ -497,7 +504,7 @@ impl RemoteDBClient {
                     tx_stats, 
                     rx_stats, 
                     time,
-                    client_uuid,
+                    device_uuid,
                     source_type
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 
                         $14, $15, $16, $17, $18, $19 , $20, $21, $22)"#,
