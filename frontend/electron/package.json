@@ -1,5 +1,5 @@
 {
-    "name": "@netdebug/desktop",
+    "name": "desktop",
     "productName": "NetDebug",
     "version": "0.2.4",
     "description": "NetDebug Desktop Application",
