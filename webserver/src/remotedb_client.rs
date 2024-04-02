@@ -9,7 +9,10 @@ use common::test_utils::test_dir;
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration, StatType, Units};
 use indexmap::IndexMap;
 use libconntrack::utils::PerfMsgCheck;
-use libconntrack_wasm::{topology_server_messages::DesktopLogLevel, ConnectionMeasurements};
+use libconntrack_wasm::{
+    topology_server_messages::DesktopLogLevel, AggregatedGatewayPingData, ConnectionMeasurements,
+    DnsTrackerEntry, NetworkInterfaceState,
+};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::channel;
@@ -38,12 +41,6 @@ pub struct RemoteDBClient {
     rx: RemoteDBClientReceiver,
     /// A counter to track how long messages to us have been in the queue
     queue_duration: StatHandleDuration,
-    /// Name of the table where we store desktop_counters
-    counters_table_name: String,
-    /// Name of the table where we store logs from the desktop
-    logs_table_name: String,
-    /// Basename of the table where we store the connection measurements, e.g., "connection_$company"
-    connections_table_name: String,
 }
 
 /// CREATE TABLE desktop_counters (
@@ -54,6 +51,9 @@ pub struct RemoteDBClient {
 pub const COUNTERS_TABLE_NAME: &str = "desktop_counters";
 pub const LOGS_TABLE_NAME: &str = "desktop_logs";
 pub const CONNECTIONS_TABLE_NAME: &str = "desktop_connections";
+pub const DNS_ENTRIES_TABLE_NAME: &str = "desktop_dns_entries";
+pub const NETWORK_INTERFACE_STATE_TABLE_NAME: &str = "desktop_network_interface_state";
+pub const AGGREGATED_PING_DATA_TABLE_NAME: &str = "desktop_aggregated_ping_data";
 pub const USERS_TABLE_NAME: &str = "users";
 pub const ORGANIZATION_TABLE_NAME: &str = "organizations";
 pub const DEVICE_TABLE_NAME: &str = "devices";
@@ -113,6 +113,24 @@ pub enum RemoteDBClientMessages {
         device_uuid: Uuid,
         time: DateTime<Utc>,
     },
+    StoreNetworkInterfaceState {
+        network_interface_state: NetworkInterfaceState,
+        device_uuid: Uuid,
+    },
+    StoreGatewayPingData {
+        ping_data: Vec<AggregatedGatewayPingData>,
+        device_uuid: Uuid,
+    },
+    StoreDnsEntries {
+        dns_entries: Vec<DnsTrackerEntry>,
+        device_uuid: Uuid,
+    },
+}
+
+impl From<RemoteDBClientMessages> for PerfMsgCheck<RemoteDBClientMessages> {
+    fn from(msg: RemoteDBClientMessages) -> Self {
+        PerfMsgCheck::new(msg)
+    }
 }
 
 // full URL is postgres://rw_user:PASSWORD@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require
@@ -199,9 +217,6 @@ impl RemoteDBClient {
                 Units::Microseconds,
                 [StatType::AVG, StatType::MAX],
             ),
-            counters_table_name: COUNTERS_TABLE_NAME.to_string(),
-            logs_table_name: LOGS_TABLE_NAME.to_string(),
-            connections_table_name: CONNECTIONS_TABLE_NAME.to_string(),
         };
         tokio::spawn(async move {
             remote_db_client.rx_loop().await.unwrap();
@@ -211,6 +226,10 @@ impl RemoteDBClient {
 
     pub fn get_tx(&self) -> RemoteDBClientSender {
         self.tx.clone()
+    }
+
+    pub fn get_queue_duration(&self) -> StatHandleDuration {
+        self.queue_duration.clone()
     }
 
     /// Useful for other processes that want to read the database but don't want to do message
@@ -277,54 +296,160 @@ impl RemoteDBClient {
                     );
                 }
             });
-            while let Some(msg) = self.rx.recv().await {
-                let msg = msg.perf_check_get_with_stats("RemoteDBClient", &mut self.queue_duration);
-                use RemoteDBClientMessages::*;
-                if let Err(e) = match &msg {
-                    StoreCounters {
-                        counters,
-                        device_uuid,
-                        time,
-                        os,
-                        version,
-                    } => {
-                        self.handle_store_counters(
-                            &client,
-                            counters,
-                            device_uuid,
-                            time,
-                            os,
-                            version,
-                        )
-                        .await
-                    }
-                    StoreLog { .. } => self.handle_store_log(&client, msg).await,
-                    StoreConnectionMeasurements {
-                        connection_measurements,
-                        device_uuid,
-                        source_type,
-                    } => {
-                        self.handle_store_connection_measurement(
-                            &client,
-                            connection_measurements,
-                            device_uuid,
-                            source_type,
-                        )
-                        .await
-                    }
-                } {
-                    warn!(
-                        "RemoteClientDB loop produced error: restarting client: {}",
-                        e
-                    );
-                    break;
-                }
+            if let Err(e) =
+                Self::inner_loop(&mut self.rx, &client, self.queue_duration.clone()).await
+            {
+                warn!(
+                    "RemoteClientDB loop produced error: restarting client: {}",
+                    e
+                );
             }
         }
     }
 
+    pub async fn inner_loop(
+        rx: &mut RemoteDBClientReceiver,
+        client: &Client,
+        mut queue_duration_stat: StatHandleDuration,
+    ) -> Result<(), tokio_postgres::Error> {
+        while let Some(msg) = rx.recv().await {
+            let msg = msg.perf_check_get_with_stats("RemoteDBClient", &mut queue_duration_stat);
+            use RemoteDBClientMessages::*;
+            match &msg {
+                StoreCounters {
+                    counters,
+                    device_uuid,
+                    time,
+                    os,
+                    version,
+                } => {
+                    Self::handle_store_counters(client, counters, device_uuid, time, os, version)
+                        .await
+                }
+                StoreLog { .. } => Self::handle_store_log(client, msg).await,
+                StoreConnectionMeasurements {
+                    connection_measurements,
+                    device_uuid,
+                    source_type,
+                } => {
+                    Self::handle_store_connection_measurement(
+                        client,
+                        connection_measurements,
+                        device_uuid,
+                        source_type,
+                    )
+                    .await
+                }
+                StoreNetworkInterfaceState {
+                    network_interface_state,
+                    device_uuid,
+                } => {
+                    Self::handle_store_network_interface_state(
+                        client,
+                        network_interface_state,
+                        device_uuid,
+                    )
+                    .await
+                }
+                StoreGatewayPingData {
+                    ping_data,
+                    device_uuid,
+                } => Self::handle_store_gateway_ping_data(client, ping_data, device_uuid).await,
+                StoreDnsEntries {
+                    dns_entries,
+                    device_uuid,
+                } => Self::handle_store_dns_entries(client, dns_entries, device_uuid).await,
+            }?;
+        }
+        Ok(())
+    }
+
+    pub async fn handle_store_dns_entries(
+        client: &Client,
+        dns_entries: &[DnsTrackerEntry],
+        device_uuid: &Uuid,
+    ) -> Result<(), tokio_postgres::error::Error> {
+        client.execute("BEGIN", &[]).await?;
+
+        let statement = client
+            .prepare(&format!(
+                "INSERT INTO {} (ip, hostname, created, from_ptr_record, rtt_usec, ttl_sec, device_uuid) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                DNS_ENTRIES_TABLE_NAME,
+            ))
+            .await?;
+        for entry in dns_entries {
+            client
+                .execute(
+                    &statement,
+                    &[
+                        &entry.ip.to_string(),
+                        &entry.hostname,
+                        &entry.created,
+                        &entry.from_ptr_record,
+                        &entry.rtt.map(|rtt| rtt.num_microseconds()),
+                        &entry.ttl.map(|ttl| ttl.num_seconds()),
+                        &device_uuid,
+                    ],
+                )
+                .await?;
+        }
+
+        // NOTE: if we hit an error in the above loop and never get here, that's ok b/c we'll
+        // need to tear down the client connection and restart it which the calling code does
+        // anyway
+        client.execute("COMMIT", &[]).await?;
+        Ok(())
+    }
+
+    pub async fn handle_store_gateway_ping_data(
+        client: &Client,
+        _ping_data: &[AggregatedGatewayPingData],
+        _device_uuid: &Uuid,
+    ) -> Result<(), tokio_postgres::error::Error> {
+        client.execute("BEGIN", &[]).await?;
+        todo!();
+
+        /*
+        let statement = client
+        .prepare(&format!(
+            "INSERT INTO {} (ip, hostname, created, from_ptr_record, rtt_usec, ttl_sec, device_uuid) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            DNS_ENTRIES_TABLE_NAME,
+        ))
+        .await?;
+        for entry in dns_entries {
+            client
+                .query(
+                    &statement,
+                    &[
+                        &entry.ip,
+                        &entry.hostname,
+                        &entry.created,
+                        &entry.from_ptr_record,
+                        &entry.rtt.map(|rtt| rtt.num_microseconds()),
+                        &entry.ttl.map(|ttl| ttl.num_seconds()),
+                        &device_uuid,
+                    ],
+                )
+                .await?;
+        }
+
+        // NOTE: if we hit an error in the above loop and never get here, that's ok b/c we'll
+        // need to tear down the client connection and restart it which the calling code does
+        // anyway
+        client.execute("COMMIT", &[]).await?;
+        Ok(())
+        */
+    }
+
+    pub async fn handle_store_network_interface_state(
+        _client: &Client,
+        _network_state: &NetworkInterfaceState,
+        _device_uuid: &Uuid,
+    ) -> Result<(), tokio_postgres::error::Error> {
+        todo!();
+    }
+
     pub async fn handle_store_counters(
-        &self,
         client: &Client,
         counters: &IndexMap<String, u64>,
         device_uuid: &Uuid,
@@ -361,7 +486,7 @@ impl RemoteDBClient {
         let statement = client
             .prepare(&format!(
                 "INSERT INTO {} (counter, value, device_uuid, time, os, version) VALUES ($1, $2, $3, $4, $5, $6)",
-                self.counters_table_name
+                COUNTERS_TABLE_NAME
             ))
             .await?;
         for (c, v) in counters {
@@ -430,7 +555,6 @@ impl RemoteDBClient {
     }
 
     pub async fn handle_store_log(
-        &self,
         client: &Client,
         msg: RemoteDBClientMessages,
     ) -> Result<(), tokio_postgres::Error> {
@@ -444,7 +568,7 @@ impl RemoteDBClient {
                 time,
             } => {
                 client.execute(
-                format!("INSERT INTO {} (msg, level, device_uuid, time, os, version) VALUES ($1, $2, $3, $4, $5, $6)",self.logs_table_name).as_str(),
+                format!("INSERT INTO {} (msg, level, device_uuid, time, os, version) VALUES ($1, $2, $3, $4, $5, $6)", LOGS_TABLE_NAME).as_str(),
             &[&msg, &level.to_string(), &device_uuid, &time, &os, &version  ]
         ).await?;
             }
@@ -463,7 +587,6 @@ impl RemoteDBClient {
     /// using the right quoted insert.
 
     pub async fn handle_store_connection_measurement(
-        &self,
         client: &Client,
         m: &ConnectionMeasurements,
         device_uuid: &Uuid,
@@ -508,7 +631,7 @@ impl RemoteDBClient {
                     source_type
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 
                         $14, $15, $16, $17, $18, $19 , $20, $21, $22)"#,
-                    self.connections_table_name
+                    CONNECTIONS_TABLE_NAME
                 )
                 .as_str(),
                 // annoying - formatter is confused by this... hand format
@@ -559,19 +682,15 @@ impl RemoteDBClient {
                 Units::Microseconds,
                 [StatType::AVG],
             ),
-            counters_table_name: COUNTERS_TABLE_NAME.to_string(),
-            logs_table_name: LOGS_TABLE_NAME.to_string(),
-            connections_table_name: CONNECTIONS_TABLE_NAME.to_string(),
         }
     }
 
     pub async fn count_remote_counters_rows(
-        &self,
         client: &Client,
     ) -> Result<i64, tokio_postgres::error::Error> {
         let rows = client
             .query(
-                format!("SELECT COUNT(*) FROM {}", self.counters_table_name).as_str(),
+                format!("SELECT COUNT(*) FROM {}", COUNTERS_TABLE_NAME).as_str(),
                 &[],
             )
             .await?;
@@ -583,12 +702,11 @@ impl RemoteDBClient {
     }
 
     pub async fn count_remote_logs_rows(
-        &self,
         client: &Client,
     ) -> Result<i64, tokio_postgres::error::Error> {
         let rows = client
             .query(
-                format!("SELECT COUNT(*) FROM {}", self.logs_table_name).as_str(),
+                format!("SELECT COUNT(*) FROM {}", LOGS_TABLE_NAME).as_str(),
                 &[],
             )
             .await?;
@@ -599,12 +717,11 @@ impl RemoteDBClient {
         Ok(count)
     }
     pub async fn count_remote_connection_rows(
-        &self,
         client: &Client,
     ) -> Result<i64, tokio_postgres::error::Error> {
         let rows = client
             .query(
-                format!("SELECT COUNT(*) FROM {}", self.connections_table_name).as_str(),
+                format!("SELECT COUNT(*) FROM {}", CONNECTIONS_TABLE_NAME).as_str(),
                 &[],
             )
             .await?;

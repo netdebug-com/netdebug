@@ -112,15 +112,36 @@ async fn handle_desktop_message(
             warn!("Received a DesktopToTopologyServer::Ping as JSON which should never be sent over the wire");
         }
         PushNetworkInterfaceState { network_interface_state } => {
-            info!("TODO: Received network interface state: {}", network_interface_state);
+            send_or_log_async_helper(remotedb_client,
+                "handle_push_network_interface_state", 
+                RemoteDBClientMessages::StoreNetworkInterfaceState { network_interface_state, device_uuid }
+            ).await;
         }
         PushGatewayPingData { ping_data } => {
-            info!("TODO: Received gateway ping data: {:?}", ping_data);
+            send_or_log_async_helper(remotedb_client,
+                "handle_push_gateway_ping_data",
+                RemoteDBClientMessages::StoreGatewayPingData { ping_data, device_uuid }
+            ).await;
         }
         PushDnsEntries { dns_entries } => {
-            info!("TODO: Received dns_entries: {:?}", dns_entries);
+            send_or_log_async_helper(remotedb_client,
+                "handle_push_dns_entries",
+                RemoteDBClientMessages::StoreDnsEntries { dns_entries, device_uuid }
+            ).await;
         }
 
+    }
+}
+
+async fn send_or_log_async_helper(
+    remotedb_client: &Option<RemoteDBClientSender>,
+    what: &str,
+    msg: RemoteDBClientMessages,
+) {
+    if let Some(remotedb_client) = remotedb_client {
+        send_or_log_async!(remotedb_client, what, msg).await;
+    } else {
+        debug!("Storage not configured:: not storing: {:?}", msg);
     }
 }
 

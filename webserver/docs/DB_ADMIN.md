@@ -34,14 +34,20 @@
     SELECT add_retention_policy('desktop_logs', INTERVAL '30 days');
     SELECT add_retention_policy('desktop_connections', INTERVAL '30 days');
     ```
-4. TODO: setup 'continuous aggregates' to continuously downsample our data
+4. User auth info: 
+  * These need to be run whenever you add a table:
+    ```
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO readaccess;
+    GRANT SELECT,INSERT,DELETE,UPDATE ON ALL TABLES IN SCHEMA public TO rw_updater;
+    ```
+  * More info: https://docs.timescale.com/use-timescale/latest/security/client-credentials/
+
+5. TODO: setup 'continuous aggregates' to continuously downsample our data
     https://docs.timescale.com/use-timescale/latest/data-retention/data-retention-with-continuous-aggregates/
     NOT DONE YET!
 
-5. TODO: Consider using Timescale's "tiered storage" because we don't need high performance on this data;
+6. TODO: Consider using Timescale's "tiered storage" because we don't need high performance on this data;
     details are here: https://docs.timescale.com/use-timescale/latest/data-tiering/
 
-6. User auth info: check out 
-  * https://docs.timescale.com/use-timescale/latest/security/client-credentials/
   * Create a read-only user using SQL ala https://docs.timescale.com/use-timescale/latest/security/read-only-role/
   * I created 'read_user' and granted access to the desktop_* tables.
