@@ -336,6 +336,7 @@ impl<'a> DnsTracker<'a> {
         };
         if let Some((ip, hostname, from_ptr_record)) = reply {
             let entry = DnsTrackerEntry {
+                ip,
                 hostname: hostname.clone(),
                 created: *created,
                 from_ptr_record,
@@ -381,6 +382,7 @@ impl<'a> DnsTracker<'a> {
         self.reverse_map.insert(
             ip,
             DnsTrackerEntry {
+                ip,
                 hostname,
                 created,
                 from_ptr_record: false,
@@ -799,14 +801,14 @@ mod test {
         dns_tracker.parse_dns(key, t1, reply.to_vec(), true).await;
         assert_eq!(dns_tracker.pending.len(), 0);
         assert_eq!(dns_tracker.reverse_map.len(), 4);
+        // could be any of these four - hashmap order is not specified
+        let valid_ips = HashSet::from([
+            IpAddr::from_str("13.227.21.143").unwrap(),
+            IpAddr::from_str("13.227.21.117").unwrap(),
+            IpAddr::from_str("13.227.21.175").unwrap(),
+            IpAddr::from_str("13.227.21.83").unwrap(),
+        ]);
         if let Some((ip, entry)) = dns_tracker.reverse_map.iter().next() {
-            // could be any of these four - hashmap order is not specified
-            let valid_ips = HashSet::from([
-                IpAddr::from_str("13.227.21.143").unwrap(),
-                IpAddr::from_str("13.227.21.117").unwrap(),
-                IpAddr::from_str("13.227.21.175").unwrap(),
-                IpAddr::from_str("13.227.21.83").unwrap(),
-            ]);
             assert!(valid_ips.contains(ip));
             assert!(!entry.from_ptr_record);
             assert_eq!(entry.rtt.unwrap(), t1 - t0); // RTT is the second timestamp b/c first is zero
@@ -816,16 +818,26 @@ mod test {
         let storage_msg = storage_rx.try_recv().unwrap().skip_perf_check();
         match storage_msg {
             DataStorageMessage::StoreDnsEntries { dns_entries } => {
-                assert_eq!(dns_entries.len(), 1);
-                assert_eq!(dns_entries.first().unwrap().rtt.unwrap(), t1 - t0);
-                assert_eq!(
-                    dns_entries.first().unwrap(),
-                    dns_tracker
-                        .reverse_map
-                        // we could use any of the 4 IPs above.
-                        .get(&IpAddr::from_str("13.227.21.83").unwrap())
-                        .unwrap()
-                );
+                assert_eq!(dns_entries.len(), 4);
+                assert_eq!(dns_entries[0].rtt.unwrap(), t1 - t0);
+                assert_eq!(dns_entries[1].rtt.unwrap(), t1 - t0);
+                assert_eq!(dns_entries[2].rtt.unwrap(), t1 - t0);
+                assert_eq!(dns_entries[3].rtt.unwrap(), t1 - t0);
+                let ips_from_storage_msg = dns_entries
+                    .iter()
+                    .map(|e| e.ip)
+                    .collect::<HashSet<IpAddr>>();
+                assert_eq!(ips_from_storage_msg, valid_ips);
+                for entry in &dns_entries {
+                    assert_eq!(
+                        entry,
+                        dns_tracker
+                            .reverse_map
+                            // we could use any of the 4 IPs above.
+                            .get(&entry.ip)
+                            .unwrap()
+                    );
+                }
             }
             _ => panic!("Unexpected DataStorageMessage"),
         }
@@ -839,6 +851,7 @@ mod test {
         dns_tracker.reverse_map.insert(
             IpAddr::from_str("1.2.3.4").unwrap(),
             DnsTrackerEntry {
+                ip: IpAddr::from_str("1.2.3.4").unwrap(),
                 hostname: "foo".to_string(),
                 created: Utc::now() - Duration::seconds(2),
                 from_ptr_record: false,
