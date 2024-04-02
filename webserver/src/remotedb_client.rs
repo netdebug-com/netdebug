@@ -657,7 +657,7 @@ impl RemoteDBClient {
         let associated_apps = serde_json::to_string(&m.associated_apps).unwrap();
         // annoying; postgresql_tokio doesn't map u64 to BIGINT
         let tx_loss = m.tx_stats.lost_bytes.map(|b| b as i64);
-        let rx_loss = m.tx_stats.lost_bytes.map(|b| b as i64);
+        let rx_loss = m.rx_stats.lost_bytes.map(|b| b as i64);
         let tx_stats = serde_json::to_string(&m.tx_stats).unwrap();
         let rx_stats = serde_json::to_string(&m.rx_stats).unwrap();
         let now = Utc::now();
