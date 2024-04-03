@@ -1831,7 +1831,7 @@ pub mod test {
         dns_tracker.reverse_map.insert(
             remote_ip,
             DnsTrackerEntry {
-                ip: remote_ip,
+                ip: Some(remote_ip),
                 hostname: test_hostname.clone(),
                 created: Utc::now(),
                 from_ptr_record: false,

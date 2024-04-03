@@ -171,7 +171,7 @@ export type ConnectionMeasurements = {
 };
 export type I64 = number;
 export type DnsTrackerEntry = {
-    "ip": string;
+    "ip": (string | null);
     "hostname": string;
     "created": string;
     "from_ptr_record": boolean;

@@ -28,7 +28,7 @@ pub const MIN_DURATION_FOR_AVG_RATE_MICROS: i64 = 10_000;
 #[serde_with::serde_as]
 #[derive(Debug, Clone, Hash, Serialize, Deserialize, PartialEq, Eq, TypeDef)]
 pub struct DnsTrackerEntry {
-    pub ip: IpAddr,
+    pub ip: Option<IpAddr>,
     pub hostname: String,
     #[type_def(type_of = "String")]
     pub created: DateTime<Utc>,
