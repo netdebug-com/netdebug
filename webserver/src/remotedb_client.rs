@@ -81,6 +81,8 @@ pub enum RemoteDBClientError {
     PostgresqlError(#[from] tokio_postgres::Error),
     #[error("Database Invariate Error {err}")]
     DbInvariateError { err: String },
+    #[error("PermissionDenied: {err}")]
+    PermissionDenied { err: String },
 }
 
 impl Display for StorageSourceType {

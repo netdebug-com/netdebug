@@ -61,10 +61,14 @@ impl ConnectionMeasurements {
     }
 
     pub fn make_mock() -> ConnectionMeasurements {
+        ConnectionMeasurements::make_mock_with_ips("127.0.0.1", "128.8.128.38")
+    }
+
+    pub fn make_mock_with_ips(src_ip: &str, dst_ip: &str) -> ConnectionMeasurements {
         ConnectionMeasurements {
             key: ConnectionKey {
-                local_ip: IpAddr::from_str("127.0.0.1").unwrap(),
-                remote_ip: IpAddr::from_str("128.8.128.38").unwrap(),
+                local_ip: IpAddr::from_str(src_ip).unwrap(),
+                remote_ip: IpAddr::from_str(dst_ip).unwrap(),
                 local_l4_port: 12345,
                 remote_l4_port: 443,
                 ip_proto: crate::IpProtocol::TCP,
