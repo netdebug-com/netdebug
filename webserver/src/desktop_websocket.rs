@@ -120,7 +120,7 @@ async fn handle_desktop_message(
         PushGatewayPingData { ping_data } => {
             send_or_log_async_helper(remotedb_client,
                 "handle_push_gateway_ping_data",
-                RemoteDBClientMessages::StoreGatewayPingData { ping_data, device_uuid }
+                RemoteDBClientMessages::StoreGatewayPingData { ping_data }
             ).await;
         }
         PushDnsEntries { dns_entries } => {
