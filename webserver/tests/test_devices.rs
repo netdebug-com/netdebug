@@ -1,5 +1,4 @@
 use axum::http::StatusCode;
-use common::init::netdebug_init;
 use gui_types::{PublicDeviceDetails, PublicDeviceInfo};
 use http_body_util::BodyExt;
 use libwebserver::remotedb_client::RemoteDBClient;

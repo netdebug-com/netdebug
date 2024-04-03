@@ -99,7 +99,7 @@ async fn handle_desktop_message(
             counters,
             os,
             version,
-        } => handle_push_counters(remotedb_client, timestamp, counters, addr, os, version).await,
+        } => handle_push_counters(remotedb_client, timestamp, counters, device_uuid, os, version).await,
         PushLog {
             timestamp,
             msg,
@@ -107,7 +107,7 @@ async fn handle_desktop_message(
             os,
             version,
             .. // FIXME: use `scope` field!!
-        } => handle_push_log(remotedb_client, timestamp, msg, level, os, version, addr.to_string()).await,
+        } => handle_push_log(remotedb_client, timestamp, msg, level, os, version, device_uuid).await,
         Ping => {
             warn!("Received a DesktopToTopologyServer::Ping as JSON which should never be sent over the wire");
         }
@@ -131,7 +131,7 @@ async fn handle_push_log(
     level: DesktopLogLevel,
     os: String,
     version: String,
-    device_uuid: String,
+    device_uuid: Uuid,
 ) {
     if let Some(remotedb_client) = remotedb_client {
         send_or_log_async!(
@@ -159,7 +159,7 @@ async fn handle_push_counters(
     remotedb_client: &Option<RemoteDBClientSender>,
     timestamp: chrono::DateTime<chrono::Utc>,
     counters: indexmap::IndexMap<String, u64>,
-    addr: &SocketAddr,
+    device_uuid: Uuid,
     os: String,
     version: String,
 ) {
@@ -167,7 +167,7 @@ async fn handle_push_counters(
         debug!(
             "Got {} counters from {}  at {} - OS {} version {} : TODO - store them!",
             counters.len(),
-            addr,
+            device_uuid,
             timestamp,
             os,
             version
@@ -177,7 +177,7 @@ async fn handle_push_counters(
             "handle_push_counters",
             RemoteDBClientMessages::StoreCounters {
                 counters,
-                source: addr.to_string(), // TODO: replace this with an obfuscated client identifier!
+                device_uuid,
                 time: timestamp,
                 os,
                 version
@@ -188,7 +188,7 @@ async fn handle_push_counters(
         debug!(
             "Got {} counters from {}. NOT STORING THEM -- NO REMOTE DB CONFIGURED",
             counters.len(),
-            addr,
+            device_uuid,
         );
     }
 }
