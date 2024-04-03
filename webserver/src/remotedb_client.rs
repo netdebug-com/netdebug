@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use common::test_utils::test_dir;
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration, StatType, Units};
 use indexmap::IndexMap;
+use itertools::Itertools;
 use libconntrack::utils::PerfMsgCheck;
 use libconntrack_wasm::{
     topology_server_messages::DesktopLogLevel, AggregatedGatewayPingData, ConnectionMeasurements,
@@ -119,7 +120,6 @@ pub enum RemoteDBClientMessages {
     },
     StoreGatewayPingData {
         ping_data: Vec<AggregatedGatewayPingData>,
-        device_uuid: Uuid,
     },
     StoreDnsEntries {
         dns_entries: Vec<DnsTrackerEntry>,
@@ -351,10 +351,9 @@ impl RemoteDBClient {
                     )
                     .await
                 }
-                StoreGatewayPingData {
-                    ping_data,
-                    device_uuid,
-                } => Self::handle_store_gateway_ping_data(client, ping_data, device_uuid).await,
+                StoreGatewayPingData { ping_data } => {
+                    Self::handle_store_gateway_ping_data(client, ping_data).await
+                }
                 StoreDnsEntries {
                     dns_entries,
                     device_uuid,
@@ -403,50 +402,107 @@ impl RemoteDBClient {
 
     pub async fn handle_store_gateway_ping_data(
         client: &Client,
-        _ping_data: &[AggregatedGatewayPingData],
-        _device_uuid: &Uuid,
+        ping_data: &[AggregatedGatewayPingData],
     ) -> Result<(), tokio_postgres::error::Error> {
         client.execute("BEGIN", &[]).await?;
-        todo!();
 
-        /*
+        // TODO: do we need a timestamp when the *device* generated the aggregated
+        // ping data? Right now we only timestamp in DB insert..... But if we use
+        // client timestamps we don't know if they are accurate...
+        // I think it's fine as-is
         let statement = client
-        .prepare(&format!(
-            "INSERT INTO {} (ip, hostname, created, from_ptr_record, rtt_usec, ttl_sec, device_uuid) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            DNS_ENTRIES_TABLE_NAME,
-        ))
-        .await?;
-        for entry in dns_entries {
+            .prepare(&format!(
+                "INSERT INTO {} (
+                network_interface_state_uuid,
+                gateway_ip,
+                num_probes_sent,
+                num_responses_recv,
+                rtt_mean_ns,
+                rtt_variance_ns,
+                rtt_min_ns,
+                rtt_p50_ns, 
+                rtt_p75_ns,
+                rtt_p90_ns,
+                rtt_p99_ns,
+                rtt_max_ns 
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                AGGREGATED_PING_DATA_TABLE_NAME
+            ))
+            .await?;
+
+        for ping in ping_data {
             client
                 .query(
                     &statement,
                     &[
-                        &entry.ip,
-                        &entry.hostname,
-                        &entry.created,
-                        &entry.from_ptr_record,
-                        &entry.rtt.map(|rtt| rtt.num_microseconds()),
-                        &entry.ttl.map(|ttl| ttl.num_seconds()),
-                        &device_uuid,
+                        &ping.network_interface_uuid,
+                        &ping.gateway_ip.to_string(),
+                        &(ping.num_probes_sent as i64),
+                        &(ping.num_responses_recv as i64),
+                        &(ping.rtt_mean_ns as i64),
+                        &ping.rtt_variance_ns.map(|x| x as i64),
+                        &(ping.rtt_min_ns as i64),
+                        &(ping.rtt_p50_ns as i64),
+                        &(ping.rtt_p75_ns as i64),
+                        &(ping.rtt_p90_ns as i64),
+                        &(ping.rtt_p99_ns as i64),
+                        &(ping.rtt_max_ns as i64),
                     ],
                 )
                 .await?;
         }
-
         // NOTE: if we hit an error in the above loop and never get here, that's ok b/c we'll
         // need to tear down the client connection and restart it which the calling code does
         // anyway
         client.execute("COMMIT", &[]).await?;
         Ok(())
-        */
     }
 
     pub async fn handle_store_network_interface_state(
-        _client: &Client,
-        _network_state: &NetworkInterfaceState,
-        _device_uuid: &Uuid,
+        client: &Client,
+        network_state: &NetworkInterfaceState,
+        device_uuid: &Uuid,
     ) -> Result<(), tokio_postgres::error::Error> {
-        todo!();
+        client
+            .execute(
+                &format!(
+                    "INSERT INTO {} (
+                    state_uuid, 
+                    gateways, 
+                    interface_name, 
+                    interface_ips, 
+                    comment,
+                    has_link, 
+                    is_wireless,
+                    start_time,
+                    end_time, 
+                    device_uuid
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                    NETWORK_INTERFACE_STATE_TABLE_NAME
+                ),
+                &[
+                    &network_state.uuid,
+                    &network_state
+                        .gateways
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect_vec(),
+                    &network_state.interface_name,
+                    &network_state
+                        .interface_ips
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect_vec(),
+                    &network_state.comment,
+                    &network_state.has_link,
+                    &network_state.is_wireless,
+                    &network_state.start_time,
+                    &network_state.end_time,
+                    &device_uuid,
+                ],
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn handle_store_counters(

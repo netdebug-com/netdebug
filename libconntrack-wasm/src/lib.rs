@@ -162,7 +162,7 @@ impl FromStr for IpProtocol {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
+#[derive(Clone, Debug, Serialize, Deserialize, TypeDef, PartialEq)]
 pub struct NetworkGatewayPingProbe {
     #[serde(with = "ts_nanoseconds_option", rename = "sent_time_utc_ns")]
     #[type_def(type_of = "Option<u64>")]
@@ -204,7 +204,7 @@ pub enum NetworkGatewayPingType {
     ArpOrNdp,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, TypeDef)]
 /// The state for when we ping the gateways local to our network interfaces
 pub struct NetworkGatewayPingState {
     /// The ConnectionKey that describes our ping's flow
@@ -225,7 +225,7 @@ pub struct NetworkGatewayPingState {
     pub historical_probes: VecDeque<NetworkGatewayPingProbe>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, TypeDef)]
+#[derive(Clone, Debug, Serialize, Deserialize, TypeDef, PartialEq)]
 pub struct AggregatedGatewayPingData {
     /// The UUID of the NetworkInterfaceState this ping data belongs to
     #[type_def(type_of = "String")]
@@ -255,7 +255,7 @@ pub struct AggregatedGatewayPingData {
     // TODO: eventually we can also add a vec with more percentiles if we want to.
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TypeDef)]
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Deserialize, TypeDef)]
 pub struct NetworkInterfaceState {
     /// A random, unique id to identify this particular instance. We need/use
     /// this on the DB backend. To match DB entries

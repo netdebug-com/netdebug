@@ -5,11 +5,12 @@ set -e # fail on any errors
 OUTFILE=production_schema.sql
 URL=postgres://tsdbadmin@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require
 
-# allow the caller to override which PG_DUMP to use
-if [ -z $PG_DUMP ] ; then
-    # default to docker with the latest version
+
+if [ -n "$PG_DUMP_USE_DOCKER" ] ; then
     # NOTE: do not specify the '-t' option as it merged stderr with stdout
     export PG_DUMP="docker run -i --rm  postgres pg_dump "
+else
+    PG_DUMP=pg_dump
 fi
 
 die() {

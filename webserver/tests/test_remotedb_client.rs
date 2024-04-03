@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::str::FromStr;
 
@@ -6,9 +6,11 @@ use chrono::{DateTime, Utc};
 use common_wasm::get_git_hash_version;
 use indexmap::IndexMap;
 use itertools::Itertools;
-use libconntrack_wasm::ConnectionMeasurements;
 use libconntrack_wasm::{topology_server_messages::DesktopLogLevel, DnsTrackerEntry};
-use libwebserver::remotedb_client::{RemoteDBClient, RemoteDBClientMessages, StorageSourceType};
+use libconntrack_wasm::{AggregatedGatewayPingData, ConnectionMeasurements, NetworkInterfaceState};
+use libwebserver::remotedb_client::{
+    RemoteDBClient, RemoteDBClientMessages, StorageSourceType, NETWORK_INTERFACE_STATE_TABLE_NAME,
+};
 use tokio::sync::mpsc;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client as PostgresClient, Row};
@@ -94,6 +96,8 @@ async fn test_remotedb_client() {
     assert_eq!(rows, 1);
 
     do_test_store_dns_entries(&remotedb_client, &client).await;
+    do_test_store_network_interface_state(&remotedb_client, &client).await;
+    do_test_store_aggregated_ping_data(&remotedb_client, &client).await;
 }
 
 async fn do_test_store_dns_entries(remotedb_client: &RemoteDBClient, client: &PostgresClient) {
@@ -150,6 +154,148 @@ async fn do_test_store_dns_entries(remotedb_client: &RemoteDBClient, client: &Po
     assert_eq!(from_db.iter().map(|x| x.2).collect_vec(), vec![uuid, uuid]);
 }
 
+fn mk_ip(ip_str: &str) -> IpAddr {
+    IpAddr::from_str(ip_str).unwrap()
+}
+
+async fn do_test_store_network_interface_state(
+    remotedb_client: &RemoteDBClient,
+    client: &PostgresClient,
+) {
+    // timestamp is from 2024-04-02.
+    // Note timescaledb appears to truncate timestamps to microsecond precision so make sure that the
+    // nanos part of the timestamps is otherwise zero
+    let ts = DateTime::from_timestamp(1712088645, 112_233_000).unwrap();
+    let state_uuid = Uuid::from_u128(0x4242_4242);
+    let state = NetworkInterfaceState {
+        uuid: state_uuid,
+        gateways: vec![mk_ip("192.168.42.1")],
+        interface_name: Some("eth-foo".to_owned()),
+        interface_ips: vec![mk_ip("192.168.42.42"), mk_ip("10.0.0.1")],
+        comment: "No comment!".to_owned(),
+        has_link: true,
+        is_wireless: false,
+        start_time: ts,
+        end_time: Some(ts + chrono::Duration::seconds(23)),
+        gateways_ping: HashMap::new(), // unused
+    };
+    let device_uuid = Uuid::from_u128(0x1111_2222_3333_4444_5555);
+    let (tx, mut rx) = mpsc::channel(10);
+    tx.send(
+        RemoteDBClientMessages::StoreNetworkInterfaceState {
+            network_interface_state: state.clone(),
+            device_uuid,
+        }
+        .into(),
+    )
+    .await
+    .unwrap();
+    drop(tx); // need to drop rx otherwise inner_loop won't return
+    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_queue_duration())
+        .await
+        .unwrap();
+    let from_db = db_select_all_helper(
+        client,
+        NETWORK_INTERFACE_STATE_TABLE_NAME,
+        extract_network_interface_state_row,
+    )
+    .await;
+    assert_eq!(from_db.len(), 1);
+    assert_eq!(from_db[0].1, state);
+    assert_eq!(from_db[0].2, device_uuid);
+
+    // Delete previous entry and try again -- this time checking NULL columns
+    assert_eq!(
+        client
+            .execute(
+                &format!("DELETE FROM {}", NETWORK_INTERFACE_STATE_TABLE_NAME),
+                &[],
+            )
+            .await
+            .unwrap(),
+        1 // one row deleted
+    );
+    let state = NetworkInterfaceState {
+        uuid: state_uuid,
+        gateways: Vec::new(),
+        interface_name: None,
+        interface_ips: Vec::new(),
+        comment: "No comment!".to_owned(),
+        has_link: true,
+        is_wireless: false,
+        start_time: ts,
+        end_time: None,
+        gateways_ping: HashMap::new(), // unused
+    };
+    let device_uuid = Uuid::from_u128(0x1111_2222_3333_4444_5555);
+    let (tx, mut rx) = mpsc::channel(10);
+    tx.send(
+        RemoteDBClientMessages::StoreNetworkInterfaceState {
+            network_interface_state: state.clone(),
+            device_uuid,
+        }
+        .into(),
+    )
+    .await
+    .unwrap();
+    drop(tx); // need to drop rx otherwise inner_loop won't return
+    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_queue_duration())
+        .await
+        .unwrap();
+    let from_db = db_select_all_helper(
+        client,
+        NETWORK_INTERFACE_STATE_TABLE_NAME,
+        extract_network_interface_state_row,
+    )
+    .await;
+    assert_eq!(from_db.len(), 1);
+    assert_eq!(from_db[0].1, state);
+    assert_eq!(from_db[0].2, device_uuid);
+}
+
+async fn do_test_store_aggregated_ping_data(
+    remotedb_client: &RemoteDBClient,
+    client: &PostgresClient,
+) {
+    let ping_data = vec![AggregatedGatewayPingData {
+        network_interface_uuid: Uuid::from_u128(0x1000_1000_aaaa),
+        gateway_ip: mk_ip("192.168.1.1"),
+        num_probes_sent: 42,
+        num_responses_recv: 23,
+        rtt_mean_ns: 42_000,
+        rtt_variance_ns: Some(23_000),
+        rtt_min_ns: 10_000,
+        rtt_p50_ns: 50_000,
+        rtt_p75_ns: 75_000,
+        rtt_p90_ns: 90_000,
+        rtt_p99_ns: 99_000,
+        rtt_max_ns: 100_000,
+    }];
+    let (tx, mut rx) = mpsc::channel(10);
+    tx.send(
+        RemoteDBClientMessages::StoreGatewayPingData {
+            ping_data: ping_data.clone(),
+        }
+        .into(),
+    )
+    .await
+    .unwrap();
+    drop(tx); // need to drop rx otherwise inner_loop won't return
+    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_queue_duration())
+        .await
+        .unwrap();
+
+    let from_db = db_select_all_helper(
+        client,
+        libwebserver::remotedb_client::AGGREGATED_PING_DATA_TABLE_NAME,
+        extract_aggregated_ping_data,
+    )
+    .await;
+
+    assert_eq!(from_db.len(), 1);
+    assert_eq!(from_db[0].1, ping_data[0]);
+}
+
 /// Execute `SELECT * FROM <table_name>` and pass each resulting row through the
 /// `extractor` function, which should convert each row into the rust type `T`.
 /// TODO: should this be moved to remotedb_client.rs?
@@ -191,6 +337,66 @@ pub fn extract_dns_entry_row(
                 .map(chrono::Duration::seconds),
         },
         row.try_get("device_uuid")?,
+    ))
+}
+
+/// Take a row from a SELECT * query and convert it into a
+/// NetworkInterfaceState (or rather a tuple of `(insert_time, state, device_uuid)`)
+/// TODO: should this be moved to remotedb_client.rs?
+pub fn extract_network_interface_state_row(
+    row: &Row,
+) -> Result<(DateTime<Utc>, NetworkInterfaceState, Uuid), tokio_postgres::error::Error> {
+    Ok((
+        row.try_get("time")?,
+        NetworkInterfaceState {
+            uuid: row.try_get("state_uuid")?,
+            // TODO: instead of unwrap we should prob. propagate the json error (if any
+            gateways: row
+                .try_get::<_, Vec<String>>("gateways")?
+                .iter()
+                .map(|ip_str| IpAddr::from_str(ip_str).unwrap())
+                .collect_vec(),
+            interface_name: row.try_get("interface_name")?,
+            interface_ips: row
+                .try_get::<_, Vec<String>>("interface_ips")?
+                .iter()
+                .map(|ip_str| IpAddr::from_str(ip_str).unwrap())
+                .collect_vec(),
+            comment: row.try_get("comment")?,
+            has_link: row.try_get("has_link")?,
+            is_wireless: row.try_get("is_wireless")?,
+            start_time: row.try_get("start_time")?,
+            end_time: row.try_get("end_time")?,
+            gateways_ping: HashMap::new(),
+        },
+        row.try_get("device_uuid")?,
+    ))
+}
+
+/// Take a row from a SELECT * query and convert it into an
+/// AggregatedPingData (or rather a tuple of `(insert_time, ping_data, device_uuid)`)
+/// TODO: should this be moved to remotedb_client.rs?
+pub fn extract_aggregated_ping_data(
+    row: &Row,
+) -> Result<(DateTime<Utc>, AggregatedGatewayPingData), tokio_postgres::error::Error> {
+    Ok((
+        row.try_get("time")?,
+        AggregatedGatewayPingData {
+            network_interface_uuid: row.try_get("network_interface_state_uuid")?,
+            gateway_ip: IpAddr::from_str(row.try_get("gateway_ip")?).unwrap(),
+            num_probes_sent: row.try_get::<_, i64>("num_probes_sent")? as usize,
+            num_responses_recv: row.try_get::<_, i64>("num_responses_recv")? as usize,
+            rtt_mean_ns: row.try_get::<_, i64>("rtt_mean_ns")? as u64,
+            rtt_variance_ns: row
+                .try_get::<_, Option<i64>>("rtt_variance_ns")?
+                .map(|x| x as u64),
+            rtt_min_ns: row.try_get::<_, i64>("rtt_min_ns")? as u64,
+            rtt_p50_ns: row.try_get::<_, i64>("rtt_p50_ns")? as u64,
+            rtt_p75_ns: row.try_get::<_, i64>("rtt_p75_ns")? as u64,
+            rtt_p90_ns: row.try_get::<_, i64>("rtt_p90_ns")? as u64,
+            rtt_p99_ns: row.try_get::<_, i64>("rtt_p99_ns")? as u64,
+            rtt_max_ns: row.try_get::<_, i64>("rtt_max_ns")? as u64,
+        },
     ))
 }
 
