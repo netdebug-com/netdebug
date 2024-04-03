@@ -379,20 +379,24 @@ impl RemoteDBClient {
             ))
             .await?;
         for entry in dns_entries {
-            client
-                .execute(
-                    &statement,
-                    &[
-                        &entry.ip.to_string(),
-                        &entry.hostname,
-                        &entry.created,
-                        &entry.from_ptr_record,
-                        &entry.rtt.map(|rtt| rtt.num_microseconds()),
-                        &entry.ttl.map(|ttl| ttl.num_seconds()),
-                        &device_uuid,
-                    ],
-                )
-                .await?;
+            if let Some(ip) = entry.ip {
+                // Old clients don't send an IP. W/o IP it's pointless to add the entry to the DB
+                // TODO: add counter of ip is None
+                client
+                    .execute(
+                        &statement,
+                        &[
+                            &ip.to_string(),
+                            &entry.hostname,
+                            &entry.created,
+                            &entry.from_ptr_record,
+                            &entry.rtt.map(|rtt| rtt.num_microseconds()),
+                            &entry.ttl.map(|ttl| ttl.num_seconds()),
+                            &device_uuid,
+                        ],
+                    )
+                    .await?;
+            }
         }
 
         // NOTE: if we hit an error in the above loop and never get here, that's ok b/c we'll

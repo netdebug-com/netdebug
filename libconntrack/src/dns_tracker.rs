@@ -336,7 +336,7 @@ impl<'a> DnsTracker<'a> {
         };
         if let Some((ip, hostname, from_ptr_record)) = reply {
             let entry = DnsTrackerEntry {
-                ip,
+                ip: Some(ip),
                 hostname: hostname.clone(),
                 created: *created,
                 from_ptr_record,
@@ -382,7 +382,7 @@ impl<'a> DnsTracker<'a> {
         self.reverse_map.insert(
             ip,
             DnsTrackerEntry {
-                ip,
+                ip: Some(ip),
                 hostname,
                 created,
                 from_ptr_record: false,
@@ -825,7 +825,7 @@ mod test {
                 assert_eq!(dns_entries[3].rtt.unwrap(), t1 - t0);
                 let ips_from_storage_msg = dns_entries
                     .iter()
-                    .map(|e| e.ip)
+                    .map(|e| e.ip.unwrap())
                     .collect::<HashSet<IpAddr>>();
                 assert_eq!(ips_from_storage_msg, valid_ips);
                 for entry in &dns_entries {
@@ -834,7 +834,7 @@ mod test {
                         dns_tracker
                             .reverse_map
                             // we could use any of the 4 IPs above.
-                            .get(&entry.ip)
+                            .get(&entry.ip.unwrap())
                             .unwrap()
                     );
                 }
@@ -851,7 +851,7 @@ mod test {
         dns_tracker.reverse_map.insert(
             IpAddr::from_str("1.2.3.4").unwrap(),
             DnsTrackerEntry {
-                ip: IpAddr::from_str("1.2.3.4").unwrap(),
+                ip: Some(IpAddr::from_str("1.2.3.4").unwrap()),
                 hostname: "foo".to_string(),
                 created: Utc::now() - Duration::seconds(2),
                 from_ptr_record: false,

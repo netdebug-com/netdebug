@@ -107,7 +107,7 @@ async fn do_test_store_dns_entries(remotedb_client: &RemoteDBClient, client: &Po
     let ts = DateTime::from_timestamp(1712088645, 112_233_000).unwrap();
     let entries = vec![
         DnsTrackerEntry {
-            ip: IpAddr::from_str("1.2.3.4").unwrap(),
+            ip: Some(IpAddr::from_str("1.2.3.4").unwrap()),
             hostname: "host1.example.com".to_owned(),
             created: ts,
             from_ptr_record: false,
@@ -115,7 +115,7 @@ async fn do_test_store_dns_entries(remotedb_client: &RemoteDBClient, client: &Po
             ttl: None,
         },
         DnsTrackerEntry {
-            ip: IpAddr::from_str("5.6.7.8").unwrap(),
+            ip: Some(IpAddr::from_str("5.6.7.8").unwrap()),
             hostname: "host2.example.com".to_owned(),
             created: ts,
             from_ptr_record: true,
@@ -325,7 +325,7 @@ pub fn extract_dns_entry_row(
     Ok((
         row.try_get("time")?,
         DnsTrackerEntry {
-            ip: IpAddr::from_str(row.try_get("ip")?).unwrap(),
+            ip: Some(IpAddr::from_str(row.try_get("ip")?).unwrap()),
             hostname: row.try_get("hostname")?,
             created: row.try_get("created")?,
             from_ptr_record: row.try_get("from_ptr_record")?,
