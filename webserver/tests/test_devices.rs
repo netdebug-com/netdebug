@@ -1,4 +1,6 @@
 use axum::http::StatusCode;
+#[cfg(test)]
+use common::init::netdebug_test_init;
 use gui_types::{PublicDeviceDetails, PublicDeviceInfo};
 use http_body_util::BodyExt;
 use libwebserver::remotedb_client::RemoteDBClient;
@@ -12,7 +14,7 @@ pub mod db_utils;
 
 #[tokio::test]
 async fn devices_non_netdebug_employee() {
-    // netdebug_init(); // enable for logging; can't always have unit tests log b/c logging init is dumb
+    netdebug_test_init();
     let (db_client, test_db) = mk_test_db("devices_non_netdebug_employee").await.unwrap();
     let remotedb_client = RemoteDBClient::mk_mock(&test_db.db_uri);
     remotedb_client
@@ -52,6 +54,7 @@ async fn devices_non_netdebug_employee() {
 
 #[tokio::test]
 async fn devices_netdebug_employee() {
+    netdebug_test_init();
     let (db_client, test_db) = mk_test_db("devices_netdebug_employee").await.unwrap();
     let remotedb_client = RemoteDBClient::mk_mock(&test_db.db_uri);
     remotedb_client

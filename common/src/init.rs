@@ -6,9 +6,12 @@ use std::io::Write;
  * Alst sets RUST_BACKTRACE is not explicitly set in the env
  */
 pub fn init_logging() {
+    init_logging_with_level("info");
+}
+pub fn init_logging_with_level(log_level: &str) {
     // if RUST_LOG isn't set explicitly, set RUST_LOG=info as a default
     if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", "info");
+        std::env::set_var("RUST_LOG", log_level);
     }
     // if RUST_BACKTRACE isn't set explicitly, set RUST_BACKTRACE=1 as a default
     if std::env::var("RUST_BACKTRACE").is_err() {
@@ -61,4 +64,19 @@ pub fn set_abort_on_panic() {
 pub fn netdebug_init() {
     set_abort_on_panic();
     init_logging();
+}
+
+// NOTE: we need these for integration testing as well
+// as unit testing, so we should not wrap with #[cfg(test)]
+use std::sync::Once;
+static START: Once = Once::new();
+
+pub fn netdebug_test_init() {
+    // for tests, by default, only log on 'error' so we don't get
+    // extra messages on 'cargo t' because 'cargo t' doesn't know how
+    // to capture log messages
+    //
+    // BUT, if you're debugging a specific test, you can always pass
+    // RUST_LOG=info cargo t
+    START.call_once(|| init_logging_with_level("error"));
 }
