@@ -6,9 +6,9 @@ use std::io::Write;
  * Alst sets RUST_BACKTRACE is not explicitly set in the env
  */
 pub fn init_logging() {
-    init_logging_with_level("info");
+    init_logging_with_level("info", false);
 }
-pub fn init_logging_with_level(log_level: &str) {
+pub fn init_logging_with_level(log_level: &str, is_test: bool) {
     // if RUST_LOG isn't set explicitly, set RUST_LOG=info as a default
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var("RUST_LOG", log_level);
@@ -32,6 +32,9 @@ pub fn init_logging_with_level(log_level: &str) {
                 record.args()
             )
         })
+        // if is_test is true, the logger allows the test harness to capture log messages instead
+        // of spamming the terminal.
+        .is_test(is_test)
         .init();
 }
 
@@ -72,11 +75,5 @@ use std::sync::Once;
 static START: Once = Once::new();
 
 pub fn netdebug_test_init() {
-    // for tests, by default, only log on 'error' so we don't get
-    // extra messages on 'cargo t' because 'cargo t' doesn't know how
-    // to capture log messages
-    //
-    // BUT, if you're debugging a specific test, you can always pass
-    // RUST_LOG=info cargo t
-    START.call_once(|| init_logging_with_level("error"));
+    START.call_once(|| init_logging_with_level("debug", true));
 }
