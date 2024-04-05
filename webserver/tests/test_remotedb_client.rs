@@ -3,6 +3,7 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
+use common::init::netdebug_test_init;
 use common_wasm::get_git_hash_version;
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -27,6 +28,7 @@ use db_utils::mk_test_db;
  */
 #[tokio::test]
 async fn test_remotedb_client() {
+    netdebug_test_init();
     let (client, db) = mk_test_db("testdb-test_remotedb_client").await.unwrap();
     let remotedb_client = RemoteDBClient::mk_mock(&db.db_uri);
     remotedb_client.create_table_schema(&client).await.unwrap();
@@ -406,6 +408,7 @@ pub fn extract_aggregated_ping_data(
  */
 #[tokio::test]
 async fn test_pm_embed() {
+    netdebug_test_init();
     let (client, _db) = mk_test_db("testdb").await.unwrap();
     client
         .execute(

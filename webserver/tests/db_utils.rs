@@ -32,6 +32,23 @@ pub const TEST_NETDEBUG_SESSION_COOKIE: &str = "TestNetDebugSessionCookie";
 /// Wrap the pg_embed crate to get a convenient 'download on demand' postgres
 /// database for testing.  
 pub async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
+    // pg-embed captures the output of sub-processes it spawns using async tokio tasks.
+    // So if a command error's out and Result-error chain bubbles up, the test process
+    // will likely terminate before these async tasks can actually capture and log the output,
+    // so we are left w/o any error messages in this case.
+    // I tried fixing pg_embed to await the log capturing tasks, but this doesn't work for long-running
+    // tasks (like the actual postgres daemon). So fixing it would require more substantial changes
+    // in pg_embed. Instead, we work around it in a hacky wait by waiting
+    // "long enough" for the logging tasks to run and print the output
+    let res = mk_test_db_impl(database_name).await;
+    if res.is_err() {
+        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+    }
+
+    res
+}
+
+async fn mk_test_db_impl(database_name: &str) -> PgResult<(Client, PgEmbed)> {
     let db_dir = db_dir(database_name);
     // https://github.com/faokunega/pg-embed/issues/31
     // can't bind '0' for an ephemeral port :-( so just fake it and pray :-()
