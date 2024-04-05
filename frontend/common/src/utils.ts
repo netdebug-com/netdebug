@@ -250,5 +250,5 @@ export function connIdString(key: ConnectionKey): string {
     key.local_l4_port,
     key.remote_ip,
     key.remote_l4_port,
-  ].join("#");
+  ].join("-");
 }
