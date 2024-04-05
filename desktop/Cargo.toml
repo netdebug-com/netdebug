@@ -40,6 +40,9 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 
 [dev-dependencies]
 temp-dir = "0.1"
+tower = { workspace = true }
+http-body-util = "0.1"
+
 
 # needed by build.rs
 [build-dependencies]

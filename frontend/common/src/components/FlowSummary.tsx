@@ -1,19 +1,50 @@
-import { getConnKeyForDisplay } from "../utils";
-import { ConnectionMeasurements } from "../netdebug_types";
+import { connIdString, desktop_api_url, getConnKeyForDisplay } from "../utils";
+import { ConnectionKey, ConnectionMeasurements } from "../netdebug_types";
 import { useState } from "react";
 import Popover from "@mui/material/Popover";
 import MuiLink from "@mui/material/Link";
+import { Button, Stack } from "@mui/material";
+
+function request_probe_flow(connId: ConnectionKey) {
+  const url = desktop_api_url("probe_flow") + "/" + connIdString(connId);
+  fetch(url)
+    .then((res) => {
+      if (!res.ok) {
+        res.text().then((textMsg) => {
+          console.error(
+            "Failed to request probe_flow:",
+            res.status,
+            res.statusText,
+            ":",
+            textMsg,
+          );
+        });
+      }
+    })
+    .catch((err) => {
+      console.error(err.message);
+    });
+}
 
 // Re-usable components to show the detailed information in a flow
 // Assumes we already have the corresponding connection measurement
 // The 'FlowSummary' is a one-line description of the flow - suitable for a list, but it's clickable
 // so that it can popover a more detailed analysys of that flow
-
 export const FlowDetails: React.FC<FlowSummaryProps> = (props) => {
   return (
-    <div>
-      Hack! Just JSON pretty print the whole thing for now
-      <pre>{JSON.stringify(props.flow, undefined, 2)}</pre>
+    <div style={{ padding: 20 }}>
+      <Stack spacing={2} direction="row">
+        <Button
+          variant="outlined"
+          onClick={() => request_probe_flow(props.flow.key)}
+        >
+          Probe Flow
+        </Button>
+      </Stack>
+      <div>
+        Hack! Just JSON pretty print the whole thing for now
+        <pre>{JSON.stringify(props.flow, undefined, 2)}</pre>
+      </div>
     </div>
   );
 };

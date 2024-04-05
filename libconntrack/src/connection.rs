@@ -715,7 +715,6 @@ impl Connection {
      */
     pub(crate) fn generate_probe_report(
         &mut self,
-        probe_round: u32,
         application_rtt: Option<f64>,
         should_probe_again: bool,
     ) -> ProbeRoundReport {
@@ -884,7 +883,8 @@ impl Connection {
         // Always clear out the stored state to make sure that multiple calls to this function
         // don't create fake ProbeReports (or leak mem!)
         self.probe_round = None;
-        let probe_report = ProbeRoundReport::new(report, probe_round, application_rtt);
+        let probe_round_num = self.probe_report_summary.raw_reports.len() as u32;
+        let probe_report = ProbeRoundReport::new(report, probe_round_num, application_rtt);
         // one copy for us and one for the caller
         // the one for us will get logged to disk; the caller's will get sent to the remote client
         self.probe_report_summary.update(probe_report.clone());
@@ -940,7 +940,7 @@ impl Connection {
                 None => Duration::milliseconds(500),
             };
             if delta > timeout {
-                self.generate_probe_report(probe_round.round_number as u32, None, false);
+                self.generate_probe_report(None, false);
             }
         }
         libconntrack_wasm::ConnectionMeasurements {
