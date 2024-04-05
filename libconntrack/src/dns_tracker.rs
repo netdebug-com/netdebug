@@ -28,7 +28,6 @@ use crate::{
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
     send_or_log_sync,
     topology_client::{DataStorageMessage, DataStorageSender},
-    utils::PerfMsgCheck,
 };
 use dns_parser::{self, QueryType};
 

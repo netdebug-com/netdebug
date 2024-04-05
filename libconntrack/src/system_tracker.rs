@@ -9,7 +9,6 @@ use std::{
 use crate::{
     owned_packet::IcmpEchoInfo,
     topology_client::{DataStorageMessage, DataStorageSender},
-    utils::PerfMsgCheck,
 };
 
 use chrono::Utc;

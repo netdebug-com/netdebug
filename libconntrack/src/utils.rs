@@ -216,14 +216,14 @@ pub async fn channel_rpc<M, RESP>(
 macro_rules! send_or_log_sync {
     // no stats or SLA
     ($tx:expr, $msg:expr, $data:expr) => {{
-        if let Err(e) = $tx.try_send(PerfMsgCheck::new($data)) {
-            warn!("Failed to send data to {} :: err {}", $msg, e);
+        if let Err(e) = $tx.try_send($crate::utils::PerfMsgCheck::new($data)) {
+            ::log::warn!("Failed to send data to {} :: err {}", $msg, e);
         }
     }};
     // stats, no SLA
     ($tx:expr, $msg:expr, $data:expr, $stats:expr) => {{
-        if let Err(e) = $tx.try_send(PerfMsgCheck::new($data)) {
-            warn!("Failed to send data to {} :: err {}", $msg, e);
+        if let Err(e) = $tx.try_send($crate::utils::PerfMsgCheck::new($data)) {
+            ::log::warn!("Failed to send data to {} :: err {}", $msg, e);
         }
         $stats.add_value(1);
     }};
@@ -231,7 +231,7 @@ macro_rules! send_or_log_sync {
     ($tx:expr, $msg:expr, $data:expr, $stats:expr, $sla:expr) => {
         (|| {
             if let Err(e) = $tx.try_send($crate::utils::PerfMsgCheck::with_sla($data, $sla)) {
-                warn!("Failed to send data to {} :: err {}", $msg, e);
+                ::log::warn!("Failed to send data to {} :: err {}", $msg, e);
                 $stats.add_value(1);
             }
         })()
@@ -269,23 +269,26 @@ macro_rules! send_or_log_sync {
 macro_rules! send_or_log_async {
     ($tx:expr, $msg:expr, $data:expr) => {
         async {
-            if let Err(e) = $tx.send(PerfMsgCheck::new($data)).await {
-                warn!("Failed to send data to {:?} :: err {}", $msg, e);
+            if let Err(e) = $tx.send($crate::utils::PerfMsgCheck::new($data)).await {
+                ::log::warn!("Failed to send data to {:?} :: err {}", $msg, e);
             }
         }
     };
     ($tx:expr, $msg:expr, $data:expr, $stat:expr) => {
         async {
-            if let Err(e) = $tx.send(PerfMsgCheck::new($data)).await {
-                warn!("Failed to send data to {:?} :: err {}", $msg, e);
+            if let Err(e) = $tx.send($crate::utils::PerfMsgCheck::new($data)).await {
+                ::log::warn!("Failed to send data to {:?} :: err {}", $msg, e);
             }
             $stat.add_value(1);
         }
     };
     ($tx:expr, $msg:expr, $data:expr, $stat:expr, $sla:expr) => {
         async {
-            if let Err(e) = $tx.send(PerfMsgCheck::with_sla($data, $sla)).await {
-                warn!("Failed to send data to {:?} :: err {}", $msg, e);
+            if let Err(e) = $tx
+                .send($crate::utils::PerfMsgCheck::with_sla($data, $sla))
+                .await
+            {
+                ::log::warn!("Failed to send data to {:?} :: err {}", $msg, e);
             }
             $stat.add_value(1);
         }
@@ -445,7 +448,6 @@ impl<T> PerfMsgCheck<T> {
     /**
      * For testing, sometimes we want to skip the perf checks
      */
-    #[cfg(test)]
     pub fn skip_perf_check(self) -> T {
         self.data
     }
