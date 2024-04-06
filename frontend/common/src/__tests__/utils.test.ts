@@ -91,7 +91,7 @@ test("connIdString", () => {
       remote_ip: "1.2.3.4",
       remote_l4_port: 4242,
     }),
-  ).toBe("6#127.0.0.1#23#1.2.3.4#4242");
+  ).toBe("6-127.0.0.1-23-1.2.3.4-4242");
 
   expect(
     connIdString({
@@ -101,7 +101,7 @@ test("connIdString", () => {
       remote_ip: "1.2.3.4",
       remote_l4_port: 4242,
     }),
-  ).toBe("17#127.0.0.1#23#1.2.3.4#4242");
+  ).toBe("17-127.0.0.1-23-1.2.3.4-4242");
 
   expect(
     connIdString({
@@ -111,7 +111,7 @@ test("connIdString", () => {
       remote_ip: "1.2.3.4",
       remote_l4_port: 0,
     }),
-  ).toBe("1#127.0.0.1#0#1.2.3.4#0");
+  ).toBe("1-127.0.0.1-0-1.2.3.4-0");
 
   expect(
     connIdString({
@@ -121,7 +121,7 @@ test("connIdString", () => {
       remote_ip: "2001:db8::1",
       remote_l4_port: 0,
     }),
-  ).toBe("58#::1#0#2001:db8::1#0");
+  ).toBe("58-::1-0-2001:db8::1-0");
 
   expect(
     connIdString({
@@ -131,5 +131,5 @@ test("connIdString", () => {
       remote_ip: "1.2.3.4",
       remote_l4_port: 4242,
     }),
-  ).toBe("123#127.0.0.1#23#1.2.3.4#4242");
+  ).toBe("123-127.0.0.1-23-1.2.3.4-4242");
 });

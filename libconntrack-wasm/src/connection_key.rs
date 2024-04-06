@@ -98,7 +98,7 @@ impl From<&ConnectionKey> for ConnectionIdString {
             // WARNING WARNING: (`connIdString()` in utils.ts
             // WARNING WARNING: It is used to identify connections between UI and desktop
             id: format!(
-                "{}#{}#{}#{}#{}",
+                "{}-{}-{}-{}-{}",
                 value.ip_proto.to_wire(),
                 value.local_ip,
                 value.local_l4_port,
@@ -111,7 +111,7 @@ impl From<&ConnectionKey> for ConnectionIdString {
 
 #[derive(Clone, thiserror::Error, Debug)]
 pub enum ConnectionIdError {
-    #[error("Expected to have 5 parts with `#` separator")]
+    #[error("Expected to have 5 parts with `-` or `#` separator")]
     InvalidNumParts,
     #[error("Could not parse IP protocol or port into integer")]
     ParseProtoOrPort {
@@ -129,7 +129,13 @@ impl TryFrom<&ConnectionIdString> for ConnectionKey {
     type Error = ConnectionIdError;
 
     fn try_from(idstr: &ConnectionIdString) -> Result<Self, Self::Error> {
-        let parts: Vec<&str> = idstr.id.split('#').collect();
+        let parts: Vec<&str> = if idstr.id.contains('-') {
+            idstr.id.split('-').collect()
+        } else {
+            // Backwards compatibility. We used to use '#' as separator
+            // but changed it to `-`
+            idstr.id.split('#').collect()
+        };
         if parts.len() != 5 {
             Err(ConnectionIdError::InvalidNumParts)
         } else {
@@ -159,7 +165,7 @@ mod test {
         };
         assert_eq!(
             ConnectionIdString::from(&key).id,
-            "6#127.0.0.1#23#1.2.3.4#4242"
+            "6-127.0.0.1-23-1.2.3.4-4242"
         );
         let conn_id = ConnectionIdString::from(&key);
         assert_eq!(ConnectionKey::try_from(&conn_id).unwrap(), key);
@@ -173,10 +179,25 @@ mod test {
         };
         assert_eq!(
             ConnectionIdString::from(&key).id,
-            "123#::1#23#2001:db8::1#4242"
+            "123-::1-23-2001:db8::1-4242"
         );
         let conn_id = ConnectionIdString::from(&key);
         assert_eq!(ConnectionKey::try_from(&conn_id).unwrap(), key);
+    }
+
+    #[test]
+    fn test_conn_id_backwards_compatibility() {
+        let idstr = ConnectionIdString {
+            id: "6#127.0.0.1#23#1.2.3.4#4242".to_owned(),
+        };
+        let expected_key = ConnectionKey {
+            local_ip: IpAddr::from_str("127.0.0.1").unwrap(),
+            remote_ip: IpAddr::from_str("1.2.3.4").unwrap(),
+            local_l4_port: 23,
+            remote_l4_port: 4242,
+            ip_proto: IpProtocol::TCP,
+        };
+        assert_eq!(ConnectionKey::try_from(&idstr).unwrap(), expected_key);
     }
 
     #[test]
@@ -187,11 +208,11 @@ mod test {
             })
         };
         assert!(to_conn_key("asdf").is_err());
-        assert!(to_conn_key("X#127.0.0.1#23#1.2.3.4#4242").is_err());
-        assert!(to_conn_key("6#xxx#23#1.2.3.4#4242").is_err());
-        assert!(to_conn_key("6#127.0.0.1#xxxx#1.2.3.4#4242").is_err());
-        assert!(to_conn_key("6#127.0.0.1#23#xxx#4242").is_err());
-        assert!(to_conn_key("6#127.0.0.1#23#1.2.3.4#xxxxx").is_err());
+        assert!(to_conn_key("X-127.0.0.1-23-1.2.3.4-4242").is_err());
+        assert!(to_conn_key("6-xxx-23-1.2.3.4-4242").is_err());
+        assert!(to_conn_key("6-127.0.0.1-xxxx-1.2.3.4-4242").is_err());
+        assert!(to_conn_key("6-127.0.0.1-23-xxx-4242").is_err());
+        assert!(to_conn_key("6-127.0.0.1-23-1.2.3.4-xxxxx").is_err());
     }
 
     /// Make sure that ConnectionIdString is serialized just like a normal String
@@ -199,11 +220,11 @@ mod test {
     #[test]
     fn test_connection_serialize() {
         let x: Vec<ConnectionIdString> = vec![ConnectionIdString {
-            id: "123#::1#23#2001:db8::1#4242".to_owned(),
+            id: "123-::1-23-2001:db8::1-4242".to_owned(),
         }];
         assert_eq!(
             serde_json::to_string(&x).unwrap(),
-            r#"["123#::1#23#2001:db8::1#4242"]"#
+            r#"["123-::1-23-2001:db8::1-4242"]"#
         );
     }
 }
