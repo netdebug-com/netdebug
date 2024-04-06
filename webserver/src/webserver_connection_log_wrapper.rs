@@ -1,4 +1,3 @@
-use libconntrack::utils::PerfMsgCheck;
 use libconntrack::{send_or_log_async, topology_client::DataStorageSender};
 use log::{debug, warn};
 use tokio::sync::mpsc::channel;
