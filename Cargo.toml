@@ -38,6 +38,7 @@ typescript-type-def = { git = "https://github.com/gregor-netdebug/rust-typescrip
 # NOTE: tokio_unstable is a compile-time flag, not a feature
 tokio = { version = "1.36", features = ["full"] }
 toml = "0.8"
+tower = "0.4"
 tower-http = { version = "0.5.1", features = ["cors", "trace"] }
 tracing = "0.1"
 uuid = "1"

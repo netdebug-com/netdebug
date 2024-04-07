@@ -4,19 +4,26 @@ use std::{
     sync::Arc,
 };
 
-use axum::{extract::State, Router};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Router,
+};
 use axum::{response, routing};
 use common_wasm::timeseries_stats::{CounterProvider, CounterProviderWithTimeUpdate};
 use gui_types::CongestedLinksReply;
 use libconntrack::{
     connection_tracker::{ConnectionTrackerMsg, TimeMode},
     dns_tracker::DnsTrackerMessage,
+    send_or_log_sync,
     topology_client::TopologyRpcMessage,
     utils::{channel_rpc, channel_rpc_perf},
 };
 use libconntrack_wasm::{
-    bidir_bandwidth_to_chartjs, AggregateStatEntry, ChartJsBandwidth, ConnectionMeasurements,
-    DnsTrackerEntry, ExportedNeighborState, NetworkInterfaceState,
+    bidir_bandwidth_to_chartjs, AggregateStatEntry, ChartJsBandwidth, ConnectionIdString,
+    ConnectionKey, ConnectionMeasurements, DnsTrackerEntry, ExportedNeighborState,
+    NetworkInterfaceState,
 };
 use tokio::sync::mpsc::channel;
 use tower_http::{
@@ -44,6 +51,7 @@ pub fn setup_axum_router() -> Router<Arc<Trackers>> {
     Router::new()
         .route("/api/get_counters", routing::get(handle_get_counters))
         .route("/api/get_flows", routing::get(handle_get_flows))
+        .route("/api/probe_flow/:conn_key", routing::get(handle_probe_flow))
         .route("/api/get_dns_cache", routing::get(handle_get_dns_cache))
         .route(
             "/api/get_aggregate_bandwidth",
@@ -106,6 +114,38 @@ pub(crate) async fn handle_get_flows(
         .await
         .unwrap_or_default(),
     )
+}
+
+pub(crate) async fn handle_probe_flow(
+    State(trackers): State<Arc<Trackers>>,
+    Path(conn_key_str): Path<ConnectionIdString>,
+) -> impl IntoResponse {
+    let conn_key = match ConnectionKey::try_from(&conn_key_str) {
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Invalid ConnectionId `{}`: {}", conn_key_str, e),
+            )
+        }
+        Ok(key) => key,
+    };
+
+    // We currently don't care about the actual probe report that's been returned.
+    // The user will get that on the next refresh of all flows. But maybe we should make
+    // this rest enpoint more versatile and just return the ProbeReport instead?
+    let (tx, _) = channel(1);
+    let req = ConnectionTrackerMsg::ProbeReport {
+        key: conn_key,
+        should_probe_again: true,
+        application_rtt: None,
+        tx,
+    };
+    send_or_log_sync!(
+        trackers.connection_tracker.clone().unwrap(),
+        "connection_tracker/ProbeReport",
+        req
+    );
+    (StatusCode::OK, String::new())
 }
 
 pub(crate) async fn handle_get_dns_cache(
@@ -308,4 +348,119 @@ pub(crate) async fn handle_get_system_network_history(
             .await
             .get_network_interface_histories(),
     )
+}
+
+#[cfg(test)]
+mod test {
+    use std::str::FromStr;
+
+    use axum::{body::Body, http::Request, http::Response, routing::RouterIntoService};
+    use http_body_util::BodyExt;
+
+    // for `collect`
+    use libconntrack::connection_tracker::ConnectionTrackerReceiver;
+    use libconntrack_wasm::IpProtocol;
+    use tower::{Service, ServiceExt};
+
+    use super::*;
+
+    struct MockRouteHandler {
+        service: RouterIntoService<Body>,
+        conn_track_rx: ConnectionTrackerReceiver,
+    }
+
+    async fn extract_status_and_body(response: Response<Body>) -> (StatusCode, String) {
+        (
+            response.status(),
+            String::from_utf8(
+                response
+                    .into_body()
+                    .collect()
+                    .await
+                    .unwrap()
+                    .to_bytes()
+                    .to_vec(),
+            )
+            .unwrap(),
+        )
+    }
+
+    impl MockRouteHandler {
+        fn new() -> Self {
+            let (conn_track_tx, conn_track_rx) = channel(10);
+            let mut trackers = Trackers::empty();
+            trackers.connection_tracker = Some(conn_track_tx);
+
+            let trackers = Arc::new(trackers);
+
+            MockRouteHandler {
+                conn_track_rx,
+                service: setup_axum_router().with_state(trackers).into_service(),
+            }
+        }
+
+        /// Call the service with the given request
+        async fn call_req(&mut self, req: Request<Body>) -> Response<Body> {
+            // black magic taken from https://github.com/tokio-rs/axum/blob/main/examples/testing/src/main.rs#L162
+            ServiceExt::<Request<Body>>::ready(&mut self.service)
+                .await
+                .unwrap()
+                .call(req)
+                .await
+                .unwrap()
+        }
+
+        /// Call the given URI with an empty body and no headers
+        async fn simple_call_uri(&mut self, uri: &str) -> Response<Body> {
+            self.call_req(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_probe_flows() {
+        let mut service = MockRouteHandler::new();
+
+        // without a connection_id parameter we get a 404 not found
+        assert_eq!(
+            service.simple_call_uri("/api/probe_flow").await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert!(service.conn_track_rx.is_empty());
+
+        // invalid connection key.
+        let resp = service.simple_call_uri("/api/probe_flow/XXX").await;
+        let (status, body) = extract_status_and_body(resp).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        // should have an error message in the body
+        assert!(!body.is_empty());
+        assert!(service.conn_track_rx.is_empty());
+
+        // a valid request
+        let orig_key = ConnectionKey {
+            local_ip: IpAddr::from_str("127.0.0.1").unwrap(),
+            remote_ip: IpAddr::from_str("1.2.3.4").unwrap(),
+            local_l4_port: 23,
+            remote_l4_port: 4242,
+            ip_proto: IpProtocol::TCP,
+        };
+        let uri = format!("/api/probe_flow/{}", ConnectionIdString::from(&orig_key));
+        let (status, body) = extract_status_and_body(service.simple_call_uri(&uri).await).await;
+        assert_eq!(status, StatusCode::OK);
+        // no body
+        assert!(body.is_empty());
+        match service.conn_track_rx.try_recv().unwrap().skip_perf_check() {
+            ConnectionTrackerMsg::ProbeReport {
+                key,
+                should_probe_again,
+                application_rtt,
+                tx: _tx,
+            } => {
+                assert_eq!(key, orig_key);
+                assert!(should_probe_again);
+                assert_eq!(application_rtt, None);
+            }
+            _ => panic!("Got unexpected connection tracker message"),
+        };
+    }
 }

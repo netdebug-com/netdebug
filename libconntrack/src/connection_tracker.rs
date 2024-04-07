@@ -22,7 +22,7 @@ use linked_hash_map::LinkedHashMap;
 use log::{debug, info, warn};
 
 use mac_address::MacAddress;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, error::TrySendError};
 use tokio::sync::mpsc::{Receiver, Sender};
 
 #[cfg(test)]
@@ -86,7 +86,6 @@ pub enum ConnectionTrackerMsg {
     ProbeReport {
         key: ConnectionKey,
         should_probe_again: bool,
-        probe_round: u32,
         application_rtt: Option<f64>,
         tx: mpsc::Sender<ProbeRoundReport>,
     },
@@ -545,10 +544,9 @@ impl<'a> ConnectionTracker<'a> {
                 key,
                 should_probe_again: clear_state,
                 tx,
-                probe_round,
                 application_rtt,
             } => {
-                self.generate_report(&key, probe_round, application_rtt, clear_state, tx);
+                self.generate_report(&key, application_rtt, clear_state, tx);
             }
             SetUserAnnotation { annotation, key } => {
                 self.set_user_annotation(&key, annotation);
@@ -842,16 +840,18 @@ impl<'a> ConnectionTracker<'a> {
     fn generate_report(
         &mut self,
         key: &ConnectionKey,
-        probe_round: u32,
         application_rtt: Option<f64>,
         clear_state: bool,
         tx: tokio::sync::mpsc::Sender<ProbeRoundReport>,
     ) {
         if let Some(connection) = self.connections.get_mut(key) {
-            let report =
-                connection.generate_probe_report(probe_round, application_rtt, clear_state);
-            if let Err(e) = tx.try_send(report) {
-                warn!("Error sending back report: {}", e);
+            let report = connection.generate_probe_report(application_rtt, clear_state);
+            match tx.try_send(report) {
+                Err(TrySendError::Closed(_)) => {
+                    debug!("Could not send back report. Channel closed.")
+                }
+                Err(e) => warn!("Error sending back report: {}", e),
+                Ok(()) => (),
             }
         } else {
             warn!("Found no connection matching key {}", key);
@@ -1440,7 +1440,7 @@ pub mod test {
         }
 
         // fake probe_report data; round=1, rtt=100ms
-        let report = connection.generate_probe_report(1, Some(100.0), false);
+        let report = connection.generate_probe_report(Some(100.0), false);
         println!("Report:\n{}", report);
     }
 
@@ -1655,7 +1655,7 @@ pub mod test {
             .connections
             .get_mut(&connection_key)
             .unwrap();
-        let report = connection.generate_probe_report(1, Some(100.0), false);
+        let report = connection.generate_probe_report(Some(100.0), false);
         println!("{}", report); // useful for debugging
 
         // hand analysis via wireshark = which TTL's got which reply types?

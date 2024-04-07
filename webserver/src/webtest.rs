@@ -191,14 +191,7 @@ async fn run_probe_round(
         addr_str, probe_round
     );
     // first report we get, don't clear state if send_idle_probes is set
-    match get_probe_report(
-        connection_tracker,
-        connection_key,
-        probe_round,
-        rtt_estimate,
-    )
-    .await
-    {
+    match get_probe_report(connection_tracker, connection_key, rtt_estimate).await {
         // TODO: also log the report centrally - useful data!
         // if we got the report, send it to the remote WASM client
         Some(report) => {
@@ -220,7 +213,6 @@ async fn run_probe_round(
 async fn get_probe_report(
     connection_tracker: &ConnectionTrackerSender,
     connection_key: &Option<ConnectionKey>,
-    probe_round: u32,
     application_rtt: f64,
 ) -> Option<ProbeRoundReport> {
     if let Some(key) = &connection_key {
@@ -236,7 +228,6 @@ async fn get_probe_report(
                 key,
                 should_probe_again: true,
                 tx: report_tx,
-                probe_round,
                 application_rtt: Some(application_rtt),
             }))
         {
