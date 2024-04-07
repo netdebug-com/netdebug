@@ -53,6 +53,8 @@ pub const PING_DATA_EXPORT_INTERVAL_MS: u64 = 30_000;
 
 pub const MIN_REASONABLE_PING_RTT_NS: i64 = 1000;
 
+pub const PING_PAYLOAD_PREFIX: &[u8] = b"SystemTracker";
+
 /**
  * The System Tracker tracks the state of the system, e.g., what is the current default Gateway, active network interface, cpu load, mem info etc.
  * It keeps historical information for comparisons over time.
@@ -203,7 +205,7 @@ impl SystemTracker {
             );
         }
         let mut ping_payload = Vec::new();
-        ping_payload.extend(b"SystemTracker");
+        ping_payload.extend(PING_PAYLOAD_PREFIX);
         ping_payload.extend(vec![0u8; 128 - ping_payload.len()]);
         // sanity check
         assert_eq!(ping_payload.len(), 128);
@@ -606,8 +608,11 @@ impl SystemTracker {
                 return;
             }
         };
+
+        // We truncate the payload during pcap handling, thus the payload we receive here might be
+        // shorter than the payload we sent out. So we only compare the prefix
         assert_eq!(id, self.ping_id); // ConnectionTracker is broken if they sent us this with wrong ID
-        if payload != self.ping_payload {
+        if !payload.starts_with(PING_PAYLOAD_PREFIX) {
             // Not for us.
             self.ping_not_for_us.bump();
             return;
