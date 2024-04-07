@@ -496,12 +496,14 @@ impl<'a> DnsTracker<'a> {
             let tokens = line.split_whitespace().collect::<Vec<&str>>();
             // we only care about 'A' and 'AAAA' for now
             if tokens.len() > 7 && (tokens[2] == "A" || tokens[2] == "AAAA") {
+                let ip = IpAddr::from_str(tokens[7]).ok();
                 let entry = DnsTrackerEntry {
                     hostname: tokens[1].to_string(),
                     created: Utc::now(), // kinda a fudge, oh well
                     from_ptr_record: false,
                     rtt: None,
                     ttl: Some(Duration::seconds(i64::from_str(tokens[5]).expect("digits"))),
+                    ip,
                 };
                 match IpAddr::from_str(tokens[7]) {
                     Ok(ip) => {
