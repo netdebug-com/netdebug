@@ -2183,6 +2183,7 @@ name = "libconntrack"
 version = "0.1.0"
 dependencies = [
  "approx",
+ "async-trait",
  "axum 0.7.4",
  "byteorder",
  "bytes",

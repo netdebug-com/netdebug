@@ -1,6 +1,10 @@
 use analysis_messages::AnalysisInsights;
 use itertools::Itertools;
-use std::{collections::HashMap, fmt::Display, net::IpAddr};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Display,
+    net::IpAddr,
+};
 use typescript_type_def::TypeDef; // for .sorted()
 
 // Nicely convert an option to a string. If the Option is Some(x)
@@ -596,6 +600,28 @@ impl Display for ProbeReportSummary {
         }
         Ok(())
     }
+}
+
+/// The result of a single PingTree rund for a single IP.
+/// The number of rounds is raw_rtts_micros.len()
+/// NOTE: I considered using a `Duration` instead of u64's but eventually
+/// decided against it: (a) pingtree uses tokio::Time::Duration which we can't use
+/// here because wasm. (b) this struct is just use to serialize the results for
+/// consumption by JS so we'd convert to an integer during serialization anyways.
+#[derive(Debug, Clone, Eq, PartialEq, TypeDef, Serialize, Deserialize)]
+pub struct PingTreeIpReport {
+    pub ip: IpAddr,
+    /// A list of (optional) RTTs values. One list item per round.
+    pub raw_rtts_micros: Vec<Option<u64>>,
+    pub min_rtt_micros: Option<u64>,
+    pub max_rtt_micros: Option<u64>,
+    pub mean_rtt_micros: Option<u64>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, TypeDef, Serialize, Deserialize)]
+pub struct PingtreeUiResult {
+    pub hops_to_ips: BTreeMap<u8, Vec<IpAddr>>,
+    pub ip_reports: HashMap<IpAddr, PingTreeIpReport>,
 }
 
 #[cfg(test)]

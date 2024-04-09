@@ -406,6 +406,12 @@ impl SystemTracker {
         Vec::from(self.network_history.clone())
     }
 
+    pub fn get_current_network_state_no_pings(&self) -> NetworkInterfaceState {
+        let mut state = self.current_network().clone();
+        state.gateways_ping.clear();
+        state
+    }
+
     /**
      * Spawn two tasks:
      *

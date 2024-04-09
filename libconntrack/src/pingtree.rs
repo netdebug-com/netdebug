@@ -1,14 +1,20 @@
-use common_wasm::timeseries_stats::StatHandle;
+use async_trait::async_trait;
+use common_wasm::{
+    timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units},
+    PingTreeIpReport, PingtreeUiResult, ProbeReportSummary,
+};
+use itertools::Itertools;
 use libconntrack_wasm::{ConnectionKey, NetworkInterfaceState};
 use mac_address::MacAddress;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
     net::{IpAddr, Ipv4Addr},
     str::FromStr,
+    sync::Arc,
 };
-use tokio::time::Instant;
 use tokio::time::{sleep_until, Duration};
+use tokio::{sync::RwLock, time::Instant};
 use uuid::Uuid;
 
 #[cfg(not(test))]
@@ -22,8 +28,150 @@ use crate::{
     owned_packet::OwnedParsedPacket,
     prober::{ProbeMessage, ProberSender},
     send_or_log_sync,
+    system_tracker::SystemTracker,
     utils::{remote_ip_to_local, PerfMsgCheck, GOOGLE_DNS_IPV6},
 };
+
+pub fn probe_summary_to_ip_map(
+    report: &ProbeReportSummary,
+) -> (HashSet<IpAddr>, BTreeMap<u8, Vec<IpAddr>>) {
+    let mut ip_set = HashSet::new();
+    let mut map: BTreeMap<u8, Vec<IpAddr>> = BTreeMap::new();
+    // Hop distances in ascending order
+    let dists = report.summary.keys().copied().sorted().collect_vec();
+    // iterate through the per-hop reports in ascending hop distance order
+    for distance in dists {
+        // we know the key exists so unwrap is safe
+        let nodes = report.summary.get(&distance).unwrap();
+        for node in nodes {
+            if let Some(ip) = node.ip {
+                ip_set.insert(ip);
+                map.entry(distance).or_default().push(ip)
+            }
+        }
+    }
+    (ip_set, map)
+}
+
+#[async_trait]
+pub trait PingTreeManager {
+    async fn run_pingtree_for_probe_nodes(
+        &self,
+        probe_report_summary: &ProbeReportSummary,
+    ) -> PingtreeUiResult;
+}
+
+/// Utility for handling pingtree requests for the desktop process / from GUI
+pub struct PingTreeManagerImpl {
+    connection_tracker_tx: ConnectionTrackerSender,
+    prober_tx: ProberSender,
+    system_tracker: Arc<RwLock<SystemTracker>>,
+    /// The `id` to put in the `id` field of the ICMP echo request. Usually the
+    /// PID of the sending process.
+    /// Note, since we have multiple senders of pings in the desktop process, we
+    /// use a unique payload to disambiguate
+    ping_id: u16,
+    /// tracks the number of echo replies we see without the associated request.
+    /// This indicates performance issues (with the pcap capture or connection tracker
+    /// since we should observe every request.
+    pingtree_no_request: StatHandle,
+    pingtree_not_for_us: StatHandle,
+}
+
+impl PingTreeManagerImpl {
+    pub fn new(
+        connection_tracker_tx: ConnectionTrackerSender,
+        prober_tx: ProberSender,
+        system_tracker: Arc<RwLock<SystemTracker>>,
+        stats_registry: ExportedStatRegistry,
+    ) -> Self {
+        Self {
+            connection_tracker_tx,
+            prober_tx,
+            system_tracker,
+            // system_tracker uses the same id. We disambiguate based on payload
+            ping_id: std::process::id() as u16,
+            pingtree_no_request: stats_registry.add_stat(
+                "pingtree_no_request",
+                Units::None,
+                [StatType::COUNT],
+            ),
+            pingtree_not_for_us: stats_registry.add_stat(
+                "pingtree_not_for_us",
+                Units::None,
+                [StatType::COUNT],
+            ),
+        }
+    }
+}
+
+#[async_trait]
+impl PingTreeManager for PingTreeManagerImpl {
+    /// Probe the IPs from the given ProbeReportSummary using pingtree.
+    /// TODO: The ProbeReportSummary currently DOES NOT contain an IP for the final endhost, so we
+    /// are not including the endhost in the pingtree -- only the routers.
+    async fn run_pingtree_for_probe_nodes(
+        &self,
+        probe_report_summary: &ProbeReportSummary,
+    ) -> PingtreeUiResult {
+        let (ip_set, hops_to_ips) = probe_summary_to_ip_map(probe_report_summary);
+        let interface_state = self
+            .system_tracker
+            .read()
+            .await
+            .get_current_network_state_no_pings();
+        // TODO: if looking up egress info on every pingtree becomes too expensive we can cache it
+        let mut gw_lookup = GatewayLookup::new(self.connection_tracker_tx.clone(), interface_state);
+        gw_lookup.do_lookup().await;
+        let cfg = PingTreeConfig {
+            ips: ip_set,
+            v4_egress_info: gw_lookup.v4_egress_info,
+            v6_egress_info: gw_lookup.v6_egress_info,
+            num_rounds: 5,
+            time_between_rounds: tokio::time::Duration::from_millis(500),
+            final_probe_wait: tokio::time::Duration::from_millis(2000),
+            connection_tracker_tx: self.connection_tracker_tx.clone(),
+            prober_tx: self.prober_tx.clone(),
+            ping_id: self.ping_id,
+            pingtree_no_request: self.pingtree_no_request.clone(),
+            pingtree_not_for_us: self.pingtree_not_for_us.clone(),
+        };
+        let ip_reports = pingtree_result_to_ip_reports(&run_pingtree(cfg).await);
+        PingtreeUiResult {
+            hops_to_ips,
+            ip_reports,
+        }
+    }
+}
+
+pub fn pingtree_result_to_ip_reports(
+    ping_res: &PingTreeResult,
+) -> HashMap<IpAddr, PingTreeIpReport> {
+    let mut reports = HashMap::new();
+    for (ip, raw_rtts) in ping_res {
+        let raw_rtts_micros = raw_rtts
+            .iter()
+            .map(|rtt_opt| rtt_opt.map(|rtt| rtt.as_micros() as u64))
+            .collect_vec();
+        let rtts_without_none = raw_rtts_micros.iter().copied().flatten().collect_vec();
+        let mean = if !rtts_without_none.is_empty() {
+            Some(rtts_without_none.iter().sum::<u64>() / (rtts_without_none.len() as u64))
+        } else {
+            None
+        };
+        reports.insert(
+            *ip,
+            PingTreeIpReport {
+                ip: *ip,
+                raw_rtts_micros,
+                min_rtt_micros: rtts_without_none.iter().copied().min(),
+                max_rtt_micros: rtts_without_none.iter().copied().max(),
+                mean_rtt_micros: mean,
+            },
+        );
+    }
+    reports
+}
 
 /// Information required to send egress packets.
 /// This represents a point-in-time information and does not take network changes into
@@ -184,14 +332,14 @@ pub struct PingTreeConfig {
     pub prober_tx: ProberSender,
     /// The `id` to put in the `id` field of the ICMP echo request. Usually the
     /// PID of the sending process.
-    /// FIXME: system tracker also uses the pid and ping id. So both pingtree and
-    /// system tracker will get each others pings.
-    /// Add unique payload to pings to disambiguate
+    /// Note, since we have multiple senders of pings in the desktop process, we
+    /// use a unique payload to disambiguate
     pub ping_id: u16,
     /// tracks the number of echo replies we see without the associated request.
     /// This indicates performance issues (with the pcap capture or connection tracker
     /// since we should observe every request.
     pub pingtree_no_request: StatHandle,
+    pub pingtree_not_for_us: StatHandle,
 }
 
 impl PingTreeConfig {
@@ -235,7 +383,7 @@ pub async fn run_pingtree(cfg: PingTreeConfig) -> PingTreeResult {
 /// Each per-ip entry is a list of (optional) RTTs values. One list item per round.
 /// (i.e., `x.get(ip).unwrap().len() == num_rounds`). The RTT is none if we didn't
 /// get a response (or failed to capture the outgoing probe).
-type PingTreeResult = HashMap<IpAddr, Vec<Option<Duration>>>;
+pub type PingTreeResult = HashMap<IpAddr, Vec<Option<Duration>>>;
 
 /// The actual state and implementation of a single pingtree run. Don't use it directly
 struct PingTreeImpl {
@@ -290,12 +438,11 @@ impl PingTreeImpl {
                 }
             );
         }
+        // NOTE: pcap.rs might truncate packets, so if the ping_payload is too long, it might get truncated
+        // on received packets. So we don't pad the payload and keep it reasonable short
         let mut ping_payload = Vec::new();
         ping_payload.extend(b"PingTree-");
         ping_payload.extend(uuid.hyphenated().to_string().as_bytes());
-        ping_payload.extend(vec![0u8; 128 - ping_payload.len()]);
-        // sanity check:
-        assert_eq!(ping_payload.len(), 128);
 
         Self {
             cfg,
@@ -317,7 +464,7 @@ impl PingTreeImpl {
         if let Some(info) = pkt.get_icmp_echo_info() {
             assert_eq!(info.id, self.cfg.ping_id);
             if info.payload != self.ping_payload {
-                // not for us
+                self.cfg.pingtree_not_for_us.bump();
                 return;
             }
             if info.seq >= self.cfg.num_rounds {
@@ -424,6 +571,7 @@ impl Drop for PingTreeImpl {
 mod test {
     use super::*;
 
+    use common::test_utils::test_dir;
     use common_wasm::timeseries_stats::{StatType, SuperRegistry, Units};
     use tokio::sync::mpsc::error::TryRecvError;
 
@@ -443,9 +591,11 @@ mod test {
         };
         let (conn_track_tx, mut conn_track_rx) = tokio::sync::mpsc::channel(100);
         let (prober_tx, mut prober_rx) = tokio::sync::mpsc::channel(100);
-        let pingtree_no_request = SuperRegistry::new(std::time::Instant::now())
-            .new_registry("test-pingtree")
-            .add_stat("pingtree_no_request", Units::None, [StatType::COUNT]);
+        let registry = SuperRegistry::new(std::time::Instant::now()).new_registry("test-pingtree");
+        let pingtree_no_request =
+            registry.add_stat("pingtree_no_request", Units::None, [StatType::COUNT]);
+        let pingtree_not_for_us =
+            registry.add_stat("pingtree_not_for_us", Units::None, [StatType::COUNT]);
         let cfg = PingTreeConfig {
             ips: [mkip("8.8.8.8"), mkip("7.7.7.7")].into_iter().collect(),
             v4_egress_info: Some(v4_egress_info.clone()),
@@ -457,6 +607,7 @@ mod test {
             prober_tx,
             ping_id: 42,
             pingtree_no_request: pingtree_no_request.clone(),
+            pingtree_not_for_us: pingtree_not_for_us.clone(),
         };
 
         let uuid_str = "42000000-0000-0000-0000-12340000abcd";
@@ -608,5 +759,113 @@ mod test {
         }
         assert!(conn_track_rx.try_recv().is_err());
         assert_eq!(conn_keys, expected_conn_keys);
+    }
+
+    #[test]
+    fn test_probe_summary_to_ip_map() {
+        let json = std::fs::read_to_string(test_dir(
+            "libconntrack",
+            "tests/logs/probe-report-summary.json",
+        ))
+        .unwrap();
+        let probe_report_summary = serde_json::from_str::<ProbeReportSummary>(&json).unwrap();
+        let (ip_set, hops_to_ips) = probe_summary_to_ip_map(&probe_report_summary);
+        assert_eq!(
+            ip_set,
+            HashSet::from([
+                mkip("192.168.1.1"),
+                mkip("96.120.18.197"),
+                mkip("96.108.129.85"),
+                mkip("96.108.141.249"),
+                mkip("96.110.42.133"),
+                mkip("96.110.32.126"),
+                mkip("62.115.51.193"),
+                mkip("62.115.123.122"),
+                mkip("62.115.138.71"),
+                mkip("62.115.136.83"),
+                mkip("62.115.176.219"),
+            ])
+        );
+        assert_eq!(
+            hops_to_ips.keys().copied().collect_vec(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13]
+        );
+        assert_eq!(
+            hops_to_ips.get(&1).unwrap().clone(),
+            vec![mkip("192.168.1.1")]
+        );
+        assert_eq!(
+            hops_to_ips.get(&6).unwrap().clone(),
+            vec![mkip("96.110.32.126")]
+        );
+    }
+
+    #[test]
+    fn test_pingtree_result_to_ip_reports() {
+        let mut ping_res: PingTreeResult = HashMap::new();
+        ping_res.insert(
+            mkip("10.0.0.1"),
+            vec![None, Some(Duration::from_millis(123)), None],
+        );
+        ping_res.insert(mkip("20.0.0.1"), vec![None, None, None]);
+        ping_res.insert(
+            mkip("30.0.0.1"),
+            vec![
+                Some(Duration::from_millis(42)),
+                Some(Duration::from_millis(23)),
+                None,
+            ],
+        );
+        ping_res.insert(
+            mkip("40.0.0.1"),
+            vec![
+                Some(Duration::from_millis(40)),
+                Some(Duration::from_millis(80)),
+                Some(Duration::from_millis(10)),
+            ],
+        );
+
+        let ip_reports = pingtree_result_to_ip_reports(&ping_res);
+
+        assert_eq!(
+            ip_reports.get(&mkip("10.0.0.1")).unwrap(),
+            &PingTreeIpReport {
+                ip: mkip("10.0.0.1"),
+                raw_rtts_micros: vec![None, Some(123_000), None],
+                min_rtt_micros: Some(123_000),
+                max_rtt_micros: Some(123_000),
+                mean_rtt_micros: Some(123_000),
+            }
+        );
+        assert_eq!(
+            ip_reports.get(&mkip("20.0.0.1")).unwrap(),
+            &PingTreeIpReport {
+                ip: mkip("20.0.0.1"),
+                raw_rtts_micros: vec![None, None, None],
+                min_rtt_micros: None,
+                max_rtt_micros: None,
+                mean_rtt_micros: None,
+            }
+        );
+        assert_eq!(
+            ip_reports.get(&mkip("30.0.0.1")).unwrap(),
+            &PingTreeIpReport {
+                ip: mkip("30.0.0.1"),
+                raw_rtts_micros: vec![Some(42_000), Some(23_000), None],
+                min_rtt_micros: Some(23_000),
+                max_rtt_micros: Some(42_000),
+                mean_rtt_micros: Some(32_500),
+            }
+        );
+        assert_eq!(
+            ip_reports.get(&mkip("40.0.0.1")).unwrap(),
+            &PingTreeIpReport {
+                ip: mkip("40.0.0.1"),
+                raw_rtts_micros: vec![Some(40_000), Some(80_000), Some(10_000)],
+                min_rtt_micros: Some(10_000),
+                max_rtt_micros: Some(80_000),
+                mean_rtt_micros: Some(43_333),
+            }
+        );
     }
 }

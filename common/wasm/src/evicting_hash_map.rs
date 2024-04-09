@@ -69,6 +69,15 @@ where
         self.map.get_refresh(k)
     }
 
+    /// Returns the value corresponding to the key in the map.
+    pub fn get_mut_no_lru<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash,
+    {
+        self.map.get_mut(k)
+    }
+
     /// Returns the value corresponding to the key in the map. *WITHOUT* updating the
     /// LRU.
     pub fn get_no_lru<Q: ?Sized>(&self, k: &Q) -> Option<&V>
@@ -171,6 +180,13 @@ pub mod test {
         assert!(val.is_some());
         *val.unwrap() = "foo".to_string();
         assert_eq!(m.get_no_lru(&4), Some(&"foo".to_string()));
+        assert_eq!(get_keys(&m), vec![3, 1, 5, 6, 4]);
+
+        // update a value without LRU update
+        let val = m.get_mut_no_lru(&5);
+        assert!(val.is_some());
+        *val.unwrap() = "bar".to_string();
+        assert_eq!(m.get_no_lru(&5), Some(&"bar".to_string()));
         assert_eq!(get_keys(&m), vec![3, 1, 5, 6, 4]);
 
         // removal

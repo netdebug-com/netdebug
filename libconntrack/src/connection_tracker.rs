@@ -101,6 +101,11 @@ pub enum ConnectionTrackerMsg {
         key: ConnectionKey,
         tx: mpsc::Sender<Vec<AnalysisInsights>>,
     },
+    GetConnection {
+        key: ConnectionKey,
+        time_mode: TimeMode,
+        tx: mpsc::Sender<Option<ConnectionMeasurements>>,
+    },
     GetConnectionKeys {
         tx: mpsc::Sender<Vec<ConnectionKey>>,
     },
@@ -565,6 +570,9 @@ impl<'a> ConnectionTracker<'a> {
                     );
                 }
             }
+            GetConnection { key, time_mode, tx } => {
+                self.handle_get_connection(&key, time_mode, tx);
+            }
             GetConnectionMeasurements { tx, time_mode } => {
                 self.handle_get_connection_measurements(tx, time_mode);
             }
@@ -893,6 +901,25 @@ impl<'a> ConnectionTracker<'a> {
             }
         } else {
             warn!("Tried to get_insights for unknown connection {}", key,);
+        }
+    }
+
+    fn handle_get_connection(
+        &mut self,
+        key: &ConnectionKey,
+        time_mode: TimeMode,
+        tx: mpsc::Sender<Option<ConnectionMeasurements>>,
+    ) {
+        let now = self.get_current_timestamp(time_mode);
+        let conn_measurement = self
+            .connections
+            .get_mut_no_lru(key)
+            .map(|conn| conn.to_connection_measurements(now, None));
+        if let Err(e) = tx.try_send(conn_measurement) {
+            warn!(
+                "Tried to send the connectios back to caller, but failed: {}",
+                e
+            );
         }
     }
 
@@ -1228,6 +1255,10 @@ pub mod test {
     use crate::neighbor_cache::NeighborState;
     use crate::owned_packet::OwnedParsedPacket;
     use crate::pcap::test::MockRawSocketProber;
+
+    fn mkip(ip_str: &str) -> IpAddr {
+        IpAddr::from_str(ip_str).unwrap()
+    }
 
     pub fn mk_mock_connection_tracker<'a>(local_addrs: HashSet<IpAddr>) -> ConnectionTracker<'a> {
         let mock_prober = MockRawSocketProber::new();
@@ -2071,6 +2102,63 @@ pub mod test {
                 AggregateStatKind::Application(AGGREGATE_STAT_UNKNOWN_ENTRY.to_owned()),
             ])
         );
+    }
+
+    #[test]
+    fn test_get_connections() {
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
+        let mut connection_tracker = mk_mock_connection_tracker(local_addrs.clone());
+
+        // Read the first 3 packets from the trace. I.e., just the handshake but no data.
+        // ==> No probes are sent.
+        let mut capture = pcap::Capture::from_file(test_dir(
+            "libconntrack",
+            "tests/normal-conn-syn-and-fin.pcap",
+        ))
+        .unwrap();
+        while let Ok(pkt) = capture.next_packet() {
+            let parsed_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
+            connection_tracker.add(parsed_pkt);
+        }
+
+        assert_eq!(connection_tracker.connections.len(), 1);
+
+        let existing_key = ConnectionKey {
+            local_ip: mkip("192.168.1.238"),
+            remote_ip: mkip("34.121.150.27"),
+            local_l4_port: 55910,
+            remote_l4_port: 443,
+            ip_proto: IpProtocol::TCP,
+        };
+        let non_existing_key = ConnectionKey {
+            local_ip: mkip("1.2.3.4"),
+            remote_ip: mkip("34.121.150.27"),
+            local_l4_port: 55910,
+            remote_l4_port: 443,
+            ip_proto: IpProtocol::TCP,
+        };
+        // lookup existing connection
+        let (tx, mut rx) = mpsc::channel(10);
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::GetConnection {
+            key: existing_key.clone(),
+            time_mode: TimeMode::PacketTime,
+            tx,
+        });
+        let conn = rx.try_recv().unwrap();
+        assert!(conn.is_some());
+        assert_eq!(conn.unwrap().key, existing_key);
+        assert!(rx.is_empty());
+
+        // lookup existing connection
+        let (tx, mut rx) = mpsc::channel(10);
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::GetConnection {
+            key: non_existing_key.clone(),
+            time_mode: TimeMode::PacketTime,
+            tx,
+        });
+        let conn = rx.try_recv().unwrap();
+        assert!(conn.is_none());
+        assert!(rx.is_empty());
     }
 
     /// Tests that when a connection gets evicted we only send it to the storage server
