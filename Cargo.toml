@@ -23,6 +23,7 @@ approx = { version = "0.5.1" }
 axum = { version = "0.7" }
 axum-extra = { version = "0.9" }
 axum-server = { version = "0.6" }
+async-trait = { version = "0.1" }
 console-subscriber = "*"
 clap = { version = "4", features = ["derive"] }
 derive-getters = "0.3"

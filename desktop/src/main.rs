@@ -7,6 +7,7 @@ use libconntrack::dns_tracker::DnsTrackerSender;
 use libconntrack::pcap::{
     pcap_find_all_local_addrs, spawn_pcap_monitor_all_interfaces, PcapMonitorOptions,
 };
+use libconntrack::pingtree::{PingTreeManager, PingTreeManagerImpl};
 use libconntrack::system_tracker::SystemTracker;
 use libconntrack::{
     connection_tracker::{ConnectionTracker, ConnectionTrackerMsg, ConnectionTrackerSender},
@@ -32,7 +33,7 @@ const NON_DNS_PAYLOAD_LEN: usize = 64;
 
 /// Struct to hold all of the various trackers
 /// We can clone this arbitrarily with no state/locking issues
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct Trackers {
     pub connection_tracker: Option<ConnectionTrackerSender>,
     pub dns_tracker: Option<DnsTrackerSender>,
@@ -41,6 +42,10 @@ pub struct Trackers {
     pub data_storage_client: Option<DataStorageSender>,
     // implemented as a shared lock
     pub system_tracker: Option<Arc<RwLock<SystemTracker>>>,
+    // currently none of pingtree_manager's functions require a &mut so no need
+    // for a lock (yet)
+    // The +Send + Sync boundss are needed because PingTreeManager is an async trait
+    pub pingtree_manager: Option<Arc<dyn PingTreeManager + Send + Sync>>,
     pub counter_registries: Option<SharedExportedStatRegistries>,
 }
 
@@ -225,6 +230,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args_clone = args.clone();
     let connection_manager_tx = connection_tracker_tx.clone();
     trackers.connection_tracker = Some(connection_manager_tx.clone());
+
+    trackers.pingtree_manager = Some(Arc::new(PingTreeManagerImpl::new(
+        connection_manager_tx.clone(),
+        prober_tx.clone(),
+        system_tracker.clone(),
+        counter_registries.new_registry("pingtree"),
+    )));
 
     let conn_track_counters = counter_registries.new_registry("conn_tracker");
     let data_storage_client_clone = data_storage_client.clone();

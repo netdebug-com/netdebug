@@ -134,11 +134,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .unwrap_or("None".to_owned()),
     );
 
-    let pingtree_no_request = counter_registries.new_registry("pingtree").add_stat(
-        "pingtree_no_request",
-        Units::None,
-        [StatType::COUNT],
-    );
+    let pingtree_registry = counter_registries.new_registry("pingtree");
+    let pingtree_no_request =
+        pingtree_registry.add_stat("pingtree_no_request", Units::None, [StatType::COUNT]);
+    let pingtree_not_for_us =
+        pingtree_registry.add_stat("pingtree_not_for_us", Units::None, [StatType::COUNT]);
     let ips: HashSet<IpAddr> = hop_and_ips.iter().map(|(_hop, ip)| *ip).collect();
     let pingtree_res = run_pingtree(PingTreeConfig {
         ips,
@@ -151,6 +151,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         prober_tx,
         ping_id: std::process::id() as u16,
         pingtree_no_request: pingtree_no_request.clone(),
+        pingtree_not_for_us: pingtree_not_for_us.clone(),
     })
     .await;
 
