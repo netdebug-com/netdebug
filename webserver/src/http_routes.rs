@@ -83,6 +83,14 @@ pub async fn setup_axum_http_routes(context: Context) -> Router {
             "/webtest_8338550042",
             ServeFile::new(html_root.clone() + "/webtest.html"),
         )
+        .route_service(
+            "/robots.txt",
+            ServeFile::new(html_root.clone() + "/robots.txt"),
+        )
+        .route_service(
+            "/favicon.ico",
+            ServeFile::new(html_root.clone() + "/favicon.ico"),
+        )
         // WebSocket for webtest
         .route("/ws", routing::get(webtest_ws_handler))
         // counters
