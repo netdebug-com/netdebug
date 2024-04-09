@@ -60,7 +60,6 @@ pub async fn setup_axum_http_routes(context: Context) -> Router {
         wasm_root
     );
 
-    let index_html_service = ServeFile::new(html_root.clone() + "/index.html");
     // Basic Request logging
     let trace_layer = TraceLayer::new_for_http()
         .make_span_with(DefaultMakeSpan::new().level(tracing::Level::DEBUG));
@@ -76,9 +75,6 @@ pub async fn setup_axum_http_routes(context: Context) -> Router {
             serve_dir_and_check_path(html_root.clone() + "/webtest_static"),
         )
         .nest_service("/webclient", serve_dir_and_check_path(&wasm_root))
-        // maybe we should just statically serve / as a fallback if no more spe
-        .route_service("/index.html", index_html_service.clone())
-        .route_service("/", index_html_service)
         .route_service(
             "/webtest",
             ServeFile::new(html_root.clone() + "/webtest.html"),
@@ -93,18 +89,18 @@ pub async fn setup_axum_http_routes(context: Context) -> Router {
         .route("/counters/get_counters", routing::get(get_counters_handler))
         // websocket from desktop
         .route("/desktop", routing::get(desktop_ws_handler))
-        // Console / Auth stuff
-        .nest_service(
-            "/console",
-            // HACK! Assume the webui directory is always relative to the HTML one
-            serve_dir_and_check_path(html_root.clone() + "/../../frontend/console/dist"),
-        )
         .nest_service(
             "/assets",
             // HACK! Assume the webui directory is always relative to the HTML one
             serve_dir_and_check_path(html_root.clone() + "/../../frontend/console/dist/assets"),
         )
         .nest("/api", setup_protected_rest_routes(context.clone()).await)
+        // Console / Auth stuff
+        // Everything not handled by another router belongs to the console
+        .fallback_service(
+            // HACK! Assume the webui directory is always relative to the HTML one
+            ServeFile::new(html_root.clone() + "/../../frontend/console/dist/index.html"),
+        )
         .layer(trace_layer)
         .with_state(context)
     /*
