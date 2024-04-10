@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use common_wasm::{
     timeseries_stats::{ExportedStatRegistry, StatHandle, StatType, Units},
     PingTreeIpReport, PingtreeUiResult, ProbeReportSummary,
@@ -136,8 +137,10 @@ impl PingTreeManager for PingTreeManagerImpl {
             pingtree_no_request: self.pingtree_no_request.clone(),
             pingtree_not_for_us: self.pingtree_not_for_us.clone(),
         };
+        let probe_time = Utc::now();
         let ip_reports = pingtree_result_to_ip_reports(&run_pingtree(cfg).await);
         PingtreeUiResult {
+            probe_time,
             hops_to_ips,
             ip_reports,
         }
@@ -148,7 +151,7 @@ pub fn pingtree_result_to_ip_reports(
     ping_res: &PingTreeResult,
 ) -> HashMap<IpAddr, PingTreeIpReport> {
     let mut reports = HashMap::new();
-    for (ip, raw_rtts) in ping_res {
+    for (ip, raw_rtts) in &ping_res.per_ip_rtts {
         let raw_rtts_micros = raw_rtts
             .iter()
             .map(|rtt_opt| rtt_opt.map(|rtt| rtt.as_micros() as u64))
@@ -368,7 +371,7 @@ pub async fn run_pingtree(cfg: PingTreeConfig) -> PingTreeResult {
     while next_wakeup_time.is_some() {
         tokio::select! {
             Some((pkt, key)) = pt.pkt_rx.recv() => {
-                pt.handle_response(pkt, &key);
+                pt.handle_echo_packet(pkt, &key);
             },
             _ = sleep_until(next_wakeup_time.unwrap()) => {
                 next_wakeup_time = pt.handle_woken_up();
@@ -379,11 +382,15 @@ pub async fn run_pingtree(cfg: PingTreeConfig) -> PingTreeResult {
     pt.aggregate_results()
 }
 
-/// The result of a PingTree run. One hashmap entry for each IP address we probed.
-/// Each per-ip entry is a list of (optional) RTTs values. One list item per round.
-/// (i.e., `x.get(ip).unwrap().len() == num_rounds`). The RTT is none if we didn't
-/// get a response (or failed to capture the outgoing probe).
-pub type PingTreeResult = HashMap<IpAddr, Vec<Option<Duration>>>;
+/// The result of a PingTree run.
+pub struct PingTreeResult {
+    pub probe_time: DateTime<Utc>,
+    ///  One hashmap entry for each IP address we probed.
+    /// Each per-ip entry is a list of (optional) RTTs values. One list item per round.
+    /// (i.e., `x.get(ip).unwrap().len() == num_rounds`). The RTT is none if we didn't
+    /// get a response (or failed to capture the outgoing probe).
+    pub per_ip_rtts: HashMap<IpAddr, Vec<Option<Duration>>>,
+}
 
 /// The actual state and implementation of a single pingtree run. Don't use it directly
 struct PingTreeImpl {
@@ -408,6 +415,7 @@ struct PingTreeImpl {
     /// The payload to send in the echo request. Used to make sure that received echo requests
     /// and replies are associated with this pingtree instance
     ping_payload: Vec<u8>,
+    start_time: Option<DateTime<Utc>>,
 }
 
 impl PingTreeImpl {
@@ -453,6 +461,7 @@ impl PingTreeImpl {
             echo_recv_times: HashMap::new(),
             cur_round: 0,
             ping_payload,
+            start_time: None,
         }
     }
 
@@ -460,7 +469,7 @@ impl PingTreeImpl {
         self.cur_round >= self.cfg.num_rounds
     }
 
-    fn handle_response(&mut self, pkt: Box<OwnedParsedPacket>, key: &ConnectionKey) {
+    fn handle_echo_packet(&mut self, pkt: Box<OwnedParsedPacket>, key: &ConnectionKey) {
         if let Some(info) = pkt.get_icmp_echo_info() {
             assert_eq!(info.id, self.cfg.ping_id);
             if info.payload != self.ping_payload {
@@ -474,6 +483,7 @@ impl PingTreeImpl {
                 );
                 return;
             }
+            self.start_time.get_or_insert(pkt.timestamp);
             let prev = if info.is_reply {
                 debug!("Received response from {} seq {}", key.remote_ip, info.seq);
                 self.echo_recv_times
@@ -530,9 +540,9 @@ impl PingTreeImpl {
     }
 
     fn aggregate_results(self) -> PingTreeResult {
-        let mut result: PingTreeResult = HashMap::new();
+        let mut res_map: HashMap<IpAddr, Vec<Option<Duration>>> = HashMap::new();
         for ip in &self.cfg.ips {
-            let this_ip_results = result.entry(*ip).or_default();
+            let this_ip_results = res_map.entry(*ip).or_default();
             for round in 0..self.cfg.num_rounds {
                 let t_sent = self.echo_sent_times.get(&(*ip, round));
                 let t_recv = self.echo_recv_times.get(&(*ip, round));
@@ -548,7 +558,10 @@ impl PingTreeImpl {
                 this_ip_results.push(rtt);
             }
         }
-        result
+        PingTreeResult {
+            probe_time: self.start_time.unwrap_or_else(Utc::now),
+            per_ip_rtts: res_map,
+        }
     }
 }
 
@@ -661,32 +674,43 @@ mod test {
 
         // Feed actual echo requests and recho replies into pingtree
         tokio::time::pause();
-        let pkt = OwnedParsedPacket::try_from_fake_time(make_ping_icmp_echo_request(
-            &v4_egress_info.local_ip,
-            &mkip("7.7.7.7"),
-            v4_egress_info.local_mac.bytes(),
-            v4_egress_info.gateway_mac.bytes(),
-            42,
-            0,
-            echo_payload.clone(),
-        ))
+        // some time on 2024-04-10
+        // NOTE: the timestamp is just for the start time, not RTT computation
+        // (Instant's are used for the latter).
+        let timestamp = DateTime::from_timestamp(1712777316, 123_456_000).unwrap();
+        let pkt = OwnedParsedPacket::try_from_timestamp(
+            make_ping_icmp_echo_request(
+                &v4_egress_info.local_ip,
+                &mkip("7.7.7.7"),
+                v4_egress_info.local_mac.bytes(),
+                v4_egress_info.gateway_mac.bytes(),
+                42,
+                0,
+                echo_payload.clone(),
+            ),
+            timestamp,
+        )
         .unwrap();
-        pt.handle_response(pkt, &key7);
-        let pkt = OwnedParsedPacket::try_from_fake_time(make_ping_icmp_echo_request(
-            &v4_egress_info.local_ip,
-            &mkip("8.8.8.8"),
-            v4_egress_info.local_mac.bytes(),
-            v4_egress_info.gateway_mac.bytes(),
-            42,
-            0,
-            echo_payload.clone(),
-        ))
+        pt.handle_echo_packet(pkt, &key7);
+        let pkt = OwnedParsedPacket::try_from_timestamp(
+            make_ping_icmp_echo_request(
+                &v4_egress_info.local_ip,
+                &mkip("8.8.8.8"),
+                v4_egress_info.local_mac.bytes(),
+                v4_egress_info.gateway_mac.bytes(),
+                42,
+                0,
+                echo_payload.clone(),
+            ),
+            timestamp + chrono::Duration::milliseconds(1500),
+        )
         .unwrap();
-        pt.handle_response(pkt, &key8);
+        pt.handle_echo_packet(pkt, &key8);
 
         tokio::time::advance(Duration::from_millis(123)).await;
 
         // Only 8.8.8.8 replies
+        // don't need a real timestamp here
         let pkt = OwnedParsedPacket::try_from_fake_time(make_ping_icmp_echo_reply(
             &v4_egress_info.local_ip,
             &mkip("8.8.8.8"),
@@ -697,7 +721,7 @@ mod test {
             echo_payload.clone(),
         ))
         .unwrap();
-        pt.handle_response(pkt, &key8);
+        pt.handle_echo_packet(pkt, &key8);
 
         // send the next round.
         pt.send_next_round();
@@ -714,7 +738,7 @@ mod test {
         ))
         .unwrap();
 
-        pt.handle_response(pkt, &key7);
+        pt.handle_echo_packet(pkt, &key7);
         // ... and the 8.8.8.8 reply
         let pkt = OwnedParsedPacket::try_from_fake_time(make_ping_icmp_echo_reply(
             &v4_egress_info.local_ip,
@@ -726,21 +750,25 @@ mod test {
             echo_payload.clone(),
         ))
         .unwrap();
-        pt.handle_response(pkt, &key8);
+        pt.handle_echo_packet(pkt, &key8);
 
         // check the results we should have:
         // round 0: 7.7.7.7 and 8.8.8.8 had a request, 8.8.8.8 had a response 123ms later
         // round 1: 7.7.7.7 had a request, 8.8.8.8 had a response.
         assert!(pt.all_rounds_sent());
         let res = pt.aggregate_results();
+        assert_eq!(res.probe_time, timestamp);
         assert_eq!(pingtree_no_request.get_sum(), 1);
         assert_eq!(
-            res.keys().cloned().collect::<HashSet<IpAddr>>(),
+            res.per_ip_rtts.keys().cloned().collect::<HashSet<IpAddr>>(),
             HashSet::from([mkip("7.7.7.7"), mkip("8.8.8.8")])
         );
-        assert_eq!(res.get(&mkip("7.7.7.7")).unwrap(), &[None, None]);
         assert_eq!(
-            res.get(&mkip("8.8.8.8")).unwrap(),
+            res.per_ip_rtts.get(&mkip("7.7.7.7")).unwrap(),
+            &[None, None]
+        );
+        assert_eq!(
+            res.per_ip_rtts.get(&mkip("8.8.8.8")).unwrap(),
             &[Some(Duration::from_millis(123)), None]
         );
 
@@ -802,13 +830,13 @@ mod test {
 
     #[test]
     fn test_pingtree_result_to_ip_reports() {
-        let mut ping_res: PingTreeResult = HashMap::new();
-        ping_res.insert(
+        let mut per_ip_rtts: HashMap<IpAddr, Vec<Option<Duration>>> = HashMap::new();
+        per_ip_rtts.insert(
             mkip("10.0.0.1"),
             vec![None, Some(Duration::from_millis(123)), None],
         );
-        ping_res.insert(mkip("20.0.0.1"), vec![None, None, None]);
-        ping_res.insert(
+        per_ip_rtts.insert(mkip("20.0.0.1"), vec![None, None, None]);
+        per_ip_rtts.insert(
             mkip("30.0.0.1"),
             vec![
                 Some(Duration::from_millis(42)),
@@ -816,7 +844,7 @@ mod test {
                 None,
             ],
         );
-        ping_res.insert(
+        per_ip_rtts.insert(
             mkip("40.0.0.1"),
             vec![
                 Some(Duration::from_millis(40)),
@@ -825,7 +853,10 @@ mod test {
             ],
         );
 
-        let ip_reports = pingtree_result_to_ip_reports(&ping_res);
+        let ip_reports = pingtree_result_to_ip_reports(&PingTreeResult {
+            probe_time: Utc::now(),
+            per_ip_rtts,
+        });
 
         assert_eq!(
             ip_reports.get(&mkip("10.0.0.1")).unwrap(),

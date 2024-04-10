@@ -201,6 +201,7 @@ mod test {
             (ttl, entry)
         });
         let report = ProbeRoundReport {
+            probe_time: None,
             probes: HashMap::from_iter(probes),
             probe_round: 1,
             application_rtt: None,

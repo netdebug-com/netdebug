@@ -1,4 +1,5 @@
 use analysis_messages::AnalysisInsights;
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -90,6 +91,9 @@ pub fn get_git_hash_version() -> String {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TypeDef)]
 pub struct ProbeRoundReport {
+    /// Time when the probe round was sent. Optional for backward compatibility
+    #[type_def(type_of = "String")]
+    pub probe_time: Option<DateTime<Utc>>,
     pub probes: HashMap<ProbeId, ProbeReportEntry>,
     pub probe_round: u32,
     pub application_rtt: Option<f64>,
@@ -371,11 +375,13 @@ impl Eq for ProbeReportEntry {}
 
 impl ProbeRoundReport {
     pub fn new(
+        probe_time: DateTime<Utc>,
         report: HashMap<ProbeId, ProbeReportEntry>,
         probe_round: u32,
         application_rtt: Option<f64>,
     ) -> ProbeRoundReport {
         ProbeRoundReport {
+            probe_time: Some(probe_time),
             probes: report,
             probe_round,
             application_rtt,
@@ -620,6 +626,9 @@ pub struct PingTreeIpReport {
 
 #[derive(Debug, Clone, Eq, PartialEq, TypeDef, Serialize, Deserialize)]
 pub struct PingtreeUiResult {
+    /// Time when the probe round was sent.
+    #[type_def(type_of = "String")]
+    pub probe_time: DateTime<Utc>,
     pub hops_to_ips: BTreeMap<u8, Vec<IpAddr>>,
     pub ip_reports: HashMap<IpAddr, PingTreeIpReport>,
 }
