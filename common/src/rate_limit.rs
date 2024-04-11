@@ -17,8 +17,8 @@ impl SimpleRateLimiter {
         }
     }
 
-    pub fn check_update(&mut self) -> bool {
-        if self.last_event_time.elapsed() >= self.time_between_events {
+    pub fn check_update(&mut self, force: bool) -> bool {
+        if force || (self.last_event_time.elapsed() >= self.time_between_events) {
             self.last_event_time = Instant::now();
             true
         } else {
@@ -35,16 +35,29 @@ mod test {
     pub async fn test_simple_rate_limiter() {
         let mut srl = SimpleRateLimiter::new(Duration::from_millis(500));
         assert_eq!(srl.time_between_events, Duration::from_millis(500));
-        assert!(srl.check_update());
-        assert!(!srl.check_update());
+        assert!(srl.check_update(false));
+        assert!(!srl.check_update(false));
+        assert!(srl.check_update(true));
+        assert!(!srl.check_update(false));
         tokio::time::pause();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        assert!(!srl.check_update());
+        assert!(!srl.check_update(false));
         tokio::time::sleep(Duration::from_millis(210)).await;
-        assert!(srl.check_update());
+        assert!(srl.check_update(false));
         tokio::time::sleep(Duration::from_millis(5000)).await;
-        assert!(srl.check_update());
+        assert!(srl.check_update(false));
+
+        // check force logic.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!srl.check_update(false));
+        // this force==true should reset the timer
+        assert!(srl.check_update(true));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!srl.check_update(false));
+        tokio::time::sleep(Duration::from_millis(210)).await;
+        assert!(srl.check_update(false));
+
         tokio::time::resume();
-        assert!(!srl.check_update());
+        assert!(!srl.check_update(false));
     }
 }

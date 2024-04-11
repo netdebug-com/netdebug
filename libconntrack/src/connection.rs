@@ -164,6 +164,9 @@ pub struct Connection {
     last_packet_time: DateTime<Utc>,
     /// data packet sent from the local side, used for probe retransmits
     local_data: Option<OwnedParsedPacket>,
+    /// if true, when the next probe round is sent, we don't check the rate
+    /// limiter and always send the probes, starting with TTL 1
+    next_probe_no_ratelimit: bool,
     probe_round: Option<ProbeRound>,
     probe_report_summary: ProbeReportSummary,
     pub(crate) user_annotation: Option<String>, // an human supplied comment on this connection
@@ -191,6 +194,7 @@ impl Connection {
         Connection {
             connection_key: key.clone(),
             local_data: None,
+            next_probe_no_ratelimit: false,
             probe_round: None,
             probe_report_summary: ProbeReportSummary::new(),
             user_annotation: None,
@@ -488,7 +492,7 @@ impl Connection {
             // spawn an inband probe
             if first_time && !self.close_has_started() {
                 let dst_ip = packet.get_src_dst_ips().unwrap().1;
-                if prober_helper.check_update_dst_ip(dst_ip) {
+                if prober_helper.check_update_dst_ip(dst_ip, self.next_probe_no_ratelimit) {
                     self.stat_handles.probe_rounds_sent.bump();
                     // reset the probe state
                     self.probe_round = Some(ProbeRound::new(
@@ -497,7 +501,8 @@ impl Connection {
                         packet.timestamp,
                     ));
                     // tcp_inband_probe(self.local_data.as_ref().unwrap(), raw_sock ).unwrap();
-                    let min_ttl = prober_helper.get_min_ttl();
+                    let min_ttl = prober_helper.get_min_ttl(self.next_probe_no_ratelimit);
+                    self.next_probe_no_ratelimit = false;
                     if let Err(e) =
                         prober_helper
                             .tx()
@@ -888,6 +893,7 @@ impl Connection {
         // still want to be able to start another.
         if should_probe_again {
             self.local_data = None;
+            self.next_probe_no_ratelimit = true;
         }
         // Always clear out the stored state to make sure that multiple calls to this function
         // don't create fake ProbeReports (or leak mem!)
