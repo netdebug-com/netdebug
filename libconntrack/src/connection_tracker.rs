@@ -174,129 +174,6 @@ pub enum ConnectionTrackerMsg {
     },
 }
 
-/**
- * Send a copy of the ConnectionMeasurements() struct associated with this connection
- * to the remote topology server for storage.
- */
-// TODO: I'll move this down where the rest if the ConnectionTracker impl is in another
-// diff. But doing it this way keeps the diff more readable
-impl<'a> ConnectionTracker<'a> {
-    fn send_connection_storage_msg(&mut self, c: &mut Connection, now: DateTime<Utc>) {
-        if let Some(tx) = self.topology_client.as_ref() {
-            let measurement = Box::new(c.to_connection_measurements(now, None));
-            if !measurement.probe_report_summary.raw_reports.is_empty() {
-                // only send the connection info if we have at least one successful probe round
-                debug!(
-                    "Sending connection measurements to topology server for {}",
-                    c.connection_key()
-                );
-                send_or_log_sync!(
-                    tx,
-                    "send_connection_storage_msg()",
-                    DataStorageMessage::StoreConnectionMeasurements {
-                        connection_measurements: measurement
-                    }
-                );
-            } else {
-                debug!(
-                    "Not sending connection measurement to storage server: {} measurements {}",
-                    measurement.probe_report_summary.raw_reports.len(),
-                    c.connection_key()
-                );
-            }
-        }
-        if let Some(tx) = self.all_evicted_connections_listener.as_ref() {
-            let measurement = Box::new(c.to_connection_measurements(now, None));
-            if let Err(e) = tx.try_send(measurement) {
-                warn!(
-                    "Failed to send data to all_evicted_connections :: err {}",
-                    e
-                );
-            }
-        }
-    }
-
-    fn lookup_mac_by_ip(
-        &mut self,
-        identifier: String,
-        target_ip: IpAddr,
-        tx: Sender<(IpAddr, MacAddress)>,
-    ) {
-        // do we have the target Mac already cached?
-        // NOTE: this function will send the reply if it is cached, so we
-        // don't need to do anything else
-        if self
-            .neighbor_cache
-            .lookup_mac_by_ip_pending(identifier, &target_ip, tx)
-            == LookupMacByIpResult::NotFound
-        {
-            // our lookup failed; let's source a Arp or Ndp lookup to the IP to force it
-            // first, figure out a source IP and mac; just look through our local_addrs
-            // and use the first one that's the same IP version as the target
-            if let Ok(local_ip) = remote_ip_to_local(target_ip) {
-                /*
-                 * Even if the external network is completely hosed, we should be able to see Arp/Ndp
-                 * messages outgoing from our selves and thus have learned our own mac for the local_ip
-                 *
-                 * if this is a problem, just lookup manually with MacAddress:lookup_mac_by_ip(), but that's
-                 * more expensive so prefer the cache
-                 *
-                 * NOTE: this is called in the 'hot' packet processing path so we need to at least consider
-                 * efficiency here
-                 */
-                let local_mac = if let Some(local_mac) =
-                    self.neighbor_cache.lookup_mac_by_ip(&local_ip)
-                {
-                    local_mac
-                } else {
-                    // lookup via system call(s)
-                    match mac_address::get_mac_address_by_ip(&local_ip) {
-                        Ok(Some(mac)) => {
-                            // got it; cache it
-                            self.neighbor_cache
-                                .learn(&Some(local_ip), &Some(mac), Utc::now());
-                            mac
-                        }
-                        Ok(None) => {
-                            warn!("Tried to lookup local mac for {} but didn't find it!?; Failed to send Arp/Ndp", local_ip);
-                            return;
-                        }
-                        // TODO looking at the code of get_mac_address_by_ip, it never returns Err(...). So maybe we should fold
-                        // this pattern into the one above.
-                        Err(e) => {
-                            warn!("Tried to lookup local mac for {} but got error {}; Failed to send Arp/Ndp", local_ip, e);
-                            return;
-                        }
-                    }
-                };
-                send_or_log_sync!(
-                    self.prober_helper.tx(),
-                    "Send Arp/NDP to prober",
-                    ProbeMessage::SendIpLookup {
-                        local_mac: local_mac.bytes(),
-                        local_ip,
-                        target_ip,
-                    }
-                );
-            } else {
-                warn!(
-                    "Tried to send a LookupIp message to the prober but couldn't find a local_ip that matched target_ip: {} !?", 
-                    target_ip
-                );
-            }
-        }
-    }
-
-    fn get_cached_neighbors(&self, tx: Sender<Vec<ExportedNeighborState>>) {
-        if let Err(e) = tx.try_send(self.neighbor_cache.export_neighbors()) {
-            warn!(
-                "Tried to return get_cached_neighbors() info to caller, but got {}",
-                e
-            );
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct ConnectionStatHandles {
     pub probe_rounds_sent: StatHandle,
@@ -834,6 +711,45 @@ impl<'a> ConnectionTracker<'a> {
         }
     }
 
+    /**
+     * Send a copy of the ConnectionMeasurements() struct associated with this connection
+     * to the remote topology server for storage.
+     */
+    fn send_connection_storage_msg(&mut self, c: &mut Connection, now: DateTime<Utc>) {
+        if let Some(tx) = self.topology_client.as_ref() {
+            let measurement = Box::new(c.to_connection_measurements(now, None));
+            if !measurement.probe_report_summary.raw_reports.is_empty() {
+                // only send the connection info if we have at least one successful probe round
+                debug!(
+                    "Sending connection measurements to topology server for {}",
+                    c.connection_key()
+                );
+                send_or_log_sync!(
+                    tx,
+                    "send_connection_storage_msg()",
+                    DataStorageMessage::StoreConnectionMeasurements {
+                        connection_measurements: measurement
+                    }
+                );
+            } else {
+                debug!(
+                    "Not sending connection measurement to storage server: {} measurements {}",
+                    measurement.probe_report_summary.raw_reports.len(),
+                    c.connection_key()
+                );
+            }
+        }
+        if let Some(tx) = self.all_evicted_connections_listener.as_ref() {
+            let measurement = Box::new(c.to_connection_measurements(now, None));
+            if let Err(e) = tx.try_send(measurement) {
+                warn!(
+                    "Failed to send data to all_evicted_connections :: err {}",
+                    e
+                );
+            }
+        }
+    }
+
     fn new_connection(&mut self, key: ConnectionKey, pkt_timestamp: DateTime<Utc>) {
         debug!("Tracking new connection: {}", &key);
         let mut connection = Connection::new(key.clone(), pkt_timestamp, self.stat_handles.clone());
@@ -1222,6 +1138,86 @@ impl<'a> ConnectionTracker<'a> {
                 key
             );
             self.pingtree_no_connection.bump();
+        }
+    }
+
+    fn lookup_mac_by_ip(
+        &mut self,
+        identifier: String,
+        target_ip: IpAddr,
+        tx: Sender<(IpAddr, MacAddress)>,
+    ) {
+        // do we have the target Mac already cached?
+        // NOTE: this function will send the reply if it is cached, so we
+        // don't need to do anything else
+        if self
+            .neighbor_cache
+            .lookup_mac_by_ip_pending(identifier, &target_ip, tx)
+            == LookupMacByIpResult::NotFound
+        {
+            // our lookup failed; let's source a Arp or Ndp lookup to the IP to force it
+            // first, figure out a source IP and mac; just look through our local_addrs
+            // and use the first one that's the same IP version as the target
+            if let Ok(local_ip) = remote_ip_to_local(target_ip) {
+                /*
+                 * Even if the external network is completely hosed, we should be able to see Arp/Ndp
+                 * messages outgoing from our selves and thus have learned our own mac for the local_ip
+                 *
+                 * if this is a problem, just lookup manually with MacAddress:lookup_mac_by_ip(), but that's
+                 * more expensive so prefer the cache
+                 *
+                 * NOTE: this is called in the 'hot' packet processing path so we need to at least consider
+                 * efficiency here
+                 */
+                let local_mac = if let Some(local_mac) =
+                    self.neighbor_cache.lookup_mac_by_ip(&local_ip)
+                {
+                    local_mac
+                } else {
+                    // lookup via system call(s)
+                    match mac_address::get_mac_address_by_ip(&local_ip) {
+                        Ok(Some(mac)) => {
+                            // got it; cache it
+                            self.neighbor_cache
+                                .learn(&Some(local_ip), &Some(mac), Utc::now());
+                            mac
+                        }
+                        Ok(None) => {
+                            warn!("Tried to lookup local mac for {} but didn't find it!?; Failed to send Arp/Ndp", local_ip);
+                            return;
+                        }
+                        // TODO looking at the code of get_mac_address_by_ip, it never returns Err(...). So maybe we should fold
+                        // this pattern into the one above.
+                        Err(e) => {
+                            warn!("Tried to lookup local mac for {} but got error {}; Failed to send Arp/Ndp", local_ip, e);
+                            return;
+                        }
+                    }
+                };
+                send_or_log_sync!(
+                    self.prober_helper.tx(),
+                    "Send Arp/NDP to prober",
+                    ProbeMessage::SendIpLookup {
+                        local_mac: local_mac.bytes(),
+                        local_ip,
+                        target_ip,
+                    }
+                );
+            } else {
+                warn!(
+                    "Tried to send a LookupIp message to the prober but couldn't find a local_ip that matched target_ip: {} !?", 
+                    target_ip
+                );
+            }
+        }
+    }
+
+    fn get_cached_neighbors(&self, tx: Sender<Vec<ExportedNeighborState>>) {
+        if let Err(e) = tx.try_send(self.neighbor_cache.export_neighbors()) {
+            warn!(
+                "Tried to return get_cached_neighbors() info to caller, but got {}",
+                e
+            );
         }
     }
 }
