@@ -20,10 +20,9 @@ import FlowsByDnsDomain, {
   flowsByDnsDomainLoader,
 } from "./pages/FlowsByDnsDomain";
 
-import {
-  FlowDetailsByParam,
-  flowByIdLoader,
-} from "./common/components/FlowSummary";
+import { flowByIdLoader } from "./common/components/FlowSummary";
+
+import { FlowDetailsByParam } from "./common/components/FlowDetails";
 
 // layouts
 import AboutLayout from "./layouts/AboutLayout";
