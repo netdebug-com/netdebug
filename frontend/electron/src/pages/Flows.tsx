@@ -15,7 +15,7 @@ import {
   GridValueFormatterParams,
   GridValueGetterParams,
 } from "@mui/x-data-grid";
-import { FlowSummary } from "../common/components/FlowSummary";
+import { FlowSummaryLink } from "../common/components/FlowSummary";
 import {
   calculateLossPercentage,
   getDefaultPercentageGridColDef,
@@ -50,7 +50,7 @@ const columns: GridColDef[] = [
     hideable: false,
     flex: 50,
     renderCell: (params: GridValueGetterParams<ConnectionMeasurements>) => (
-      <FlowSummary flow={params.row} />
+      <FlowSummaryLink flow={params.row} />
     ),
   },
 
