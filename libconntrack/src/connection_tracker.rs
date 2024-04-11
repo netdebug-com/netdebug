@@ -718,18 +718,23 @@ impl<'a> ConnectionTracker<'a> {
     fn send_connection_storage_msg(&mut self, c: &mut Connection, now: DateTime<Utc>) {
         if let Some(tx) = self.topology_client.as_ref() {
             let measurement = Box::new(c.to_connection_measurements(now, None));
-            if !measurement.probe_report_summary.raw_reports.is_empty() {
-                // only send the connection info if we have at least one successful probe round
-                debug!(
-                    "Sending connection measurements to topology server for {}",
-                    c.connection_key()
-                );
+            if measurement.rx_stats.pkts > 1 && measurement.tx_stats.pkts > 1 {
+                // TODO: as a temporary hack to not export evyerthing, we limit ourself to only
+                // writing connections that have more than one packet in each direction. This
+                // elminiates all of the local network broadcast chatter and DNS requests and
+                // reduce the number of connections to export by ~75%. Eventually we want to
+                // export everything (esp. for security) but for now this should be ok.
+                // see https://github.com/netdebug-com/netdebug/issues/772
                 send_or_log_sync!(
                     tx,
                     "send_connection_storage_msg()",
                     DataStorageMessage::StoreConnectionMeasurements {
                         connection_measurements: measurement
                     }
+                );
+                debug!(
+                    "Sending connection measurements to topology server for {}",
+                    c.connection_key()
                 );
             } else {
                 debug!(
@@ -2272,17 +2277,14 @@ pub mod test {
         assert_eq!(connection_tracker.pingtree_results_added.get_sum(), 1);
     }
 
-    /// Tests that when a connection gets evicted we only send it to the storage server
-    /// if it has probe information in it.
     #[test]
-    fn test_send_only_conns_with_probe_to_storage() {
+    fn test_send_only_conns_with_enough_pkts_to_storage() {
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
         let (evict_tx, mut evict_rx) = mpsc::channel(10);
         let mut connection_tracker = mk_mock_connection_tracker(local_addrs.clone());
         connection_tracker.set_topology_client(Some(evict_tx));
 
         // Read the first 3 packets from the trace. I.e., just the handshake but no data.
-        // ==> No probes are sent.
         let mut capture = pcap::Capture::from_file(test_dir(
             "libconntrack",
             "tests/normal-conn-syn-and-fin.pcap",
@@ -2292,7 +2294,7 @@ pub mod test {
         let mut last_pkt_timne = DateTime::<Utc>::UNIX_EPOCH;
         while let Ok(pkt) = capture.next_packet() {
             if num_pks >= 3 {
-                // just the 3-way handshake
+                // just the 3-way handshake.
                 break;
             }
             let parsed_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
@@ -2328,6 +2330,101 @@ pub mod test {
         match evict_rx.try_recv() {
             Err(mpsc::error::TryRecvError::Empty) => (),
             x => panic!("Expected to get an empty from evict_rx, got {:?}", x),
+        }
+
+        // make sure we have the "unrelated" connection in the tracker
+        assert!(connection_tracker
+            .connections
+            .get_no_lru(&unrelated_conn_key)
+            .is_some());
+    }
+
+    /// Tests that when a connection gets evicted we send it to the storage server even if it
+    /// doesn't have an probe reports
+    #[test]
+    fn test_send_conns_without_probes_to_storage() {
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
+        let (evict_tx, mut evict_rx) = mpsc::channel(10);
+        let mut connection_tracker = mk_mock_connection_tracker(local_addrs.clone());
+        connection_tracker.set_topology_client(Some(evict_tx));
+
+        // Read the first 3 packets from the trace. I.e., just the handshake but no data.
+        // ==> No probes are sent.
+        let mut capture = pcap::Capture::from_file(test_dir(
+            "libconntrack",
+            "tests/normal-conn-syn-and-fin.pcap",
+        ))
+        .unwrap();
+        let mut num_pkts = 0;
+        let mut last_pkt_timne = DateTime::<Utc>::UNIX_EPOCH;
+        let mut conn_key = None;
+        /* This is a bit hacky. The trace has the following packets:
+             1  192.168.1.238.55910 > 34.121.150.27.443: Flags [S],
+             2  34.121.150.27.443 > 192.168.1.238.55910: Flags [S.],
+             3  192.168.1.238.55910 > 34.121.150.27.443: Flags [.],
+             4  192.168.1.238.55910 > 34.121.150.27.443: Flags [P.],
+             5  34.121.150.27.443 > 192.168.1.238.55910: Flags [.],
+             6  192.168.1.238.55910 > 34.121.150.27.443: Flags [P.],
+             7  34.121.150.27.443 > 192.168.1.238.55910: Flags [.],
+             8  34.121.150.27.443 > 192.168.1.238.55910: Flags [F.],
+             ....
+           We want 1,2,3, and 5. This was we have two packets in each direction but no local
+           data. So no connection report is generated
+        */
+        let pkts_we_want = [1, 2, 3, 5];
+        while let Ok(pkt) = capture.next_packet() {
+            num_pkts += 1;
+            if !pkts_we_want.contains(&num_pkts) {
+                continue;
+            }
+            let parsed_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
+            conn_key = Some(parsed_pkt.to_connection_key(&local_addrs).unwrap().0);
+            last_pkt_timne = parsed_pkt.timestamp;
+            connection_tracker.add(parsed_pkt);
+        }
+        let conn_key = conn_key.unwrap();
+
+        assert_eq!(connection_tracker.connections.len(), 1);
+
+        let timestamp = last_pkt_timne + Duration::milliseconds(TIME_WAIT_MS + 10);
+
+        // Create a packet from a different connection.
+        let mut pkt_unrelated_conn_raw: Vec<u8> = Vec::new();
+        etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
+            .ipv4([192, 168, 1, 238], [192, 168, 1, 2], 20)
+            .tcp(12345, 80, 42, 1024)
+            .write(&mut pkt_unrelated_conn_raw, &[])
+            .unwrap();
+        let pkt_unrelated_conn =
+            OwnedParsedPacket::try_from_timestamp(pkt_unrelated_conn_raw, timestamp).unwrap();
+        let unrelated_conn_key = pkt_unrelated_conn
+            .clone()
+            .to_connection_key(&local_addrs)
+            .unwrap()
+            .0;
+
+        // and put the packet into connection tracker. The previous connection should
+        // be evicted
+        connection_tracker.add(pkt_unrelated_conn);
+        assert_eq!(connection_tracker.connections.len(), 1);
+        match evict_rx.try_recv().unwrap().skip_perf_check() {
+            DataStorageMessage::StoreConnectionMeasurements {
+                connection_measurements,
+            } => {
+                assert_eq!(connection_measurements.key, conn_key);
+                // sanity check that there are no probes in the exported conn
+                assert_eq!(
+                    connection_measurements
+                        .probe_report_summary
+                        .raw_reports
+                        .len(),
+                    0
+                );
+            }
+            x => panic!(
+                "Expected to get StoreConnectionMeasurements from evict_rx, got {:?}",
+                x
+            ),
         }
 
         // make sure we have the "unrelated" connection in the tracker
