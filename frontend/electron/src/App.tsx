@@ -20,6 +20,11 @@ import FlowsByDnsDomain, {
   flowsByDnsDomainLoader,
 } from "./pages/FlowsByDnsDomain";
 
+import {
+  FlowDetailsByParam,
+  flowByIdLoader,
+} from "./common/components/FlowSummary";
+
 // layouts
 import AboutLayout from "./layouts/AboutLayout";
 import RootLayout from "./layouts/RootLayout";
@@ -65,6 +70,12 @@ const router = createHashRouter(
           path="by_app"
           element={<FlowsByApplication />}
           loader={flowsByApplicationLoader}
+          errorElement={<DefaultErrorElement />}
+        />
+        <Route
+          path="one_flow/:conn_id"
+          element={<FlowDetailsByParam />}
+          loader={flowByIdLoader}
           errorElement={<DefaultErrorElement />}
         />
       </Route>

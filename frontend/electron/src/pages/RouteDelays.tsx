@@ -19,7 +19,7 @@ import {
   headerStyleWithWidth,
   prettyPrintSiUnits,
 } from "../common/utils";
-import { FlowSummary } from "../common/components/FlowSummary";
+import { FlowSummaryLink } from "../common/components/FlowSummary";
 import { useLoaderData } from "react-router";
 import { fetchAndCheckResult } from "../common/data_loading";
 
@@ -126,7 +126,7 @@ const RouterDelays: React.FC = () => {
                       )}
                     </TableCell>
                     <TableCell>
-                      <FlowSummary flow={key2Measurements.get(flowKey)} />
+                      <FlowSummaryLink flow={key2Measurements.get(flowKey)} />
                     </TableCell>
                   </TableRow>
                 );
