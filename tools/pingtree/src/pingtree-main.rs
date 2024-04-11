@@ -157,7 +157,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("PingTree is done: Results:");
     for (hop, ip) in &hop_and_ips {
-        println!("{:3} {} {:?}", hop, ip, pingtree_res.get(ip).unwrap());
+        println!(
+            "{:3} {} {:?}",
+            hop,
+            ip,
+            pingtree_res.per_ip_rtts.get(ip).unwrap()
+        );
     }
 
     Ok(())

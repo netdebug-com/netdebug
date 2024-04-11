@@ -87,6 +87,11 @@ export type ProbeReportEntry = ({
 });
 export type U32 = number;
 export type ProbeRoundReport = {
+
+    /**
+     * Time when the probe round was sent. Optional for backward compatibility
+     */
+    "probe_time": string;
     "probes": Record<U8, ProbeReportEntry>;
     "probe_round": U32;
     "application_rtt": (F64 | null);

@@ -874,6 +874,11 @@ impl Connection {
                 }
             }
         }
+        let probe_time = self
+            .probe_round
+            .as_ref()
+            .map(|round| round.start_time)
+            .unwrap_or_else(Utc::now);
         // whether or not we had valid probe data; reset the probe data if asked
         // this is important because we could have had a completely failed probe run but
         // still want to be able to start another.
@@ -884,7 +889,8 @@ impl Connection {
         // don't create fake ProbeReports (or leak mem!)
         self.probe_round = None;
         let probe_round_num = self.probe_report_summary.raw_reports.len() as u32;
-        let probe_report = ProbeRoundReport::new(report, probe_round_num, application_rtt);
+        let probe_report =
+            ProbeRoundReport::new(probe_time, report, probe_round_num, application_rtt);
         // one copy for us and one for the caller
         // the one for us will get logged to disk; the caller's will get sent to the remote client
         self.probe_report_summary.update(probe_report.clone());
