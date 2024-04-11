@@ -406,7 +406,7 @@ export const PingGraphHistogram: React.FC<PingGraphProps> = (props) => {
         dropped_sum += ping_stats.dropPercent;
       }
     });
-    const dropped = ip_count == 0 ? 100 : dropped_sum / ip_count;
+    const dropped = (ip_count == 0 ? 100 : dropped_sum / ip_count).toFixed(3);
     return {
       chart: {
         type: "line",
