@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use chrono::serde::ts_nanoseconds;
 use chrono::{DateTime, Utc};
-use common_wasm::ProbeReportSummary;
+use common_wasm::{PingtreeUiResult, ProbeReportSummary};
 use serde::{Deserialize, Serialize};
 use typescript_type_def::TypeDef;
 
@@ -44,6 +44,10 @@ pub struct ConnectionMeasurements {
     pub rx_stats: TrafficStatsSummary,
     #[serde(default)]
     pub tx_stats: TrafficStatsSummary,
+    // Pingtrees, that have been iniated and run based on the routers discovered by this connection's
+    // inband probes.
+    #[serde(default)]
+    pub pingtrees: Vec<PingtreeUiResult>,
 }
 
 impl ConnectionMeasurements {
@@ -85,6 +89,7 @@ impl ConnectionMeasurements {
             last_packet_time: Utc::now(),
             rx_stats: TrafficStatsSummary::make_mock(),
             tx_stats: TrafficStatsSummary::make_mock(),
+            pingtrees: Vec::new(),
         }
     }
 }

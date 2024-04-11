@@ -56,9 +56,13 @@ pub fn probe_summary_to_ip_map(
 
 #[async_trait]
 pub trait PingTreeManager {
+    /// If `save_to_conn_tracker_conn_key` is not None, the result of the pingtree
+    /// will be stored in connection tracker under the connection with the given key
+    /// (if it exists)
     async fn run_pingtree_for_probe_nodes(
         &self,
         probe_report_summary: &ProbeReportSummary,
+        save_to_conn_tracker_conn_key: Option<ConnectionKey>,
     ) -> PingtreeUiResult;
 }
 
@@ -114,6 +118,7 @@ impl PingTreeManager for PingTreeManagerImpl {
     async fn run_pingtree_for_probe_nodes(
         &self,
         probe_report_summary: &ProbeReportSummary,
+        save_to_conn_tracker_conn_key: Option<ConnectionKey>,
     ) -> PingtreeUiResult {
         let (ip_set, hops_to_ips) = probe_summary_to_ip_map(probe_report_summary);
         let interface_state = self
@@ -139,11 +144,22 @@ impl PingTreeManager for PingTreeManagerImpl {
         };
         let probe_time = Utc::now();
         let ip_reports = pingtree_result_to_ip_reports(&run_pingtree(cfg).await);
-        PingtreeUiResult {
+        let result = PingtreeUiResult {
             probe_time,
             hops_to_ips,
             ip_reports,
+        };
+        if let Some(conn_key) = save_to_conn_tracker_conn_key {
+            send_or_log_sync!(
+                self.connection_tracker_tx,
+                "AddPingtreeResult",
+                ConnectionTrackerMsg::AddPingtreeResult {
+                    key: conn_key,
+                    pingtree_result: result.clone()
+                }
+            );
         }
+        result
     }
 }
 

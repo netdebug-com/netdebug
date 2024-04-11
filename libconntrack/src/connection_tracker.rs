@@ -8,7 +8,7 @@ use common_wasm::{
     analysis_messages::AnalysisInsights,
     evicting_hash_map::EvictingHashMap,
     timeseries_stats::{ExportedStatRegistry, StatHandle, StatHandleDuration, StatType, Units},
-    ProbeRoundReport,
+    PingtreeUiResult, ProbeRoundReport,
 };
 
 use itertools::Itertools;
@@ -167,6 +167,10 @@ pub enum ConnectionTrackerMsg {
     /// Update the set of addresses that are local to this machine
     UpdateLocalAddr {
         local_addr: HashSet<IpAddr>,
+    },
+    AddPingtreeResult {
+        key: ConnectionKey,
+        pingtree_result: PingtreeUiResult,
     },
 }
 
@@ -377,6 +381,8 @@ pub struct ConnectionTracker<'a> {
     dequeue_delay_stats: StatHandleDuration,
     /// Number of connections evicted due to us reaching the the max_connection limit
     evictions_due_to_size_limit: StatHandle,
+    pingtree_results_added: StatHandle,
+    pingtree_no_connection: StatHandle,
     /// For each connection key, A (potentially empty) map of places to update if this connection gets an update
     /// The key is some sort of human read-able descriptor of what the caller is doing, e.g.,
     /// "Default Gw Ping Tracker" => tx
@@ -485,6 +491,16 @@ impl<'a> ConnectionTracker<'a> {
             ),
             evictions_due_to_size_limit: stats.add_stat(
                 "evictions_due_to_size_limit",
+                Units::None,
+                [StatType::COUNT],
+            ),
+            pingtree_no_connection: stats.add_stat(
+                "pingtree_no_connection",
+                Units::None,
+                [StatType::COUNT],
+            ),
+            pingtree_results_added: stats.add_stat(
+                "pingtree_results_added",
                 Units::None,
                 [StatType::COUNT],
             ),
@@ -618,6 +634,10 @@ impl<'a> ConnectionTracker<'a> {
             LookupMacByIp { ip, tx, identifier } => self.lookup_mac_by_ip(identifier, ip, tx),
             GetCachedNeighbors { tx } => self.get_cached_neighbors(tx),
             UpdateLocalAddr { local_addr } => self.update_local_addr(local_addr),
+            AddPingtreeResult {
+                key,
+                pingtree_result,
+            } => self.add_pingtree_result(&key, pingtree_result),
         }
     }
 
@@ -1187,6 +1207,23 @@ impl<'a> ConnectionTracker<'a> {
             );
         }
     }
+
+    fn add_pingtree_result(&mut self, key: &ConnectionKey, pingtree_result: PingtreeUiResult) {
+        // Ideally, we'd update the LRU as well, but that's not that trivial because the conn tracker logic
+        // expects that Connection::last_packet_time is in the same order as the LRU order. But, we can
+        // get away with not updating the LRU here because most likely the pingtree was just run and thus
+        // this connection has seen very recent packets.
+        if let Some(conn) = self.connections.get_mut_no_lru(key) {
+            self.pingtree_results_added.bump();
+            conn.pingtrees.push(pingtree_result);
+        } else {
+            debug!(
+                "Tried to add pingtree results for connection {} but no such connection exists",
+                key
+            );
+            self.pingtree_no_connection.bump();
+        }
+    }
 }
 
 /// Helper function. Indeally, this would be a member function of ConnectionTracker
@@ -1236,6 +1273,7 @@ fn add_aggregate_group(
 #[cfg(test)]
 pub mod test {
     use core::panic;
+    use std::collections::BTreeMap;
     use std::net::Ipv4Addr;
     use std::str::FromStr;
     use std::time::Instant;
@@ -2105,7 +2143,7 @@ pub mod test {
     }
 
     #[test]
-    fn test_get_connections() {
+    fn test_get_connection() {
         let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
         let mut connection_tracker = mk_mock_connection_tracker(local_addrs.clone());
 
@@ -2159,6 +2197,83 @@ pub mod test {
         let conn = rx.try_recv().unwrap();
         assert!(conn.is_none());
         assert!(rx.is_empty());
+    }
+
+    #[test]
+    fn test_add_pingtree() {
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
+        let mut connection_tracker = mk_mock_connection_tracker(local_addrs.clone());
+
+        // Read the first 3 packets from the trace. I.e., just the handshake but no data.
+        // ==> No probes are sent.
+        let mut capture = pcap::Capture::from_file(test_dir(
+            "libconntrack",
+            "tests/normal-conn-syn-and-fin.pcap",
+        ))
+        .unwrap();
+        let mut last_pkt_time = DateTime::UNIX_EPOCH;
+        while let Ok(pkt) = capture.next_packet() {
+            let parsed_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
+            last_pkt_time = parsed_pkt.timestamp;
+            connection_tracker.add(parsed_pkt);
+        }
+
+        assert_eq!(connection_tracker.connections.len(), 1);
+
+        let existing_key = ConnectionKey {
+            local_ip: mkip("192.168.1.238"),
+            remote_ip: mkip("34.121.150.27"),
+            local_l4_port: 55910,
+            remote_l4_port: 443,
+            ip_proto: IpProtocol::TCP,
+        };
+        let non_existing_key = ConnectionKey {
+            local_ip: mkip("1.2.3.4"),
+            remote_ip: mkip("34.121.150.27"),
+            local_l4_port: 55910,
+            remote_l4_port: 443,
+            ip_proto: IpProtocol::TCP,
+        };
+
+        // sanity checking expected pre conditions
+        assert_eq!(connection_tracker.pingtree_no_connection.get_sum(), 0);
+        assert_eq!(connection_tracker.pingtree_results_added.get_sum(), 0);
+        assert!(connection_tracker.connections.contains_key(&existing_key));
+        assert!(!connection_tracker
+            .connections
+            .contains_key(&non_existing_key));
+
+        // Add pingtree result to an existing connection
+        let pingtree_res = PingtreeUiResult {
+            probe_time: last_pkt_time + chrono::Duration::seconds(1),
+            hops_to_ips: BTreeMap::new(),
+            ip_reports: HashMap::new(),
+        };
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::AddPingtreeResult {
+            key: existing_key.clone(),
+            pingtree_result: pingtree_res.clone(),
+        });
+        assert_eq!(connection_tracker.pingtree_no_connection.get_sum(), 0);
+        assert_eq!(connection_tracker.pingtree_results_added.get_sum(), 1);
+        assert_eq!(
+            connection_tracker
+                .connections
+                .get_no_lru(&existing_key)
+                .unwrap()
+                .pingtrees,
+            vec![PingtreeUiResult {
+                probe_time: last_pkt_time + chrono::Duration::seconds(1),
+                hops_to_ips: BTreeMap::new(),
+                ip_reports: HashMap::new(),
+            },]
+        );
+        // Add pingtree result to an non existing connection
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::AddPingtreeResult {
+            key: non_existing_key.clone(),
+            pingtree_result: pingtree_res.clone(),
+        });
+        assert_eq!(connection_tracker.pingtree_no_connection.get_sum(), 1);
+        assert_eq!(connection_tracker.pingtree_results_added.get_sum(), 1);
     }
 
     /// Tests that when a connection gets evicted we only send it to the storage server
