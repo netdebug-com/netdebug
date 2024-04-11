@@ -28,6 +28,28 @@ function request_probe_flow(connId: ConnectionKey) {
     });
 }
 
+function request_ping_tree(connId: ConnectionKey) {
+  const url =
+    desktop_api_url("pingtree_probe_flow") + "/" + connIdString(connId);
+  fetch(url)
+    .then((res) => {
+      if (!res.ok) {
+        res.text().then((textMsg) => {
+          console.error(
+            "Failed to request pingtree_probe_flow:",
+            res.status,
+            res.statusText,
+            ":",
+            textMsg,
+          );
+        });
+      }
+    })
+    .catch((err) => {
+      console.error(err.message);
+    });
+}
+
 // Re-usable components to show the detailed information in a flow
 // Assumes we already have the corresponding connection measurement
 // The 'FlowSummary' is a one-line description of the flow - suitable for a list, but it's clickable
@@ -59,6 +81,12 @@ export const FlowDetails: React.FC<FlowSummaryProps> = (props) => {
           onClick={() => request_probe_flow(props.flow.key)}
         >
           Probe Flow
+        </Button>
+        <Button
+          variant="outlined"
+          onClick={() => request_ping_tree(props.flow.key)}
+        >
+          PingTree
         </Button>
         <Button variant="outlined" onClick={() => navigate(-1)}>
           Back
