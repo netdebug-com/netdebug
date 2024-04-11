@@ -230,6 +230,7 @@ mod test {
             last_packet_time: Utc::now(),
             rx_stats: make_simple_traffic_stats_summary(),
             tx_stats: make_simple_traffic_stats_summary(),
+            pingtrees: Vec::new(),
         }]
     }
 

@@ -129,7 +129,7 @@ pub(crate) async fn handle_probe_flow(
     State(trackers): State<Arc<Trackers>>,
     Path(conn_id_str): Path<ConnectionIdString>,
 ) -> impl IntoResponse {
-    let conn_id = match ConnectionKey::try_from(&conn_id_str) {
+    let conn_key = match ConnectionKey::try_from(&conn_id_str) {
         Err(e) => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -144,7 +144,7 @@ pub(crate) async fn handle_probe_flow(
     // this rest enpoint more versatile and just return the ProbeReport instead?
     let (tx, _) = channel(1);
     let req = ConnectionTrackerMsg::ProbeReport {
-        key: conn_id,
+        key: conn_key,
         should_probe_again: true,
         application_rtt: None,
         tx,
@@ -161,7 +161,7 @@ pub(crate) async fn handle_get_one_flow(
     State(trackers): State<Arc<Trackers>>,
     Path(conn_id_str): Path<ConnectionIdString>,
 ) -> Response<Body> {
-    let conn_id = match ConnectionKey::try_from(&conn_id_str) {
+    let conn_key = match ConnectionKey::try_from(&conn_id_str) {
         Err(e) => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -174,7 +174,7 @@ pub(crate) async fn handle_get_one_flow(
 
     let (tx, mut rx) = channel(1);
     let req = ConnectionTrackerMsg::GetConnection {
-        key: conn_id,
+        key: conn_key,
         time_mode: TimeMode::Wallclock,
         tx,
     };
@@ -197,7 +197,7 @@ pub(crate) async fn handle_pingtree_probe_flow(
     State(trackers): State<Arc<Trackers>>,
     Path(conn_id_str): Path<ConnectionIdString>,
 ) -> Response<Body> {
-    let conn_id = match ConnectionKey::try_from(&conn_id_str) {
+    let conn_key = match ConnectionKey::try_from(&conn_id_str) {
         Err(e) => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -210,7 +210,7 @@ pub(crate) async fn handle_pingtree_probe_flow(
 
     let (tx, mut rx) = channel(1);
     let req = ConnectionTrackerMsg::GetConnection {
-        key: conn_id,
+        key: conn_key,
         time_mode: TimeMode::Wallclock,
         tx,
     };
@@ -228,7 +228,7 @@ pub(crate) async fn handle_pingtree_probe_flow(
                 .pingtree_manager
                 .as_ref()
                 .unwrap()
-                .run_pingtree_for_probe_nodes(&conn.probe_report_summary)
+                .run_pingtree_for_probe_nodes(&conn.probe_report_summary, Some(conn.key))
                 .await;
             response::Json(result).into_response()
         }

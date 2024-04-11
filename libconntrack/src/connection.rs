@@ -5,8 +5,8 @@ use std::{
 
 use chrono::{DateTime, Duration, Utc};
 use common_wasm::{
-    timeseries_stats::StatHandleDuration, ProbeId, ProbeReportEntry, ProbeReportSummary,
-    ProbeRoundReport, PROBE_MAX_TTL,
+    timeseries_stats::StatHandleDuration, PingtreeUiResult, ProbeId, ProbeReportEntry,
+    ProbeReportSummary, ProbeRoundReport, PROBE_MAX_TTL,
 };
 
 use derive_getters::Getters;
@@ -175,6 +175,9 @@ pub struct Connection {
     pub(crate) aggregate_groups: HashSet<AggregateStatKind>,
     local_tcp_state: Option<UnidirectionalTcpState>,
     remote_tcp_state: Option<UnidirectionalTcpState>,
+    // Pingtrees, that have been iniated and run based on the routers discovered by this connection's
+    // inband probes.
+    pub(crate) pingtrees: Vec<PingtreeUiResult>,
     #[getter(skip)]
     stat_handles: ConnectionStatHandles,
 }
@@ -204,6 +207,7 @@ impl Connection {
             aggregate_groups: HashSet::from([AggregateStatKind::ConnectionTracker]),
             local_tcp_state: None,
             remote_tcp_state: None,
+            pingtrees: Vec::new(),
             stat_handles,
         }
     }
@@ -963,6 +967,7 @@ impl Connection {
             last_packet_time: self.last_packet_time,
             close_has_started: self.close_has_started(),
             four_way_close_done: self.is_four_way_close_done_or_rst(),
+            pingtrees: self.pingtrees.clone(),
         }
     }
 }

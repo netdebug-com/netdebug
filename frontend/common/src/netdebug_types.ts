@@ -149,6 +149,35 @@ export type TrafficStatsSummary = {
     "lost_bytes": (U64 | null);
     "rtt_stats_ms": (ExportedSimpleStats | null);
 };
+
+/**
+ * The result of a single PingTree rund for a single IP.
+ * The number of rounds is raw_rtts_micros.len()
+ * NOTE: I considered using a `Duration` instead of u64's but eventually
+ * decided against it: (a) pingtree uses tokio::Time::Duration which we can't use
+ * here because wasm. (b) this struct is just use to serialize the results for
+ * consumption by JS so we'd convert to an integer during serialization anyways.
+ */
+export type PingTreeIpReport = {
+    "ip": string;
+
+    /**
+     * A list of (optional) RTTs values. One list item per round.
+     */
+    "raw_rtts_micros": ((U64 | null))[];
+    "min_rtt_micros": (U64 | null);
+    "max_rtt_micros": (U64 | null);
+    "mean_rtt_micros": (U64 | null);
+};
+export type PingtreeUiResult = {
+
+    /**
+     * Time when the probe round was sent.
+     */
+    "probe_time": string;
+    "hops_to_ips": Record<U8, (string)[]>;
+    "ip_reports": Record<string, PingTreeIpReport>;
+};
 export type ConnectionMeasurements = {
     "key": ConnectionKey;
     "local_hostname": (string | null);
@@ -173,6 +202,7 @@ export type ConnectionMeasurements = {
     "last_packet_time_ns": F64;
     "rx_stats"?: TrafficStatsSummary;
     "tx_stats"?: TrafficStatsSummary;
+    "pingtrees"?: (PingtreeUiResult)[];
 };
 export type I64 = number;
 export type DnsTrackerEntry = {
