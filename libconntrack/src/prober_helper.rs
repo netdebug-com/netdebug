@@ -34,7 +34,9 @@ impl ProberHelper {
     /// Check and update the rate limiter for sending probes to a particular dst host.
     /// If this method returns `true` we can send a probe, if it returns `false`, we
     /// should not probe the destination.
-    pub fn check_update_dst_ip(&mut self, dst_ip: IpAddr) -> bool {
+    /// If force is true, will bypass the limiter, allow the probe, and update the
+    /// last event time.
+    pub fn check_update_dst_ip(&mut self, dst_ip: IpAddr, force: bool) -> bool {
         if self.unlimited {
             return true;
         }
@@ -44,16 +46,18 @@ impl ProberHelper {
             .or_insert(SimpleRateLimiter::new(tokio::time::Duration::from_millis(
                 PROBE_DEST_EVERY_MILLIS,
             )));
-        dst_limiter.check_update()
+        dst_limiter.check_update(force)
     }
 
     /// When sending probes: what should be the min TTL for outgoing probes. This
     /// limits how frequently we probe the first couple of hops.
-    pub fn get_min_ttl(&mut self) -> u8 {
+    /// If force is true, will bypass the limiter, allow the probe, and update the
+    /// last event time.
+    pub fn get_min_ttl(&mut self, force: bool) -> u8 {
         if self.unlimited {
             return 1;
         }
-        if self.probe_first_hops_limit.check_update() {
+        if self.probe_first_hops_limit.check_update(force) {
             1
         } else {
             MIN_TTL_WHEN_RATE_LIMITED
