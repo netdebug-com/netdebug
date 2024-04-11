@@ -41,10 +41,17 @@ export const FlowDetails: React.FC<FlowSummaryProps> = (props) => {
           Probe Flow
         </Button>
       </Stack>
-      <div>
-        Hack! Just JSON pretty print the whole thing for now
-        <pre>{JSON.stringify(props.flow, undefined, 2)}</pre>
-      </div>
+      {props.flow ? (
+        <div>
+          Hack! Just JSON pretty print the whole thing for now
+          <pre>{JSON.stringify(props.flow, undefined, 2)}</pre>
+        </div>
+      ) : (
+        <div>
+          {" "}
+          Flow Not Found: May have been expired from the local flow cache
+        </div>
+      )}
     </div>
   );
 };
