@@ -46,8 +46,17 @@ use crate::{
 /// connections at once
 const MAX_ENTRIES_TO_EVICT: usize = 10;
 /// If a connection has not seen any packets in this many milliseconds, the connection is
-/// evicted. This is done regardless of the connection is open or closed.
+/// evicted. This is done regardless if the connection is open or closed.
 const TIME_WAIT_MS: i64 = 60_000;
+
+/// If a flow is active, export (i.e., write to storage server) with this time interval.
+/// The timer for this is driven by packets of the flow itself. I.e., once a flow goes idle,
+/// it will no longer be exported using this timer but will eventually be exported due to
+/// TIME_WAIT_MS eviction. But it implies that the the max time between exports could be
+/// TIME_WAIT_MS + ACTIVE_FLOW_EXPORT_INTERVAL_MS - ε
+/// TODO: do the export independently of the "packet clock" for the flow in question.
+const ACTIVE_FLOW_EXPORT_INTERVAL_MS: i64 = 60_000;
+
 /// If an aggregated stat has not seen any packet in this many milliseconds, evict it.
 /// This should be greather than TIME_WAIT_MS. That way we ensure that only stats are
 /// evicted that don't have any connections
@@ -71,6 +80,15 @@ pub enum TimeMode {
     Wallclock,
     /// Use the time as derived from received packet timestamps.
     PacketTime,
+}
+
+/// The reason why a connectio measurement has been generated / created from a
+/// connection instance
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum ConnMeasurementReason {
+    /// ConnectionMeasurement was generated because/after the connection was evicted from conn tracker
+    Evicted,
+    Other,
 }
 
 /**
@@ -592,6 +610,20 @@ impl<'a> ConnectionTracker<'a> {
                         pkt_timestamp,
                     );
                 }
+                // Cheeck active flow export interval
+                let active_flow_export_interval =
+                    chrono::Duration::milliseconds(ACTIVE_FLOW_EXPORT_INTERVAL_MS);
+                if pkt_timestamp - connection.last_export_time() > active_flow_export_interval {
+                    debug!("Active flow export timeout for {}", key);
+                    send_connection_storage_msg(
+                        &self.topology_client,
+                        &self.all_evicted_connections_listener,
+                        connection,
+                        pkt_timestamp,
+                        ConnMeasurementReason::Other,
+                    );
+                    connection.set_let_export_time(pkt_timestamp);
+                }
                 if needs_dns_and_process_lookup {
                     // only new connections that we don't immediately tear down need DNS lookups
                     if let Some(dns_tx) = self.dns_tx.as_mut() {
@@ -655,7 +687,13 @@ impl<'a> ConnectionTracker<'a> {
                 "Evicting connection {} from connection_tracker due to size limit",
                 key
             );
-            self.send_connection_storage_msg(&mut conn, now);
+            send_connection_storage_msg(
+                &self.topology_client,
+                &self.all_evicted_connections_listener,
+                &mut conn,
+                now,
+                ConnMeasurementReason::Evicted,
+            );
         }
         // TIME_WAIT evictions
         let mut eviction_cnt = 0;
@@ -667,7 +705,13 @@ impl<'a> ConnectionTracker<'a> {
                     "Evicting connection {} from connection_tracker due to idle",
                     key
                 );
-                self.send_connection_storage_msg(&mut conn, now);
+                send_connection_storage_msg(
+                    &self.topology_client,
+                    &self.all_evicted_connections_listener,
+                    &mut conn,
+                    now,
+                    ConnMeasurementReason::Evicted,
+                );
                 eviction_cnt += 1;
             } else {
                 break;
@@ -707,50 +751,6 @@ impl<'a> ConnectionTracker<'a> {
                 eviction_cnt += 1;
             } else {
                 break;
-            }
-        }
-    }
-
-    /**
-     * Send a copy of the ConnectionMeasurements() struct associated with this connection
-     * to the remote topology server for storage.
-     */
-    fn send_connection_storage_msg(&mut self, c: &mut Connection, now: DateTime<Utc>) {
-        if let Some(tx) = self.topology_client.as_ref() {
-            let measurement = Box::new(c.to_connection_measurements(now, None));
-            if measurement.rx_stats.pkts > 1 && measurement.tx_stats.pkts > 1 {
-                // TODO: as a temporary hack to not export evyerthing, we limit ourself to only
-                // writing connections that have more than one packet in each direction. This
-                // elminiates all of the local network broadcast chatter and DNS requests and
-                // reduce the number of connections to export by ~75%. Eventually we want to
-                // export everything (esp. for security) but for now this should be ok.
-                // see https://github.com/netdebug-com/netdebug/issues/772
-                send_or_log_sync!(
-                    tx,
-                    "send_connection_storage_msg()",
-                    DataStorageMessage::StoreConnectionMeasurements {
-                        connection_measurements: measurement
-                    }
-                );
-                debug!(
-                    "Sending connection measurements to topology server for {}",
-                    c.connection_key()
-                );
-            } else {
-                debug!(
-                    "Not sending connection measurement to storage server: {} measurements {}",
-                    measurement.probe_report_summary.raw_reports.len(),
-                    c.connection_key()
-                );
-            }
-        }
-        if let Some(tx) = self.all_evicted_connections_listener.as_ref() {
-            let measurement = Box::new(c.to_connection_measurements(now, None));
-            if let Err(e) = tx.try_send(measurement) {
-                warn!(
-                    "Failed to send data to all_evicted_connections :: err {}",
-                    e
-                );
             }
         }
     }
@@ -855,7 +855,7 @@ impl<'a> ConnectionTracker<'a> {
         let conn_measurement = self
             .connections
             .get_mut_no_lru(key)
-            .map(|conn| conn.to_connection_measurements(now, None));
+            .map(|conn| conn.to_connection_measurements(now, None, ConnMeasurementReason::Other));
         if let Err(e) = tx.try_send(conn_measurement) {
             warn!(
                 "Tried to send the connectios back to caller, but failed: {}",
@@ -873,7 +873,7 @@ impl<'a> ConnectionTracker<'a> {
         let connections = self
             .connections
             .iter_mut()
-            .map(|(_key, c)| c.to_connection_measurements(now, None))
+            .map(|(_key, c)| c.to_connection_measurements(now, None, ConnMeasurementReason::Other))
             .collect::<Vec<ConnectionMeasurements>>();
         if let Err(e) = tx.try_send(connections) {
             warn!(
@@ -1029,7 +1029,8 @@ impl<'a> ConnectionTracker<'a> {
                 if let Some(hostname) = connection.remote_hostname.as_ref() {
                     ip_to_hostname.insert(connection.connection_key().remote_ip, hostname.clone());
                 }
-                let m = connection.to_connection_measurements(now, None);
+                let m =
+                    connection.to_connection_measurements(now, None, ConnMeasurementReason::Other);
                 // if we've already seen this kind before
                 if let Some(entry) = entries.get_mut(&kind) {
                     // add this connection to the list
@@ -1268,6 +1269,56 @@ fn add_aggregate_group(
                 timestamp,
             ),
         );
+    }
+}
+
+/**
+ * Send a copy of the ConnectionMeasurements() struct associated with this connection
+ * to the remote topology server for storage.
+ */
+fn send_connection_storage_msg(
+    topology_client: &Option<DataStorageSender>,
+    all_evicted_connections_listener: &Option<Sender<Box<ConnectionMeasurements>>>,
+    c: &mut Connection,
+    now: DateTime<Utc>,
+    reason: ConnMeasurementReason,
+) {
+    if let Some(tx) = topology_client.as_ref() {
+        let measurement = Box::new(c.to_connection_measurements(now, None, reason));
+        if measurement.rx_stats.pkts > 1 && measurement.tx_stats.pkts > 1 {
+            // TODO: as a temporary hack to not export evyerthing, we limit ourself to only
+            // writing connections that have more than one packet in each direction. This
+            // elminiates all of the local network broadcast chatter and DNS requests and
+            // reduce the number of connections to export by ~75%. Eventually we want to
+            // export everything (esp. for security) but for now this should be ok.
+            // see https://github.com/netdebug-com/netdebug/issues/772
+            send_or_log_sync!(
+                tx,
+                "send_connection_storage_msg()",
+                DataStorageMessage::StoreConnectionMeasurements {
+                    connection_measurements: measurement
+                }
+            );
+            debug!(
+                "Sending connection measurements to topology server for {}",
+                c.connection_key()
+            );
+        } else {
+            debug!(
+                "Not sending connection measurement to storage server: {} measurements {}",
+                measurement.probe_report_summary.raw_reports.len(),
+                c.connection_key()
+            );
+        }
+    }
+    if let Some(tx) = all_evicted_connections_listener.as_ref() {
+        let measurement = Box::new(c.to_connection_measurements(now, None, reason));
+        if let Err(e) = tx.try_send(measurement) {
+            warn!(
+                "Failed to send data to all_evicted_connections :: err {}",
+                e
+            );
+        }
     }
 }
 
@@ -2348,8 +2399,6 @@ pub mod test {
         let mut connection_tracker = mk_mock_connection_tracker(local_addrs.clone());
         connection_tracker.set_topology_client(Some(evict_tx));
 
-        // Read the first 3 packets from the trace. I.e., just the handshake but no data.
-        // ==> No probes are sent.
         let mut capture = pcap::Capture::from_file(test_dir(
             "libconntrack",
             "tests/normal-conn-syn-and-fin.pcap",
@@ -2432,6 +2481,107 @@ pub mod test {
             .connections
             .get_no_lru(&unrelated_conn_key)
             .is_some());
+    }
+
+    /// Tests that when a connection gets exported ever 60secs
+    #[test]
+    fn test_periodic_connection_export() {
+        use chrono::Duration;
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
+        let (storage_tx, mut storage_rx) = mpsc::channel(100);
+        let mut connection_tracker = mk_mock_connection_tracker(local_addrs.clone());
+        connection_tracker.set_topology_client(Some(storage_tx));
+
+        let mut capture =
+            pcap::Capture::from_file(test_dir("libconntrack", "tests/one-flow-over-2min.pcap"))
+                .unwrap();
+        let mut first_packet_time = None;
+        let mut last_pkt_time = DateTime::UNIX_EPOCH;
+        let mut conn_key = None;
+        while let Ok(pkt) = capture.next_packet() {
+            let parsed_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
+            first_packet_time.get_or_insert(parsed_pkt.timestamp);
+            conn_key = Some(parsed_pkt.to_connection_key(&local_addrs).unwrap().0);
+            last_pkt_time = parsed_pkt.timestamp;
+            connection_tracker.add(parsed_pkt);
+        }
+        let conn_key = conn_key.unwrap();
+        let first_packet_time = first_packet_time.unwrap();
+
+        assert_eq!(connection_tracker.connections.len(), 1);
+        // The trace is just over two minutes long. So we should have seen two exports
+        let first_msg = storage_rx.try_recv().unwrap().skip_perf_check();
+        match first_msg {
+            DataStorageMessage::StoreConnectionMeasurements {
+                connection_measurements,
+            } => {
+                assert_eq!(
+                    connection_measurements.start_tracking_time,
+                    first_packet_time
+                );
+                assert_eq!(connection_measurements.key, conn_key);
+                assert!(
+                    connection_measurements.last_packet_time
+                        > first_packet_time + Duration::seconds(60)
+                );
+                assert!(
+                    connection_measurements.last_packet_time
+                        < first_packet_time + Duration::seconds(70)
+                );
+            }
+            x => panic!("Got unexpected message {:?}", x),
+        }
+        match storage_rx.try_recv().unwrap().skip_perf_check() {
+            DataStorageMessage::StoreConnectionMeasurements {
+                connection_measurements,
+            } => {
+                assert_eq!(
+                    connection_measurements.start_tracking_time,
+                    first_packet_time
+                );
+                assert_eq!(connection_measurements.key, conn_key);
+                assert!(
+                    connection_measurements.last_packet_time
+                        > first_packet_time + Duration::seconds(120)
+                );
+                assert!(connection_measurements.last_packet_time < last_pkt_time);
+            }
+            x => panic!("Got unexpected message {:?}", x),
+        }
+        assert!(storage_rx.is_empty());
+
+        let timestamp = last_pkt_time + Duration::milliseconds(TIME_WAIT_MS + 10);
+
+        // Create a packet from a different connection.
+        let mut pkt_unrelated_conn_raw: Vec<u8> = Vec::new();
+        etherparse::PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12])
+            .ipv4([192, 168, 1, 238], [192, 168, 1, 2], 20)
+            .tcp(12345, 80, 42, 1024)
+            .write(&mut pkt_unrelated_conn_raw, &[])
+            .unwrap();
+        let pkt_unrelated_conn =
+            OwnedParsedPacket::try_from_timestamp(pkt_unrelated_conn_raw, timestamp).unwrap();
+
+        // and put the packet into connection tracker. The previous connection should
+        // be evicted
+        connection_tracker.add(pkt_unrelated_conn);
+        assert_eq!(connection_tracker.connections.len(), 1);
+        match storage_rx.try_recv().unwrap().skip_perf_check() {
+            DataStorageMessage::StoreConnectionMeasurements {
+                connection_measurements,
+            } => {
+                assert_eq!(connection_measurements.key, conn_key);
+                assert_eq!(
+                    connection_measurements.start_tracking_time,
+                    first_packet_time
+                );
+                assert_eq!(connection_measurements.last_packet_time, last_pkt_time);
+            }
+            x => panic!(
+                "Expected to get StoreConnectionMeasurements from evict_rx, got {:?}",
+                x
+            ),
+        }
     }
 
     /***
@@ -2718,12 +2868,22 @@ pub mod test {
         let mut tx_loss_per_conn = Vec::new();
         let mut connection_cnt = 0;
         let mut handle_conn_measurement = |measurement: &ConnectionMeasurements| {
-            tx_bytes += measurement.tx_stats.bytes;
-            rx_bytes += measurement.rx_stats.bytes;
-            tx_loss += measurement.tx_stats.lost_bytes.unwrap_or_default();
-            tx_loss_per_conn.push(measurement.tx_stats.lost_bytes.unwrap_or_default());
-            rx_loss += measurement.rx_stats.lost_bytes.unwrap_or_default();
-            connection_cnt += 1;
+            println!(
+                "XXX FOO GMM {} {} {} {} {}",
+                measurement.start_tracking_time,
+                measurement.key.local_l4_port,
+                measurement.key.remote_l4_port,
+                measurement.last_packet_time,
+                measurement.was_evicted
+            );
+            if measurement.was_evicted {
+                tx_bytes += measurement.tx_stats.bytes;
+                rx_bytes += measurement.rx_stats.bytes;
+                tx_loss += measurement.tx_stats.lost_bytes.unwrap_or_default();
+                tx_loss_per_conn.push(measurement.tx_stats.lost_bytes.unwrap_or_default());
+                rx_loss += measurement.rx_stats.lost_bytes.unwrap_or_default();
+                connection_cnt += 1;
+            }
         };
         while let Ok(pkt) = capture.next_packet() {
             let owned_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
@@ -2740,8 +2900,11 @@ pub mod test {
             time_mode: TimeMode::PacketTime,
         });
         if let Ok(measurements) = rx.try_recv() {
-            for m in &measurements {
-                handle_conn_measurement(m);
+            for mut m in measurements {
+                // Hacky. But we want to actually count these conn measurements for
+                // rx/tx bytes and pkts
+                m.was_evicted = true;
+                handle_conn_measurement(&m);
             }
         }
 

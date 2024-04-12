@@ -28,7 +28,7 @@ use std::{println as debug, println as warn}; // Workaround to use prinltn! for 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    connection_tracker::ConnectionStatHandles,
+    connection_tracker::{ConnMeasurementReason, ConnectionStatHandles},
     dns_tracker::{DnsTrackerMessage, DnsTrackerSender, UDP_DNS_PORT},
     owned_packet::OwnedParsedPacket,
     prober::ProbeMessage,
@@ -162,6 +162,8 @@ pub struct Connection {
     start_tracking_time: DateTime<Utc>,
     /// Human readable time of the last packet for logging. From packet timestamps
     last_packet_time: DateTime<Utc>,
+    /// The last time this flow was exported (i.e., sent to storage)
+    last_export_time: DateTime<Utc>,
     /// data packet sent from the local side, used for probe retransmits
     local_data: Option<OwnedParsedPacket>,
     /// if true, when the next probe round is sent, we don't check the rate
@@ -202,6 +204,7 @@ impl Connection {
             associated_apps: None,
             start_tracking_time: ts,
             last_packet_time: ts,
+            last_export_time: ts,
             remote_hostname: None,
             traffic_stats: BidirectionalStats::new(
                 std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS),
@@ -946,6 +949,7 @@ impl Connection {
         &mut self,
         now: DateTime<Utc>,
         probe_timeout: Option<Duration>,
+        reason: ConnMeasurementReason,
     ) -> libconntrack_wasm::ConnectionMeasurements {
         // if there's an active probe round going, finish it/generate the report if it's been longer
         // then probe_timeout
@@ -974,7 +978,12 @@ impl Connection {
             close_has_started: self.close_has_started(),
             four_way_close_done: self.is_four_way_close_done_or_rst(),
             pingtrees: self.pingtrees.clone(),
+            was_evicted: reason == ConnMeasurementReason::Evicted,
         }
+    }
+
+    pub fn set_let_export_time(&mut self, now: DateTime<Utc>) {
+        self.last_export_time = now;
     }
 }
 
@@ -1235,7 +1244,8 @@ pub mod test {
         let (key, _) = pkt.to_connection_key(&local_addrs).unwrap();
         let mut conn = Connection::new(key, start, mk_stat_handles());
 
-        let conn_measurement = conn.to_connection_measurements(start, None);
+        let conn_measurement =
+            conn.to_connection_measurements(start, None, ConnMeasurementReason::Evicted);
         assert_eq!(conn_measurement.rx_stats.last_min_byte_rate, None);
         assert_eq!(conn_measurement.rx_stats.last_min_pkt_rate, None);
         assert_eq!(conn_measurement.tx_stats.last_min_byte_rate, None);
@@ -1253,7 +1263,7 @@ pub mod test {
             let pkt = mk_packet(true, t, 100);
             helper.update_conn(&mut conn, pkt);
         }
-        let conn_meas = conn.to_connection_measurements(t, None);
+        let conn_meas = conn.to_connection_measurements(t, None, ConnMeasurementReason::Evicted);
         // 16 packets, 142 bytes each over 15ms
         assert_eq!(
             conn_meas.tx_stats.last_min_byte_rate.unwrap(),
@@ -1279,7 +1289,7 @@ pub mod test {
             let pkt = mk_packet(false, t, 200);
             helper.update_conn(&mut conn, pkt);
         }
-        let conn_meas = conn.to_connection_measurements(t, None);
+        let conn_meas = conn.to_connection_measurements(t, None, ConnMeasurementReason::Evicted);
 
         // Average TX rate is changed due to more elapsed time
         // total elapsed time is now
@@ -1359,9 +1369,11 @@ pub mod test {
         assert_eq!(pkts_and_rtt[9].2, None);
         assert_relative_eq!(pkts_and_rtt[10].2.unwrap(), 57.543);
 
-        let m = conn
-            .unwrap()
-            .to_connection_measurements(pkts_and_rtt.last().unwrap().0.timestamp, None);
+        let m = conn.unwrap().to_connection_measurements(
+            pkts_and_rtt.last().unwrap().0.timestamp,
+            None,
+            ConnMeasurementReason::Evicted,
+        );
         let tx_rtt_stat = m
             .tx_stats
             .rtt_stats_ms

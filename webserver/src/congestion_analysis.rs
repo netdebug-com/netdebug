@@ -231,6 +231,7 @@ mod test {
             rx_stats: make_simple_traffic_stats_summary(),
             tx_stats: make_simple_traffic_stats_summary(),
             pingtrees: Vec::new(),
+            was_evicted: true,
         }]
     }
 

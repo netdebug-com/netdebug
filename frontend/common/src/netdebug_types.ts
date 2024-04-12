@@ -202,7 +202,19 @@ export type ConnectionMeasurements = {
     "last_packet_time_ns": F64;
     "rx_stats"?: TrafficStatsSummary;
     "tx_stats"?: TrafficStatsSummary;
+
+    /**
+     * Pingtrees, that have been iniated and run based on the routers discovered by this connection's
+     * inband probes.
+     */
     "pingtrees"?: (PingtreeUiResult)[];
+
+    /**
+     * Indicates if this connection measurement was generated due to eviction (idle / TIME_WAIT or
+     * exceeding the connection limit)
+     * or not (e.g., because the flow was still active but hit the active flow export interval)
+     */
+    "was_evicted"?: boolean;
 };
 export type I64 = number;
 export type DnsTrackerEntry = {
