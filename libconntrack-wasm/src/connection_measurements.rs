@@ -44,10 +44,23 @@ pub struct ConnectionMeasurements {
     pub rx_stats: TrafficStatsSummary,
     #[serde(default)]
     pub tx_stats: TrafficStatsSummary,
-    // Pingtrees, that have been iniated and run based on the routers discovered by this connection's
-    // inband probes.
+    /// Pingtrees, that have been iniated and run based on the routers discovered by this connection's
+    /// inband probes.
     #[serde(default)]
     pub pingtrees: Vec<PingtreeUiResult>,
+    /// Indicates if this connection measurement was generated due to eviction (idle / TIME_WAIT or
+    /// exceeding the connection limit)
+    /// or not (e.g., because the flow was still active but hit the active flow export interval)
+    #[serde(default = "default_was_evicted")]
+    pub was_evicted: bool,
+}
+
+/// When deserializing the default for was_evicted is true. All the serialized data
+/// we have stored is from desktop_connections and before this PR they were all
+/// exported due to eviction
+#[inline]
+fn default_was_evicted() -> bool {
+    true
 }
 
 impl ConnectionMeasurements {
@@ -90,6 +103,7 @@ impl ConnectionMeasurements {
             rx_stats: TrafficStatsSummary::make_mock(),
             tx_stats: TrafficStatsSummary::make_mock(),
             pingtrees: Vec::new(),
+            was_evicted: true,
         }
     }
 }
