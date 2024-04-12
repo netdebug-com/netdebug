@@ -690,9 +690,11 @@ impl RemoteDBClient {
                     rx_stats, 
                     time,
                     device_uuid,
-                    source_type
+                    source_type,
+                    pingtrees,
+                    was_evicted
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 
-                        $14, $15, $16, $17, $18, $19 , $20, $21, $22)"#,
+                        $14, $15, $16, $17, $18, $19 , $20, $21, $22, $23, $24)"#,
                     CONNECTIONS_TABLE_NAME
                 )
                 .as_str(),
@@ -720,6 +722,8 @@ impl RemoteDBClient {
                     &now,
                     &device_uuid,
                     &source_type.to_string(),
+                    &serde_json::to_string(&m.pingtrees).unwrap(),
+                    &m.was_evicted,
                 ],
             )
             .await?;
