@@ -4,6 +4,7 @@ import {
   connIdString,
   dataGridDefaultSxProp,
   desktop_api_url,
+  getConnKeyForDisplay,
   sortCmpWithNull,
 } from "../common/utils";
 import { SwitchHelper } from "../common/components/SwitchHelper";
@@ -52,6 +53,13 @@ const columns: GridColDef[] = [
     renderCell: (params: GridValueGetterParams<ConnectionMeasurements>) => (
       <FlowSummaryLink flow={params.row} />
     ),
+    // since we have a `renderCell` and `valueGetter`, the `renderCell` takes precedence
+    // for rendering the cell. BUT, the valueGetter is used for filtering, sorting, etc.
+    // so we want one.
+    // TODO: implement custom filter where one can select host, ports, etc. isntead of string
+    // based
+    valueGetter: (params: GridValueGetterParams<ConnectionMeasurements>) =>
+      getConnKeyForDisplay(params.row),
   },
 
   {
