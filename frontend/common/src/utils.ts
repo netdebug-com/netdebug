@@ -56,6 +56,21 @@ export function prettyPrintSiUnits(
   );
 }
 
+export function formatAssociatedApps(
+  apps: ConnectionMeasurements["associated_apps"],
+): string {
+  let app: string;
+  if (apps === null) {
+    app = "(unknown)";
+  } else {
+    app = "";
+    Object.entries(apps).forEach(([x, y]) => {
+      app += y === null ? `(pid=${x})` : y;
+    });
+  }
+  return app;
+}
+
 // Test the value vs. the yellow/red thresholds and return the matching style
 export function calcStyleByThreshold(
   value: number,
@@ -139,6 +154,24 @@ export const dataGridDefaultSxProp = {
     color: "primary.contrastText",
   },
   "& .MuiDataGrid-menuIconButton": {
+    color: "primary.contrastText",
+  },
+};
+
+// For use with <Table> not <DataGrid>
+export const normalTableHeaderStyle = {
+  // Looks like MUI has a color palette and we can refer to these
+  // colors :-)
+  // https://mui.com/material-ui/customization/palette/
+  backgroundColor: "primary.main",
+  color: "primary.contrastText",
+  fontWeight: "bold",
+  // Apparently DataGrid overrides fontWeidht with the following
+  // css variable. So lets hack it to get the header to render in bold.
+  "--unstable_DataGrid-headWeight": "bold",
+  "& .MuiTableCell-head": {
+    fontWeight: "bold",
+    backgroundColor: "primary.main",
     color: "primary.contrastText",
   },
 };
@@ -251,4 +284,67 @@ export function connIdString(key: ConnectionKey): string {
     key.remote_ip,
     key.remote_l4_port,
   ].join("-");
+}
+
+// Take two timestamps in NANO seconds and print a human readable representation of the
+// duration, e.g., "2 minutes, 30 seconds"
+export function prettyPrintDuration(start_ns: number, end_ns: number): string {
+  const duration = end_ns - start_ns;
+  if (duration < 0) {
+    throw new Error("ERROR: negative duration!? " + duration);
+  }
+  const duration_ms = Math.floor(duration / 1_000_000) % 1000;
+  const duration_s = Math.floor(duration / 1_000_000_000) % 60;
+  const duration_minute = Math.floor(duration / 60_000_000_000) % 60;
+  const duration_hour = Math.floor(duration / 3600_000_000_000) % 24;
+  const duration_day = Math.floor(duration / (3600_000_000_000 * 24)) % 365;
+  // who am I kidding, but sure...
+  const duration_year = Math.floor(duration / (3600_000_000_000 * 24 * 365));
+  // calc some plurals
+  const plural_years = duration_year > 1 ? "s" : "";
+  const plural_days = duration_day > 1 ? "s" : "";
+
+  // just return the top two non-zero units
+  if (duration_year != 0) {
+    return (
+      duration_year +
+      " year" +
+      plural_years +
+      " " +
+      duration_day +
+      " day" +
+      plural_days
+    );
+  }
+
+  if (duration_day != 0) {
+    return (
+      duration_day +
+      " day" +
+      plural_days +
+      " " +
+      duration_hour +
+      ":" +
+      duration_minute +
+      ":" +
+      duration_s +
+      "." +
+      duration_ms
+    );
+  }
+
+  if (duration_hour != 0 || duration_minute != 0) {
+    return (
+      duration_hour +
+      "h " +
+      duration_minute +
+      "m " +
+      duration_s +
+      "." +
+      duration_ms +
+      "s"
+    );
+  }
+  // if we got here, we just have <60 seconds, so let's just use prettyPrintSiUnits()
+  return prettyPrintSiUnits(duration, "s", 2);
 }
