@@ -137,7 +137,7 @@ async fn do_test_store_dns_entries(remotedb_client: &RemoteDBClient, client: &Po
     .await
     .unwrap();
     drop(tx); // need to drop rx otherwise inner_loop won't return
-    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_queue_duration())
+    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_stat_handles())
         .await
         .unwrap();
 
@@ -193,7 +193,7 @@ async fn do_test_store_network_interface_state(
     .await
     .unwrap();
     drop(tx); // need to drop rx otherwise inner_loop won't return
-    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_queue_duration())
+    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_stat_handles())
         .await
         .unwrap();
     let from_db = db_select_all_helper(
@@ -241,7 +241,7 @@ async fn do_test_store_network_interface_state(
     .await
     .unwrap();
     drop(tx); // need to drop rx otherwise inner_loop won't return
-    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_queue_duration())
+    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_stat_handles())
         .await
         .unwrap();
     let from_db = db_select_all_helper(
@@ -283,7 +283,7 @@ async fn do_test_store_aggregated_ping_data(
     .await
     .unwrap();
     drop(tx); // need to drop rx otherwise inner_loop won't return
-    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_queue_duration())
+    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_stat_handles())
         .await
         .unwrap();
 

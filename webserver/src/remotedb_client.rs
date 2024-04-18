@@ -29,7 +29,6 @@ use crate::secrets_db::Secrets;
 /// Also looked at influxdb but the rust client was unofficial and
 /// didn't work for me.  Timescaledb was easier to setup and cheaper
 /// to support
-#[derive(Debug)]
 pub struct RemoteDBClient {
     urls: MakeDbUrl,
     /// if we need to retry the connection, this is our next retry value; exponential backoff
@@ -40,8 +39,19 @@ pub struct RemoteDBClient {
     tx: RemoteDBClientSender,
     /// The mpsc rx handle to receive messages
     rx: RemoteDBClientReceiver,
+    stat_handles: RemoteDBClientStatHandles,
+}
+
+#[derive(Clone)]
+pub struct RemoteDBClientStatHandles {
     /// A counter to track how long messages to us have been in the queue
-    queue_duration: StatHandleDuration,
+    pub queue_duration: StatHandleDuration,
+    pub store_counters_duration: StatHandleDuration,
+    pub store_log_duration: StatHandleDuration,
+    pub store_connections_duration: StatHandleDuration,
+    pub store_network_interface_state_duration: StatHandleDuration,
+    pub store_gateway_ping_data_duration: StatHandleDuration,
+    pub store_dns_entries_duration: StatHandleDuration,
 }
 
 /// CREATE TABLE desktop_counters (
@@ -214,11 +224,43 @@ impl RemoteDBClient {
             retry_time: Duration::from_millis(INITIAL_RETRY_TIME_MS),
             retry_time_max,
             tx: tx.clone(),
-            queue_duration: stats.add_duration_stat(
-                "remotedb_client_queue_delay",
-                Units::Microseconds,
-                [StatType::AVG, StatType::MAX],
-            ),
+            stat_handles: RemoteDBClientStatHandles {
+                queue_duration: stats.add_duration_stat(
+                    "remotedb_client_queue_delay",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+                store_counters_duration: stats.add_duration_stat(
+                    "remotedb_client_store_counters_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+                store_log_duration: stats.add_duration_stat(
+                    "remotedb_client_store_log_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+                store_connections_duration: stats.add_duration_stat(
+                    "remotedb_client_store_connections_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+                store_network_interface_state_duration: stats.add_duration_stat(
+                    "remotedb_client_store_network_interface_state_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+                store_gateway_ping_data_duration: stats.add_duration_stat(
+                    "remotedb_client_store_gateway_ping_data_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+                store_dns_entries_duration: stats.add_duration_stat(
+                    "remotedb_client_store_dns_entries_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+            },
         };
         tokio::spawn(async move {
             remote_db_client.rx_loop().await.unwrap();
@@ -230,8 +272,8 @@ impl RemoteDBClient {
         self.tx.clone()
     }
 
-    pub fn get_queue_duration(&self) -> StatHandleDuration {
-        self.queue_duration.clone()
+    pub fn get_stat_handles(&self) -> RemoteDBClientStatHandles {
+        self.stat_handles.clone()
     }
 
     /// Useful for other processes that want to read the database but don't want to do message
@@ -298,8 +340,7 @@ impl RemoteDBClient {
                     );
                 }
             });
-            if let Err(e) =
-                Self::inner_loop(&mut self.rx, &client, self.queue_duration.clone()).await
+            if let Err(e) = Self::inner_loop(&mut self.rx, &client, self.stat_handles.clone()).await
             {
                 warn!(
                     "RemoteClientDB loop produced error: restarting client: {}",
@@ -312,10 +353,11 @@ impl RemoteDBClient {
     pub async fn inner_loop(
         rx: &mut RemoteDBClientReceiver,
         client: &Client,
-        mut queue_duration_stat: StatHandleDuration,
+        mut stat_handles: RemoteDBClientStatHandles,
     ) -> Result<(), tokio_postgres::Error> {
         while let Some(msg) = rx.recv().await {
-            let msg = msg.perf_check_get_with_stats("RemoteDBClient", &mut queue_duration_stat);
+            let msg =
+                msg.perf_check_get_with_stats("RemoteDBClient", &mut stat_handles.queue_duration);
             use RemoteDBClientMessages::*;
             match &msg {
                 StoreCounters {
@@ -325,15 +367,24 @@ impl RemoteDBClient {
                     os,
                     version,
                 } => {
+                    // records the time from when it's created to the time it's dropped to the
+                    // store_counters_duration StatHandleDuration
+                    let _stat_perf_recorder =
+                        stat_handles.store_counters_duration.get_raii_recorder();
                     Self::handle_store_counters(client, counters, device_uuid, time, os, version)
                         .await
                 }
-                StoreLog { .. } => Self::handle_store_log(client, msg).await,
+                StoreLog { .. } => {
+                    let _stat_perf_recorder = stat_handles.store_log_duration.get_raii_recorder();
+                    Self::handle_store_log(client, msg).await
+                }
                 StoreConnectionMeasurements {
                     connection_measurements,
                     device_uuid,
                     source_type,
                 } => {
+                    let _stat_perf_recorder =
+                        stat_handles.store_connections_duration.get_raii_recorder();
                     Self::handle_store_connection_measurement(
                         client,
                         connection_measurements,
@@ -346,6 +397,9 @@ impl RemoteDBClient {
                     network_interface_state,
                     device_uuid,
                 } => {
+                    let _stat_perf_recorder = stat_handles
+                        .store_network_interface_state_duration
+                        .get_raii_recorder();
                     Self::handle_store_network_interface_state(
                         client,
                         network_interface_state,
@@ -354,12 +408,19 @@ impl RemoteDBClient {
                     .await
                 }
                 StoreGatewayPingData { ping_data } => {
+                    let _stat_perf_recorder = stat_handles
+                        .store_gateway_ping_data_duration
+                        .get_raii_recorder();
                     Self::handle_store_gateway_ping_data(client, ping_data).await
                 }
                 StoreDnsEntries {
                     dns_entries,
                     device_uuid,
-                } => Self::handle_store_dns_entries(client, dns_entries, device_uuid).await,
+                } => {
+                    let _stat_perf_recorder =
+                        stat_handles.store_dns_entries_duration.get_raii_recorder();
+                    Self::handle_store_dns_entries(client, dns_entries, device_uuid).await
+                }
             }?;
         }
         Ok(())
@@ -733,7 +794,7 @@ impl RemoteDBClient {
     //    #[cfg(test)] // do NOT mark this as test only as the integration tests don't compile with 'test' flag (!?)
     pub fn mk_mock(url: &str) -> RemoteDBClient {
         let (tx, rx) = channel(10);
-        let registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
+        let stat_registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
         RemoteDBClient {
             urls: MakeDbUrl {
                 url_with_auth: url.to_string(),
@@ -743,11 +804,43 @@ impl RemoteDBClient {
             retry_time_max: Duration::from_secs(10),
             tx,
             rx,
-            queue_duration: registry.add_duration_stat(
-                "test_queue_duration",
-                Units::Microseconds,
-                [StatType::AVG],
-            ),
+            stat_handles: RemoteDBClientStatHandles {
+                queue_duration: stat_registry.add_duration_stat(
+                    "test_queue_delay",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+                store_log_duration: stat_registry.add_duration_stat(
+                    "test_store_log_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+                store_counters_duration: stat_registry.add_duration_stat(
+                    "test_store_counters_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+                store_connections_duration: stat_registry.add_duration_stat(
+                    "test_store_connections_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+                store_network_interface_state_duration: stat_registry.add_duration_stat(
+                    "test_store_network_interface_state_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+                store_gateway_ping_data_duration: stat_registry.add_duration_stat(
+                    "test_store_gateway_ping_data_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+                store_dns_entries_duration: stat_registry.add_duration_stat(
+                    "test_store_dns_entries_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+            },
         }
     }
 

@@ -791,7 +791,7 @@ impl CounterProvider for ExportedStat {
 #[derive(Clone, Debug)]
 pub struct ExportedStatRegistry {
     stats: Arc<Mutex<Vec<ExportedStat>>>,
-    prefix: String,
+    prefix: Arc<String>,
     created_time: Instant,
 }
 
@@ -801,7 +801,7 @@ impl ExportedStatRegistry {
     pub fn new(prefix: &str, created_time: Instant) -> Self {
         Self {
             stats: Arc::new(Mutex::new(Vec::new())),
-            prefix: prefix.to_string(),
+            prefix: Arc::new(prefix.to_string()),
             created_time,
         }
     }
@@ -956,6 +956,36 @@ impl StatHandleDuration {
     /// see ExportedStat::add_duration_value()
     pub fn add_duration_value(&mut self, dur: Duration) {
         self.add_duration_value_with_time(dur, Instant::now());
+    }
+
+    /// Return a RAII type for recording a duration. When the function is called,
+    /// the recorder records the current time and when the recorder is dropped, the ]
+    /// elapsed time is recorded to this DurationStatHandle. Useful for measuring the
+    /// duration of a codeblock, etc.
+    pub fn get_raii_recorder(&self) -> StatDurationRecorder {
+        StatDurationRecorder::new(self.clone())
+    }
+}
+
+/// An RAII type for recording durations to a handle. See
+/// StatHandleDuration::get_raii_recorder()
+pub struct StatDurationRecorder {
+    start: Instant,
+    handle: StatHandleDuration,
+}
+
+impl StatDurationRecorder {
+    pub fn new(handle: StatHandleDuration) -> Self {
+        StatDurationRecorder {
+            start: Instant::now(),
+            handle,
+        }
+    }
+}
+
+impl Drop for StatDurationRecorder {
+    fn drop(&mut self) {
+        self.handle.add_duration_value(self.start.elapsed());
     }
 }
 
@@ -1578,6 +1608,22 @@ mod test {
         es.add_duration_value(Duration::from_micros(23));
         let counters = es.get_counter_map();
         assert_eq!(counters.get("foo.us.SUM.60"), Some(&1_042_023));
+    }
+
+    #[test]
+    fn test_duration_stat_recorder() {
+        let reg = ExportedStatRegistry::new("foo", Instant::now());
+        let handle = reg.add_duration_stat("foobar", Units::Milliseconds, [StatType::MAX]);
+        let counters = reg.get_counter_map();
+        assert_eq!(counters.get("foo.foobar.ms.MAX.60"), Some(&0));
+
+        {
+            let _recorder = handle.get_raii_recorder();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let counters = reg.get_counter_map();
+        println!("Counter: {:#?}", counters);
+        assert!(*counters.get("foo.foobar.ms.MAX.60").unwrap() >= 9);
     }
 
     #[test]
