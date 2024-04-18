@@ -15,7 +15,6 @@ use libconntrack::pcap::lookup_egress_device;
 use libconntrack_wasm::{ConnectionKey, ConnectionMeasurements, IpProtocol};
 #[cfg(not(test))]
 use log::{error, warn};
-use rusqlite::{Connection, OpenFlags};
 #[cfg(test)]
 use std::{println as error, println as warn}; // Workaround to use prinltn! for logs.
 
@@ -126,8 +125,6 @@ struct SearchCmd {
     pub sqlite_filenames: Vec<String>,
 }
 
-type BoxError = Box<dyn std::error::Error>;
-
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct MyRecord {
     remote_ip: String,
@@ -171,9 +168,10 @@ impl PathEntry {
 }
 
 fn visit_all_connections<F: FnMut(&String, &ConnectionMeasurements)>(
-    db_files: &Vec<String>,
-    mut visit: F,
+    _db_files: &[String],
+    mut _visit: F,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    /* no longer use sqlite for conn storage, so comment it out
     for db_file in db_files {
         let db = Connection::open_with_flags(db_file, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let mut stmt = db
@@ -190,11 +188,12 @@ fn visit_all_connections<F: FnMut(&String, &ConnectionMeasurements)>(
             visit(&ts, &entry);
         }
     }
+    */
     Ok(())
 }
 
 fn visit_selected_connections<F: FnMut(&String, &ConnectionMeasurements)>(
-    db_files: &Vec<String>,
+    db_files: &[String],
     filter: ConnectionKeySearch,
     mut visit: F,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -265,7 +264,7 @@ fn filter_weird_and_routerless_connections<F: FnMut(&String, &ConnectionMeasurem
 }
 
 fn run_dot(
-    db_files: &Vec<String>,
+    db_files: &[String],
     no_filter: bool,
     print_graph: bool,
     print_stats: bool,
@@ -816,7 +815,7 @@ fn analyze_endhost_latencies_from_dbfiles(
     Ok(())
 }
 
-fn extract_ips(db_files: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+fn extract_ips(db_files: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut router_ips = HashSet::new();
     let mut remote_ips = HashSet::new();
     visit_all_connections(db_files, |_ts, entry| {
@@ -838,7 +837,7 @@ fn extract_ips(db_files: &Vec<String>) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-fn compute_stats(db_files: &Vec<String>, verbose: bool) {
+fn compute_stats(db_files: &[String], verbose: bool) {
     let mut num_flows = 0;
     let mut flows_with_routers = 0;
     let mut flows_with_weird = 0;
@@ -908,7 +907,7 @@ fn compute_stats(db_files: &Vec<String>, verbose: bool) {
     );
 }
 
-fn list_db_contents(db_files: &Vec<String>) {
+fn list_db_contents(db_files: &[String]) {
     visit_all_connections(db_files, |_ts, connection| {
         let mut found_endhost = false;
         for probe_round in &connection.probe_report_summary.raw_reports {
@@ -966,6 +965,7 @@ mod test {
     use crate::run_dot;
 
     const TEST_DATA_SIMPLE: &str = "tests/test_input_connections.sqlite3";
+    #[ignore]
     #[test]
     fn test_simple_graph() {
         let test_files = vec![test_dir("storge_server", TEST_DATA_SIMPLE)];
