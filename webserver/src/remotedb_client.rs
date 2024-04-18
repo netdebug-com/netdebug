@@ -7,6 +7,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use common::test_utils::test_dir;
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration, StatType, Units};
+use futures::pin_mut;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use libconntrack::utils::PerfMsgCheck;
@@ -17,7 +18,7 @@ use libconntrack_wasm::{
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::channel;
-use tokio_postgres::Client;
+use tokio_postgres::{binary_copy::BinaryCopyInWriter, types::Type, Client};
 use uuid::Uuid;
 
 use crate::secrets_db::Secrets;
@@ -431,39 +432,42 @@ impl RemoteDBClient {
         dns_entries: &[DnsTrackerEntry],
         device_uuid: &Uuid,
     ) -> Result<(), tokio_postgres::error::Error> {
-        client.execute("BEGIN", &[]).await?;
-
-        let statement = client
-            .prepare(&format!(
-                "INSERT INTO {} (ip, hostname, created, from_ptr_record, rtt_usec, ttl_sec, device_uuid) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                DNS_ENTRIES_TABLE_NAME,
-            ))
-            .await?;
+        let sink = client.copy_in(
+            &format!("COPY {} (ip, hostname, created, from_ptr_record, rtt_usec, ttl_sec, device_uuid) FROM STDIN BINARY", 
+                DNS_ENTRIES_TABLE_NAME))
+        .await?;
+        let writer = BinaryCopyInWriter::new(
+            sink,
+            &[
+                Type::TEXT,
+                Type::TEXT,
+                Type::TIMESTAMPTZ,
+                Type::BOOL,
+                Type::INT8,
+                Type::INT8,
+                Type::UUID,
+            ],
+        );
+        pin_mut!(writer);
         for entry in dns_entries {
             if let Some(ip) = entry.ip {
                 // Old clients don't send an IP. W/o IP it's pointless to add the entry to the DB
                 // TODO: add counter of ip is None
-                client
-                    .execute(
-                        &statement,
-                        &[
-                            &ip.to_string(),
-                            &entry.hostname,
-                            &entry.created,
-                            &entry.from_ptr_record,
-                            &entry.rtt.map(|rtt| rtt.num_microseconds()),
-                            &entry.ttl.map(|ttl| ttl.num_seconds()),
-                            &device_uuid,
-                        ],
-                    )
+                writer
+                    .as_mut()
+                    .write(&[
+                        &ip.to_string(),
+                        &entry.hostname,
+                        &entry.created,
+                        &entry.from_ptr_record,
+                        &entry.rtt.map(|rtt| rtt.num_microseconds()),
+                        &entry.ttl.map(|ttl| ttl.num_seconds()),
+                        &device_uuid,
+                    ])
                     .await?;
             }
         }
-
-        // NOTE: if we hit an error in the above loop and never get here, that's ok b/c we'll
-        // need to tear down the client connection and restart it which the calling code does
-        // anyway
-        client.execute("COMMIT", &[]).await?;
+        writer.finish().await?;
         Ok(())
     }
 
@@ -471,8 +475,6 @@ impl RemoteDBClient {
         client: &Client,
         ping_data: &[AggregatedGatewayPingData],
     ) -> Result<(), tokio_postgres::error::Error> {
-        client.execute("BEGIN", &[]).await?;
-
         // TODO: do we need a timestamp when the *device* generated the aggregated
         // ping data? Right now we only timestamp in DB insert..... But if we use
         // client timestamps we don't know if they are accurate...
@@ -518,10 +520,6 @@ impl RemoteDBClient {
                 )
                 .await?;
         }
-        // NOTE: if we hit an error in the above loop and never get here, that's ok b/c we'll
-        // need to tear down the client connection and restart it which the calling code does
-        // anyway
-        client.execute("COMMIT", &[]).await?;
         Ok(())
     }
 
@@ -580,49 +578,34 @@ impl RemoteDBClient {
         os: &String,
         version: &String,
     ) -> Result<(), tokio_postgres::error::Error> {
-        /* GRRR - the more efficient 'COPY {table} FROM STDIN
-         * doesn't compile... can't figure out why
-         * error is "can't find write/write_all/finish"
-         * even when I include std::io::Write;
-         * It seems to have to do with not having the type parameters to copy_in()
-         * correctly met!?
-
-        let mut writer = client
-            .copy_in(
-                "COPY desktop-counters (counter, value, source, time) FROM STDIN",)
-            .await
-            .unwrap();
-        for (c, v) in &counters {
-            writer.write_all(format!("{}\t{}\t{}\t{}\n", c, v, source, time).as_bytes());
-        }
-        writer.finish();
-
-        * SIGH:  falling back to less efficient INSERT loop
-        *
-        * See discussion at : https://stackoverflow.com/questions/71684651/multiple-value-inserts-to-postgres-using-tokio-postgres-in-rust
-        * but it's not clear if we can insert multiple values into the same transaction AND keep the security of having the library
-        * do the parameter escaping for us.
-        *
-        * TODO Add some counters to track how long this takes.
-        */
-        client.execute("BEGIN", &[]).await?;
-        let statement = client
-            .prepare(&format!(
-                "INSERT INTO {} (counter, value, device_uuid, time, os, version) VALUES ($1, $2, $3, $4, $5, $6)",
+        let sink = client
+            .copy_in(&format!(
+                "COPY {} (counter, value, device_uuid, time, os, version) FROM STDIN BINARY",
                 COUNTERS_TABLE_NAME
             ))
             .await?;
+        let writer = BinaryCopyInWriter::new(
+            sink,
+            &[
+                Type::TEXT,
+                Type::INT8,
+                Type::UUID,
+                Type::TIMESTAMPTZ,
+                Type::TEXT,
+                Type::TEXT,
+            ],
+        );
+
+        pin_mut!(writer);
         for (c, v) in counters {
             let v_i64 = *v as i64; // TODO: change this conversion once we move to i64 counters
                                    // NOTE: converting DateTime<UTC> to postgres requires the magical 'with-chrono-0_4' feature
-            client
-                .query(&statement, &[c, &v_i64, &device_uuid, &time, &os, &version])
+            writer
+                .as_mut()
+                .write(&[c, &v_i64, &device_uuid, &time, &os, &version])
                 .await?;
         }
-        // NOTE: if we hit an error in the above loop and never get here, that's ok b/c we'll
-        // need to tear down the client connection and restart it which the calling code does
-        // anyway
-        client.execute("COMMIT", &[]).await?;
+        writer.finish().await?;
         Ok(())
     }
 
