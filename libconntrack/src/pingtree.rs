@@ -63,7 +63,7 @@ pub trait PingTreeManager {
         &self,
         probe_report_summary: &ProbeReportSummary,
         save_to_conn_tracker_conn_key: Option<ConnectionKey>,
-    ) -> PingtreeUiResult;
+    ) -> Option<PingtreeUiResult>;
 }
 
 /// Utility for handling pingtree requests for the desktop process / from GUI
@@ -119,8 +119,11 @@ impl PingTreeManager for PingTreeManagerImpl {
         &self,
         probe_report_summary: &ProbeReportSummary,
         save_to_conn_tracker_conn_key: Option<ConnectionKey>,
-    ) -> PingtreeUiResult {
+    ) -> Option<PingtreeUiResult> {
         let (ip_set, hops_to_ips) = probe_summary_to_ip_map(probe_report_summary);
+        if ip_set.is_empty() {
+            return None;
+        }
         let interface_state = self
             .system_tracker
             .read()
@@ -144,11 +147,11 @@ impl PingTreeManager for PingTreeManagerImpl {
         };
         let probe_time = Utc::now();
         let ip_reports = pingtree_result_to_ip_reports(&run_pingtree(cfg).await);
-        let result = PingtreeUiResult {
+        let result = Some(PingtreeUiResult {
             probe_time,
             hops_to_ips,
             ip_reports,
-        };
+        });
         if let Some(conn_key) = save_to_conn_tracker_conn_key {
             send_or_log_sync!(
                 self.connection_tracker_tx,
