@@ -30,6 +30,7 @@ import {
 } from "react-router-dom";
 import { DefaultErrorElement } from "./common";
 import Device, { deviceLoader } from "./pages/Device";
+import { DeviceFlows, deviceFlowsLoader } from "./pages/DeviceFlows";
 
 // TODO: change to createBrowserRouter()
 const router = createBrowserRouter(
@@ -50,6 +51,13 @@ const router = createBrowserRouter(
         path="devices"
         loader={devicesLoader}
         element={<Devices />}
+        errorElement={<DefaultErrorElement />}
+      />
+      ,
+      <Route
+        path="devices/flows/:uuid"
+        loader={deviceFlowsLoader}
+        element={<DeviceFlows />}
         errorElement={<DefaultErrorElement />}
       />
       ,
