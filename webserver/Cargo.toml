@@ -71,10 +71,8 @@ postgres-native-tls = "0.5"
 pwhash = "1.0.0"
 reqwest = "0.11.24"
 rand = "0.8.5"
-rusqlite = { version = "0.29.0", features = ["bundled", "blob"] }
 sha2 = "0.10.8"
 toml = "0.8.10"
-tokio-rusqlite = "0.4.0"
 tokio-postgres = { version = "0.7", features = [
     "with-chrono-0_4",
     "with-uuid-1",

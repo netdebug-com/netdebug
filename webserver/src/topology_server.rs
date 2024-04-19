@@ -31,14 +31,11 @@ pub struct TopologyServer {
 }
 
 impl TopologyServer {
-    async fn new(
-        tx: TopologyRpcSender,
-        rx: TopologyRpcReceiver,
-    ) -> tokio_rusqlite::Result<TopologyServer> {
-        Ok(TopologyServer { tx, rx })
+    async fn new(tx: TopologyRpcSender, rx: TopologyRpcReceiver) -> TopologyServer {
+        TopologyServer { tx, rx }
     }
 
-    pub async fn spawn(buffer_size: usize) -> tokio_rusqlite::Result<TopologyRpcSender> {
+    pub async fn spawn(buffer_size: usize) -> TopologyRpcSender {
         let (tx, rx) = channel(buffer_size);
         TopologyServer::spawn_with_tx_rx(tx, rx).await
     }
@@ -46,12 +43,12 @@ impl TopologyServer {
     pub async fn spawn_with_tx_rx(
         tx: TopologyRpcSender,
         rx: TopologyRpcReceiver,
-    ) -> tokio_rusqlite::Result<TopologyRpcSender> {
-        let topology_server = TopologyServer::new(tx.clone(), rx).await?;
+    ) -> TopologyRpcSender {
+        let topology_server = TopologyServer::new(tx.clone(), rx).await;
         tokio::spawn(async move {
             topology_server.rx_loop().await;
         });
-        Ok(tx)
+        tx
     }
 
     /*

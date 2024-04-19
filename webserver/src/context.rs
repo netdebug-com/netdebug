@@ -154,15 +154,13 @@ impl WebServerContext {
         if !args.web_server_only {
             let max_connections_per_tracker = context.max_connections_per_tracker;
             // Spawn a ConnectionTracker task
-            let db_path = args.topology_server_db_path.clone();
             tokio::spawn(async move {
-                info!("Launching the topology server now with db_path={}", db_path);
+                info!("Launching the topology server now");
                 topology_server::TopologyServer::spawn_with_tx_rx(
                     topology_server_tx.clone(),
                     topology_server_rx,
                 )
-                .await
-                .unwrap();
+                .await;
                 let optional_conn_storage_tx = remotedb_client_clone.map(|db| {
                     spawn_webserver_connection_log_wrapper(
                         db,
@@ -243,10 +241,6 @@ pub struct Args {
     /// How big to make the LRU Cache on each ConnectionTracker
     #[arg(long, default_value_t = 4096)]
     pub max_connections_per_tracker: usize,
-
-    /// The SQLite db path, e.g., a filename
-    #[arg(long, default_value = "./connections.sqlite3")]
-    pub topology_server_db_path: String,
 
     /// The path to the shared secrets file - SSH!
     #[arg(long, default_value = ".secrets.toml")]
