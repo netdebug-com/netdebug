@@ -412,12 +412,14 @@ export const FlowDetails: React.FC<FlowSummaryProps> = (props) => {
         />
         <Button
           variant="outlined"
+          disabled={props.flow === null || props.flow.close_has_started}
           onClick={() => request_probe_flow(props.flow.key)}
         >
           Probe Flow
         </Button>
         <Button
           variant="outlined"
+          disabled={props.flow === null}
           onClick={() => request_ping_tree(props.flow.key)}
         >
           PingTree

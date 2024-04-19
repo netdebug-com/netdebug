@@ -346,5 +346,5 @@ export function prettyPrintDuration(start_ns: number, end_ns: number): string {
     );
   }
   // if we got here, we just have <60 seconds, so let's just use prettyPrintSiUnits()
-  return prettyPrintSiUnits(duration, "s", 2);
+  return prettyPrintSiUnits(duration / 1_000_000_000, "s", 2);
 }
