@@ -188,7 +188,7 @@ pub enum ConnectionTrackerMsg {
     },
     AddPingtreeResult {
         key: ConnectionKey,
-        pingtree_result: PingtreeUiResult,
+        pingtree_result: Option<PingtreeUiResult>,
     },
 }
 
@@ -1130,14 +1130,22 @@ impl<'a> ConnectionTracker<'a> {
         }
     }
 
-    fn add_pingtree_result(&mut self, key: &ConnectionKey, pingtree_result: PingtreeUiResult) {
+    fn add_pingtree_result(
+        &mut self,
+        key: &ConnectionKey,
+        pingtree_result: Option<PingtreeUiResult>,
+    ) {
         // Ideally, we'd update the LRU as well, but that's not that trivial because the conn tracker logic
         // expects that Connection::last_packet_time is in the same order as the LRU order. But, we can
         // get away with not updating the LRU here because most likely the pingtree was just run and thus
         // this connection has seen very recent packets.
         if let Some(conn) = self.connections.get_mut_no_lru(key) {
-            self.pingtree_results_added.bump();
-            conn.pingtrees.push(pingtree_result);
+            if let Some(pingtree_result) = pingtree_result {
+                self.pingtree_results_added.bump();
+                conn.pingtrees.push(pingtree_result);
+            } else {
+                debug!("Empty pingtree_result for {}", key);
+            }
         } else {
             debug!(
                 "Tried to add pingtree results for connection {} but no such connection exists",
@@ -2296,11 +2304,11 @@ pub mod test {
             .contains_key(&non_existing_key));
 
         // Add pingtree result to an existing connection
-        let pingtree_res = PingtreeUiResult {
+        let pingtree_res = Some(PingtreeUiResult {
             probe_time: last_pkt_time + chrono::Duration::seconds(1),
             hops_to_ips: BTreeMap::new(),
             ip_reports: HashMap::new(),
-        };
+        });
         connection_tracker.handle_one_msg(ConnectionTrackerMsg::AddPingtreeResult {
             key: existing_key.clone(),
             pingtree_result: pingtree_res.clone(),
@@ -2323,6 +2331,13 @@ pub mod test {
         connection_tracker.handle_one_msg(ConnectionTrackerMsg::AddPingtreeResult {
             key: non_existing_key.clone(),
             pingtree_result: pingtree_res.clone(),
+        });
+        assert_eq!(connection_tracker.pingtree_no_connection.get_sum(), 1);
+        assert_eq!(connection_tracker.pingtree_results_added.get_sum(), 1);
+
+        connection_tracker.handle_one_msg(ConnectionTrackerMsg::AddPingtreeResult {
+            key: existing_key.clone(),
+            pingtree_result: None,
         });
         assert_eq!(connection_tracker.pingtree_no_connection.get_sum(), 1);
         assert_eq!(connection_tracker.pingtree_results_added.get_sum(), 1);
