@@ -4,6 +4,7 @@ import {
   connIdString,
   dataGridDefaultSxProp,
   desktop_api_url,
+  formatAssociatedApps,
   getConnKeyForDisplay,
   sortCmpWithNull,
 } from "../common/utils";
@@ -27,19 +28,10 @@ import { useLoaderData, useRevalidator } from "react-router";
 import { usePeriodicRefresh } from "../common/hooks/usePeriodicRefresh";
 import { fetchAndCheckResult } from "../common/data_loading";
 
-function formatAssociatedApps(
+function formatAssociatedAppsDataGrid(
   params: GridValueFormatterParams<ConnectionMeasurements["associated_apps"]>,
 ) {
-  let app: string;
-  if (params.value === null) {
-    app = "(unknown)";
-  } else {
-    app = "";
-    Object.entries(params.value).forEach(([x, y]) => {
-      app += y === null ? `(${x})` : y;
-    });
-  }
-  return app;
+  return formatAssociatedApps(params.value);
 }
 
 const columns: GridColDef[] = [
@@ -161,7 +153,7 @@ const columns: GridColDef[] = [
     field: "associated_apps",
     headerName: "Associated Apps",
     flex: 25,
-    valueFormatter: formatAssociatedApps,
+    valueFormatter: formatAssociatedAppsDataGrid,
   },
 ];
 
