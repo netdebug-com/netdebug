@@ -16,7 +16,7 @@ use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 use crate::connection::connection_key_from_protocol_socket_info;
 use crate::connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender};
 use crate::utils::{make_perf_check_stats, PerfCheckStats, PerfMsgCheck};
-use crate::{perf_check, send_or_log_sync};
+use crate::{perf_check, try_send_or_log};
 
 pub type ProcessTrackerTcpCache = HashMap<ConnectionKey, ProcessTrackerEntry>;
 pub type ProcessTrackerUdpCache = HashMap<(IpAddr, u16), ProcessTrackerEntry>;
@@ -183,7 +183,7 @@ impl ProcessTracker {
     fn lookup_or_queue(&mut self, key: ConnectionKey, tx: ConnectionTrackerSender) {
         let reply = self.lookup_from_cache(&key);
         if reply.is_some() {
-            send_or_log_sync!(
+            try_send_or_log!(
                 tx,
                 "ConnectionTracker",
                 ConnectionTrackerMsg::SetConnectionApplication {
@@ -209,7 +209,7 @@ impl ProcessTracker {
                 Ok((new_tcp_cache, new_udp_cache)) =>
                 // send update to the process_tracker
                 {
-                    send_or_log_sync!(
+                    try_send_or_log!(
                         &process_tracker_tx,
                         "process_tracker",
                         ProcessTrackerMessage::UpdateCache {
@@ -312,7 +312,7 @@ impl ProcessTracker {
     fn process_queued_lookups(&mut self) {
         while let Some((key, tx)) = self.lookup_queue.pop() {
             let application = self.lookup_from_cache(&key);
-            send_or_log_sync!(
+            try_send_or_log!(
                 tx,
                 "ConnectionTracker",
                 ConnectionTrackerMsg::SetConnectionApplication { key, application },
@@ -342,7 +342,7 @@ fn run_pid2process_loop(update_frequency: Duration, tx: ProcessTrackerSender) {
         };
 
         use ProcessTrackerMessage::*;
-        send_or_log_sync!(tx, "process_tracker", UpdatePidMapping { pid2process });
+        try_send_or_log!(tx, "process_tracker", UpdatePidMapping { pid2process });
 
         let next_update = start + update_frequency;
         let now = Utc::now();

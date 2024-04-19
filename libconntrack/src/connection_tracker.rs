@@ -37,8 +37,8 @@ use crate::{
     prober::ProbeMessage,
     prober_helper::ProberHelper,
     process_tracker::{ProcessTrackerEntry, ProcessTrackerMessage, ProcessTrackerSender},
-    send_or_log_sync,
     topology_client::{DataStorageMessage, DataStorageSender},
+    try_send_or_log,
     utils::{self, packet_is_tcp_rst, remote_ip_to_local, PerfMsgCheck},
 };
 
@@ -1208,7 +1208,7 @@ impl<'a> ConnectionTracker<'a> {
                         }
                     }
                 };
-                send_or_log_sync!(
+                try_send_or_log!(
                     self.prober_helper.tx(),
                     "Send Arp/NDP to prober",
                     ProbeMessage::SendIpLookup {
@@ -1300,7 +1300,7 @@ fn send_connection_storage_msg(
             // reduce the number of connections to export by ~75%. Eventually we want to
             // export everything (esp. for security) but for now this should be ok.
             // see https://github.com/netdebug-com/netdebug/issues/772
-            send_or_log_sync!(
+            try_send_or_log!(
                 tx,
                 "send_connection_storage_msg()",
                 DataStorageMessage::StoreConnectionMeasurements {

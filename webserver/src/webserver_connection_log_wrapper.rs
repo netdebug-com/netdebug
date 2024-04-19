@@ -1,4 +1,4 @@
-use libconntrack::{send_or_log_async, topology_client::DataStorageSender};
+use libconntrack::{send_or_log, topology_client::DataStorageSender};
 use log::{debug, warn};
 use tokio::sync::mpsc::channel;
 
@@ -23,7 +23,7 @@ pub fn spawn_webserver_connection_log_wrapper(
                 StoreConnectionMeasurements {
                     connection_measurements,
                 } => {
-                    send_or_log_async!(
+                    send_or_log!(
                         remotedb_client,
                         "handle_store",
                         RemoteDBClientMessages::StoreConnectionMeasurements {

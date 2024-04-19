@@ -3,8 +3,9 @@ use std::net::SocketAddr;
 use axum::extract::ws::{self, WebSocket};
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
 use libconntrack::{
-    send_or_log_async, send_or_log_sync,
+    send_or_log,
     topology_client::{TopologyRpcMessage, TopologyRpcSender},
+    try_send_or_log,
     utils::PerfMsgCheck,
 };
 use libconntrack_wasm::topology_server_messages::{
@@ -112,19 +113,19 @@ async fn handle_desktop_message(
             warn!("Received a DesktopToTopologyServer::Ping as JSON which should never be sent over the wire");
         }
         PushNetworkInterfaceState { network_interface_state } => {
-            send_or_log_sync_helper(remotedb_client,
+            try_send_or_log_helper(remotedb_client,
                 "handle_push_network_interface_state", 
                 RemoteDBClientMessages::StoreNetworkInterfaceState { network_interface_state, device_uuid }
             ).await;
         }
         PushGatewayPingData { ping_data } => {
-            send_or_log_sync_helper(remotedb_client,
+            try_send_or_log_helper(remotedb_client,
                 "handle_push_gateway_ping_data",
                 RemoteDBClientMessages::StoreGatewayPingData { ping_data }
             ).await;
         }
         PushDnsEntries { dns_entries } => {
-            send_or_log_sync_helper(remotedb_client,
+            try_send_or_log_helper(remotedb_client,
                 "handle_push_dns_entries",
                 RemoteDBClientMessages::StoreDnsEntries { dns_entries, device_uuid }
             ).await;
@@ -133,13 +134,13 @@ async fn handle_desktop_message(
     }
 }
 
-async fn send_or_log_sync_helper(
+async fn try_send_or_log_helper(
     remotedb_client: &Option<RemoteDBClientSender>,
     what: &str,
     msg: RemoteDBClientMessages,
 ) {
     if let Some(remotedb_client) = remotedb_client {
-        send_or_log_sync!(remotedb_client, what, msg);
+        try_send_or_log!(remotedb_client, what, msg);
     } else {
         debug!("Storage not configured:: not storing: {:?}", msg);
     }
@@ -155,7 +156,7 @@ async fn handle_push_log(
     device_uuid: Uuid,
 ) {
     if let Some(remotedb_client) = remotedb_client {
-        send_or_log_sync!(
+        try_send_or_log!(
             remotedb_client,
             "handle_push_log",
             RemoteDBClientMessages::StoreLog {
@@ -192,7 +193,7 @@ async fn handle_push_counters(
             os,
             version
         );
-        send_or_log_sync!(
+        try_send_or_log!(
             remotedb_client,
             "handle_push_counters",
             RemoteDBClientMessages::StoreCounters {
@@ -223,7 +224,7 @@ async fn handle_infer_congestion(
     let ws_tx = ws_tx.clone();
     tokio::spawn(async move {
         let (reply_tx, mut reply_rx) = channel(1);
-        send_or_log_async!(
+        send_or_log!(
             topology_server,
             "handle_infer_congestion",
             TopologyRpcMessage::InferCongestion {
@@ -257,7 +258,7 @@ async fn handle_store_measurements(
     remotedb_client: &Option<RemoteDBClientSender>,
 ) {
     if let Some(remotedb_client) = remotedb_client {
-        send_or_log_sync!(
+        try_send_or_log!(
             remotedb_client,
             "handle_store",
             RemoteDBClientMessages::StoreConnectionMeasurements {

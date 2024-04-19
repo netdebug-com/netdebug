@@ -28,8 +28,8 @@ use crate::{
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
     owned_packet::OwnedParsedPacket,
     prober::{ProbeMessage, ProberSender},
-    send_or_log_sync,
     system_tracker::SystemTracker,
+    try_send_or_log,
     utils::{remote_ip_to_local, PerfMsgCheck, GOOGLE_DNS_IPV6},
 };
 
@@ -153,7 +153,7 @@ impl PingTreeManager for PingTreeManagerImpl {
             ip_reports,
         });
         if let Some(conn_key) = save_to_conn_tracker_conn_key {
-            send_or_log_sync!(
+            try_send_or_log!(
                 self.connection_tracker_tx,
                 "AddPingtreeResult",
                 ConnectionTrackerMsg::AddPingtreeResult {
@@ -455,7 +455,7 @@ impl PingTreeImpl {
                 cfg.ping_id,
             ));
             let key = conn_keys_to_listen_to.last().unwrap();
-            send_or_log_sync!(
+            try_send_or_log!(
                 cfg.connection_tracker_tx,
                 "PingTree -- add listeners",
                 ConnectionTrackerMsg::AddConnectionUpdateListener {
@@ -541,7 +541,7 @@ impl PingTreeImpl {
         info!("Sending ping probes for round {}", self.cur_round);
         for dst_ip in &self.cfg.ips {
             let egress_info = self.cfg.get_egress_info_or_die(dst_ip);
-            send_or_log_sync!(
+            try_send_or_log!(
                 self.cfg.prober_tx,
                 "pingtree -- send ping",
                 ProbeMessage::SendPing {
@@ -587,7 +587,7 @@ impl PingTreeImpl {
 impl Drop for PingTreeImpl {
     fn drop(&mut self) {
         for key in &self.conn_keys_to_listen_to {
-            send_or_log_sync!(
+            try_send_or_log!(
                 self.cfg.connection_tracker_tx,
                 "PingTreeImpl::drop",
                 ConnectionTrackerMsg::DelConnectionUpdateListener {

@@ -193,7 +193,7 @@ pub async fn channel_rpc<M, RESP>(
 /// use tokio::sync::mpsc::{Sender, channel};
 /// use common_wasm::timeseries_stats::{ExportedStatRegistry, StatType, Units};
 /// use log::warn;
-/// use libconntrack::{send_or_log_sync, utils::PerfMsgCheck};
+/// use libconntrack::{try_send_or_log, utils::PerfMsgCheck};
 ///
 /// let (tx, _rx) = channel::<PerfMsgCheck<Vec<u8>>>(128);
 /// let mut stats_registry = ExportedStatRegistry::new("example", std::time::Instant::now());
@@ -206,14 +206,14 @@ pub async fn channel_rpc<M, RESP>(
 /// //   msg_errs_counter.update(1);
 /// // }
 /// // Write this:
-/// send_or_log_sync!(tx, "process", data.clone(), &mut msg_errs_counter);
+/// try_send_or_log!(tx, "process", data.clone(), &mut msg_errs_counter);
 /// // Or this to explicitly specificy the SLA
-/// send_or_log_sync!(tx, "process", data, &mut msg_errs_counter, std::time::Duration::from_millis(15));
+/// try_send_or_log!(tx, "process", data, &mut msg_errs_counter, std::time::Duration::from_millis(15));
 /// // Or try_send_async!() if in an async context
 /// ```
 
 #[macro_export]
-macro_rules! send_or_log_sync {
+macro_rules! try_send_or_log {
     // no stats or SLA
     ($tx:expr, $msg:expr, $data:expr) => {{
         if let Err(e) = $tx.try_send($crate::utils::PerfMsgCheck::new($data)) {
@@ -247,7 +247,7 @@ macro_rules! send_or_log_sync {
 /// use tokio::sync::mpsc::{Sender, channel};
 /// use common_wasm::timeseries_stats::{ExportedStatRegistry, StatType, Units};
 /// use log::warn;
-/// use libconntrack::{send_or_log_async, utils::PerfMsgCheck};
+/// use libconntrack::{send_or_log, utils::PerfMsgCheck};
 ///
 /// let (tx, _rx) = channel::<PerfMsgCheck<Vec<u8>>>(128);
 /// let mut stats_registry = ExportedStatRegistry::new("example", std::time::Instant::now());
@@ -260,13 +260,13 @@ macro_rules! send_or_log_sync {
 /// //   msg_errs_counter.update(1);
 /// // }
 /// // Write this:
-/// send_or_log_async!(tx, "process", data.clone(), &mut msg_errs_counter).await;
+/// send_or_log!(tx, "process", data.clone(), &mut msg_errs_counter).await;
 /// // Or this to explicitly specificy the SLA
-/// send_or_log_async!(tx, "process", data, &mut msg_errs_counter, std::time::Duration::from_millis(15)).await;
+/// send_or_log!(tx, "process", data, &mut msg_errs_counter, std::time::Duration::from_millis(15)).await;
 /// # });
 /// ```
 #[macro_export]
-macro_rules! send_or_log_async {
+macro_rules! send_or_log {
     ($tx:expr, $msg:expr, $data:expr) => {
         async {
             if let Err(e) = $tx.send($crate::utils::PerfMsgCheck::new($data)).await {
