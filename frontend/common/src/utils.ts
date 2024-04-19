@@ -78,7 +78,7 @@ export function calcStyleByThreshold(
   high: number,
 ): SxProps {
   if (value >= high) {
-    return { color: "red", backgroundColor: "black" };
+    return { color: "white", backgroundColor: "black" };
   } else if (value >= mid) {
     return { color: "orange" };
   } else {
