@@ -17,8 +17,8 @@ use gui_types::CongestedLinksReply;
 use libconntrack::{
     connection_tracker::{ConnectionTrackerMsg, TimeMode},
     dns_tracker::DnsTrackerMessage,
-    send_or_log_sync,
     topology_client::TopologyRpcMessage,
+    try_send_or_log,
     utils::{channel_rpc, channel_rpc_perf},
 };
 use libconntrack_wasm::{
@@ -149,7 +149,7 @@ pub(crate) async fn handle_probe_flow(
         application_rtt: None,
         tx,
     };
-    send_or_log_sync!(
+    try_send_or_log!(
         trackers.connection_tracker.clone().unwrap(),
         "connection_tracker/ProbeReport",
         req

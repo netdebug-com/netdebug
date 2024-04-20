@@ -26,8 +26,8 @@ use libconntrack_wasm::{ConnectionKey, DnsTrackerEntry};
 
 use crate::{
     connection_tracker::{ConnectionTrackerMsg, ConnectionTrackerSender},
-    send_or_log_sync,
     topology_client::{DataStorageMessage, DataStorageSender},
+    try_send_or_log,
 };
 use dns_parser::{self, QueryType};
 
@@ -283,7 +283,7 @@ impl<'a> DnsTracker<'a> {
             }
         }
         if let Some(data_storeage_client) = &self.data_storage_client {
-            send_or_log_sync!(
+            try_send_or_log!(
                 data_storeage_client,
                 "DnsTracker::parse_dns_reply() -- sending new DNS entries",
                 DataStorageMessage::StoreDnsEntries {
@@ -588,7 +588,7 @@ impl<'a> DnsTracker<'a> {
         };
         debug!("Looking up IP: {} - found {:?}", ip, remote_hostname);
         use ConnectionTrackerMsg::*;
-        send_or_log_sync!(
+        try_send_or_log!(
             tx,
             "conntracker",
             SetConnectionRemoteHostnameDns {
@@ -610,7 +610,7 @@ impl<'a> DnsTracker<'a> {
         if self.pending_lookups.contains_key(&ip) {
             let (keys, tx) = self.pending_lookups.remove(&ip).unwrap();
             use ConnectionTrackerMsg::*;
-            send_or_log_sync!(
+            try_send_or_log!(
                 tx,
                 "Connection_tracker",
                 SetConnectionRemoteHostnameDns {

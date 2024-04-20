@@ -7,7 +7,7 @@ use log::{debug, info, warn};
 #[cfg(test)]
 use std::{println as debug, println as info, println as warn};
 
-use crate::send_or_log_async;
+use crate::send_or_log;
 use crate::utils::PerfMsgCheck;
 use chrono::Utc;
 use common_wasm::get_git_hash_version;
@@ -384,7 +384,7 @@ impl TopologyServerConnection {
             GetMyIpAndUserAgent { reply_tx } => {
                 // if we have it cached, then reply right away, else queue them
                 if let Some(hello) = &self.server_hello {
-                    send_or_log_async!(reply_tx, "topology server hello", hello.clone()).await;
+                    send_or_log!(reply_tx, "topology server hello", hello.clone()).await;
                 } else {
                     info!("Request for topology server Hello/WhatsMyIp queued");
                     self.waiting_for_hello.push(reply_tx.clone());
@@ -410,7 +410,7 @@ impl TopologyServerConnection {
             StoreConnectionMeasurements {
                 connection_measurements,
             } => {
-                send_or_log_async!(
+                send_or_log!(
                     ws_tx,
                     "handle_desktop_msg::StoreConnectionMeasurement",
                     DesktopToTopologyServer::StoreConnectionMeasurement {
@@ -423,7 +423,7 @@ impl TopologyServerConnection {
             StoreNetworkInterfaceState {
                 network_interface_state,
             } => {
-                send_or_log_async!(
+                send_or_log!(
                     ws_tx,
                     "handle_desktop_msg::StoreNetworkInterfaceState",
                     DesktopToTopologyServer::PushNetworkInterfaceState {
@@ -434,7 +434,7 @@ impl TopologyServerConnection {
                 .await
             }
             StoreGatewayPingData { ping_data } => {
-                send_or_log_async!(
+                send_or_log!(
                     ws_tx,
                     "handle_desktop_msg::StoreGatewayPingData",
                     DesktopToTopologyServer::PushGatewayPingData { ping_data },
@@ -443,7 +443,7 @@ impl TopologyServerConnection {
                 .await
             }
             StoreDnsEntries { dns_entries } => {
-                send_or_log_async!(
+                send_or_log!(
                     ws_tx,
                     "handle_desktop_msg::StoreDnsEntries",
                     DesktopToTopologyServer::PushDnsEntries { dns_entries },
@@ -496,7 +496,7 @@ impl TopologyServerConnection {
             debug!("Got duplicate!? Hello message for TopologyServer!? Ok on reconnect");
         }
         for tx in &self.waiting_for_hello {
-            send_or_log_async!(tx, "handle_topology_hello", (client_ip, user_agent.clone())).await;
+            send_or_log!(tx, "handle_topology_hello", (client_ip, user_agent.clone())).await;
         }
         self.server_hello = Some((client_ip, user_agent));
         self.waiting_for_hello.clear();
@@ -509,7 +509,7 @@ impl TopologyServerConnection {
         reply_tx: Sender<PerfMsgCheck<CongestionSummary>>,
     ) {
         self.waiting_for_congestion_summary.push(reply_tx);
-        send_or_log_async!(
+        send_or_log!(
             ws_tx,
             "handle_infer_congestion",
             DesktopToTopologyServer::InferCongestion {
@@ -527,7 +527,7 @@ impl TopologyServerConnection {
         if self.waiting_for_congestion_summary.len() == 1 {
             // common case, save some memcopies
             let reply_tx = self.waiting_for_congestion_summary.pop().unwrap();
-            send_or_log_async!(
+            send_or_log!(
                 reply_tx,
                 "handle_infer_congestion_reply()",
                 congestion_summary
@@ -538,7 +538,7 @@ impl TopologyServerConnection {
         } else {
             // hopefully less common case, use clone()
             for reply_tx in &self.waiting_for_congestion_summary {
-                send_or_log_async!(
+                send_or_log!(
                     reply_tx,
                     "handle_infer_congestion_reply()",
                     congestion_summary.clone()

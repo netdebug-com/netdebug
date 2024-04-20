@@ -1,6 +1,6 @@
 use std::{net::IpAddr, str::FromStr};
 
-use libconntrack::send_or_log_async;
+use libconntrack::send_or_log;
 /**
  * TopologyServer is the other side of libconntrack::topology_client.  It provides:
  * 1. A database to store ConnectionMeasurements
@@ -87,7 +87,7 @@ impl TopologyServer {
     async fn handle_get_my_ip(&self, reply_tx: Sender<PerfMsgCheck<(IpAddr, String)>>) {
         let my_ip = IpAddr::from_str("127.0.0.1").unwrap();
         let fake_user_agent = "Fake User-agent".to_string();
-        send_or_log_async!(
+        send_or_log!(
             reply_tx,
             "TopologyServer::handle_get_my_ip()",
             (my_ip, fake_user_agent)

@@ -43,7 +43,7 @@ use crate::{
     owned_packet::OwnedParsedPacket,
     pcap::lookup_egress_device,
     prober::{ProbeMessage, ProberSender},
-    send_or_log_sync,
+    try_send_or_log,
     utils::remote_ip_to_local,
 };
 
@@ -196,7 +196,7 @@ impl SystemTracker {
         if let Some(data_storage_client) = &data_storage_client {
             let mut cloned_state = current_network.clone();
             cloned_state.gateways_ping.clear();
-            send_or_log_sync!(
+            try_send_or_log!(
                 data_storage_client,
                 "SystemTracker::new_with_network_state()",
                 DataStorageMessage::StoreNetworkInterfaceState {
@@ -303,7 +303,7 @@ impl SystemTracker {
             let old_state = self.current_network().clone();
             // for each old gateway, tell the connection tracker to stop listening to the ping updates
             for (gateway, ping_state) in &old_state.gateways_ping {
-                send_or_log_sync!(
+                try_send_or_log!(
                     self.connection_tracker,
                     format!(
                         "unsubscribe from connection updates for gateway {}",
@@ -340,14 +340,14 @@ impl SystemTracker {
                 old_state.gateways_ping.clear();
                 let mut interface_state = interface_state.clone();
                 interface_state.gateways_ping.clear();
-                send_or_log_sync!(
+                try_send_or_log!(
                     data_storage_client,
                     "SystemTracker::handle_update_network_state() -- old_state",
                     DataStorageMessage::StoreNetworkInterfaceState {
                         network_interface_state: old_state
                     }
                 );
-                send_or_log_sync!(
+                try_send_or_log!(
                     data_storage_client,
                     "SystemTracker::handle_update_network_state() -- new_state",
                     DataStorageMessage::StoreNetworkInterfaceState {
@@ -387,7 +387,7 @@ impl SystemTracker {
         if let Some(data_storage_client) = &self.data_storage_client {
             let ping_data = aggregate_ping_state(network_state);
             if !ping_data.is_empty() {
-                send_or_log_sync!(
+                try_send_or_log!(
                     data_storage_client,
                     description,
                     DataStorageMessage::StoreGatewayPingData { ping_data }
@@ -804,7 +804,7 @@ impl SystemTracker {
         let local_mac = state.local_mac;
         let key = state.key.clone();
         if let Some(gateway_mac) = state.gateway_mac {
-            send_or_log_sync!(
+            try_send_or_log!(
                 self.prober_tx,
                 "send ping",
                 ProbeMessage::SendPing {
@@ -825,7 +825,7 @@ impl SystemTracker {
             // this code will keep triggering everytime we go to ping until we resolve the Mac address
             if let Some(neighbor_listener_tx) = &self.neighbor_listener_tx {
                 // TODO: add counter to track number of lookups
-                send_or_log_sync!(
+                try_send_or_log!(
                     self.connection_tracker,
                     "lookup gateway mac",
                     ConnectionTrackerMsg::LookupMacByIp {
@@ -844,7 +844,7 @@ impl SystemTracker {
         let key = self.make_gateway_ping_key(gateway)?;
         // subscribe to ping flow from ConnectionTracker, if it's defined
         if let Some(ping_listener) = &self.ping_listener_tx {
-            send_or_log_sync!(
+            try_send_or_log!(
                 self.connection_tracker.clone(),
                 "SystemTracker::make_new_ping_stat",
                 ConnectionTrackerMsg::AddConnectionUpdateListener {
