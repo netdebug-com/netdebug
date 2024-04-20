@@ -129,6 +129,7 @@ impl WebServerContext {
                     MAX_MSGS_PER_TOPOLOGY_SERVER_QUEUE,
                     Duration::from_secs(5),
                     counter_registries.new_registry("remotedb_client"),
+                    args.num_db_write_connections,
                 )
                 .unwrap(),
             )
@@ -249,6 +250,10 @@ pub struct Args {
     /// If set, the remote timescaledb will not be used.
     #[arg(long, default_value_t = false)]
     pub no_timescaledb: bool,
+
+    //
+    #[arg(long, default_value_t = 10)]
+    pub num_db_write_connections: usize,
 }
 
 pub type Context = Arc<RwLock<WebServerContext>>;
@@ -326,7 +331,7 @@ pub fn make_test_context() -> Context {
     // create trackers but don't connect them to anything...
     let (connection_tracker_tx, _rx) = tokio::sync::mpsc::channel(128);
     let (topology_server_tx, _rx) = tokio::sync::mpsc::channel(128);
-    let (remotedb_client, _rx) = tokio::sync::mpsc::channel(128);
+    let (remotedb_client, _rx) = async_channel::bounded(128);
     let counter_registries = SuperRegistry::new(Instant::now()).registries();
     Arc::new(RwLock::new(WebServerContext {
         user_db: UserDb::testing_demo(test_hash),

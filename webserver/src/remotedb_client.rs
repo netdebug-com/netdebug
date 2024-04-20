@@ -17,7 +17,6 @@ use libconntrack_wasm::{
 };
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::channel;
 use tokio_postgres::{binary_copy::BinaryCopyInWriter, types::Type, Client};
 use uuid::Uuid;
 
@@ -30,6 +29,7 @@ use crate::secrets_db::Secrets;
 /// Also looked at influxdb but the rust client was unofficial and
 /// didn't work for me.  Timescaledb was easier to setup and cheaper
 /// to support
+#[derive(Clone)]
 pub struct RemoteDBClient {
     urls: MakeDbUrl,
     /// if we need to retry the connection, this is our next retry value; exponential backoff
@@ -74,8 +74,8 @@ pub const INITIAL_RETRY_TIME_MS: u64 = 100;
 
 // Linux root cert db is /etc/ssl/certs/ca-certificates.crt, at least on Ubuntu
 
-pub type RemoteDBClientSender = tokio::sync::mpsc::Sender<PerfMsgCheck<RemoteDBClientMessages>>;
-pub type RemoteDBClientReceiver = tokio::sync::mpsc::Receiver<PerfMsgCheck<RemoteDBClientMessages>>;
+pub type RemoteDBClientSender = async_channel::Sender<PerfMsgCheck<RemoteDBClientMessages>>;
+pub type RemoteDBClientReceiver = async_channel::Receiver<PerfMsgCheck<RemoteDBClientMessages>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// When we log a ConnectionMeasurement, is the source a desktop or a topology server?
@@ -148,12 +148,11 @@ impl From<RemoteDBClientMessages> for PerfMsgCheck<RemoteDBClientMessages> {
 
 // full URL is postgres://rw_user:PASSWORD@ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require
 const PRODUCTION_DB_DRIVER: &str = "postgres";
-pub const PRODUCTION_DB_URL_BASE: &str =
-    "ttfd71uhz4.m8ahrqo1nb.tsdb.cloud.timescale.com:33628/tsdb?sslmode=require";
 /// Create the URL to the production DB server.  There are different URLs for
 /// connections with read-only vs. write priviledges
 /// return two strings; one valid with the password and one with the password XXX'd out
 /// for logging
+#[derive(Clone)]
 struct MakeDbUrl {
     /// URL, but don't log this!
     url_with_auth: String,
@@ -204,7 +203,7 @@ fn make_db_url(secrets: &Secrets, is_readonly: bool) -> MakeDbUrl {
         ),
         url_without_auth: format!(
             "{}://{}:{}@{}",
-            PRODUCTION_DB_DRIVER, user, "XXXXX", PRODUCTION_DB_URL_BASE
+            PRODUCTION_DB_DRIVER, user, "XXXXX", base_url
         ),
     }
 }
@@ -215,8 +214,9 @@ impl RemoteDBClient {
         max_queue: usize,
         retry_time_max: tokio::time::Duration,
         stats: ExportedStatRegistry,
+        num_db_connections: usize,
     ) -> Result<RemoteDBClientSender, Box<dyn Error>> {
-        let (tx, rx) = channel(max_queue);
+        let (tx, rx) = async_channel::bounded(max_queue);
         let urls = make_db_url(&secrets, false);
 
         let remote_db_client = RemoteDBClient {
@@ -263,9 +263,13 @@ impl RemoteDBClient {
                 ),
             },
         };
-        tokio::spawn(async move {
-            remote_db_client.rx_loop().await.unwrap();
-        });
+
+        for id in 0..num_db_connections {
+            let client_clone = remote_db_client.clone();
+            tokio::spawn(async move {
+                client_clone.rx_loop(id).await.unwrap();
+            });
+        }
         Ok(tx)
     }
 
@@ -304,28 +308,32 @@ impl RemoteDBClient {
         Ok(client)
     }
 
-    async fn rx_loop(mut self) -> Result<(), Box<dyn Error>> {
+    async fn rx_loop(mut self, id: usize) -> Result<(), Box<dyn Error>> {
         loop {
             info!(
-                "Trying to connect to database server: {}",
-                self.urls.url_without_auth
+                "DbConn {}: Trying to connect to database server: {}",
+                id, self.urls.url_without_auth
             );
             let connector = native_tls::TlsConnector::new()?;
             let connector = postgres_native_tls::MakeTlsConnector::new(connector);
 
-            let (client, connection) =
-                match tokio_postgres::connect(&self.urls.url_with_auth, connector).await {
-                    Ok((client, connection)) => (client, connection),
-                    Err(e) => {
-                        self.retry_time = std::cmp::min(self.retry_time * 2, self.retry_time_max);
-                        warn!(
-                        "Failed to connect to postgres server {} - retrying in {:?} -- error {}",
+            let (client, connection) = match tokio_postgres::connect(
+                &self.urls.url_with_auth,
+                connector,
+            )
+            .await
+            {
+                Ok((client, connection)) => (client, connection),
+                Err(e) => {
+                    self.retry_time = std::cmp::min(self.retry_time * 2, self.retry_time_max);
+                    warn!(
+                        "DbConn {}: Failed to connect to postgres server {} - retrying in {:?} -- error {}", id,
                         self.urls.url_without_auth, self.retry_time, e
                     );
-                        tokio::time::sleep(self.retry_time).await;
-                        continue;
-                    }
-                };
+                    tokio::time::sleep(self.retry_time).await;
+                    continue;
+                }
+            };
             // successful connect, reset retry timer
             self.retry_time = Duration::from_millis(INITIAL_RETRY_TIME_MS);
 
@@ -336,27 +344,28 @@ impl RemoteDBClient {
                     // TODO: figure out under what conditions this could exit and see
                     // if we need to be more resilient here
                     warn!(
-                        "tokio_postgress connection exited with {}... uhmm.. TODO",
-                        e
+                        "DbConn {}: tokio_postgress connection exited with {}... uhmm.. TODO",
+                        id, e
                     );
                 }
             });
-            if let Err(e) = Self::inner_loop(&mut self.rx, &client, self.stat_handles.clone()).await
+            if let Err(e) =
+                Self::inner_loop(self.rx.clone(), &client, self.stat_handles.clone()).await
             {
                 warn!(
-                    "RemoteClientDB loop produced error: restarting client: {}",
-                    e
+                    "DbConn {}: RemoteClientDB loop produced error: restarting client: {}",
+                    id, e
                 );
             }
         }
     }
 
     pub async fn inner_loop(
-        rx: &mut RemoteDBClientReceiver,
+        rx: RemoteDBClientReceiver,
         client: &Client,
         mut stat_handles: RemoteDBClientStatHandles,
     ) -> Result<(), tokio_postgres::Error> {
-        while let Some(msg) = rx.recv().await {
+        while let Ok(msg) = rx.recv().await {
             let msg =
                 msg.perf_check_get_with_stats("RemoteDBClient", &mut stat_handles.queue_duration);
             use RemoteDBClientMessages::*;
@@ -776,7 +785,7 @@ impl RemoteDBClient {
 
     //    #[cfg(test)] // do NOT mark this as test only as the integration tests don't compile with 'test' flag (!?)
     pub fn mk_mock(url: &str) -> RemoteDBClient {
-        let (tx, rx) = channel(10);
+        let (tx, rx) = async_channel::bounded(10);
         let stat_registry = ExportedStatRegistry::new("testing", std::time::Instant::now());
         RemoteDBClient {
             urls: MakeDbUrl {
