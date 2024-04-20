@@ -16,6 +16,7 @@ servers = [
     "nyc1.topology.netdebug.com",
     "dal1.topology.netdebug.com",
     "bay1.topology.netdebug.com",
+    "sea1.topology.netdebug.com",
 ]
 
 
