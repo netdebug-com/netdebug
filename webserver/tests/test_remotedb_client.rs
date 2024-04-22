@@ -12,7 +12,6 @@ use libconntrack_wasm::{AggregatedGatewayPingData, ConnectionMeasurements, Netwo
 use libwebserver::remotedb_client::{
     RemoteDBClient, RemoteDBClientMessages, StorageSourceType, NETWORK_INTERFACE_STATE_TABLE_NAME,
 };
-use tokio::sync::mpsc;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client as PostgresClient, Row};
 use uuid::Uuid;
@@ -126,7 +125,7 @@ async fn do_test_store_dns_entries(remotedb_client: &RemoteDBClient, client: &Po
         },
     ];
     let uuid = Uuid::from_u128(0x1111_2222_3333_4444_5555);
-    let (tx, mut rx) = mpsc::channel(10);
+    let (tx, rx) = async_channel::bounded(10);
     tx.send(
         RemoteDBClientMessages::StoreDnsEntries {
             dns_entries: entries.clone(),
@@ -137,7 +136,7 @@ async fn do_test_store_dns_entries(remotedb_client: &RemoteDBClient, client: &Po
     .await
     .unwrap();
     drop(tx); // need to drop rx otherwise inner_loop won't return
-    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_stat_handles())
+    RemoteDBClient::inner_loop(rx, client, remotedb_client.get_stat_handles())
         .await
         .unwrap();
 
@@ -182,7 +181,7 @@ async fn do_test_store_network_interface_state(
         gateways_ping: HashMap::new(), // unused
     };
     let device_uuid = Uuid::from_u128(0x1111_2222_3333_4444_5555);
-    let (tx, mut rx) = mpsc::channel(10);
+    let (tx, rx) = async_channel::bounded(10);
     tx.send(
         RemoteDBClientMessages::StoreNetworkInterfaceState {
             network_interface_state: state.clone(),
@@ -193,7 +192,7 @@ async fn do_test_store_network_interface_state(
     .await
     .unwrap();
     drop(tx); // need to drop rx otherwise inner_loop won't return
-    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_stat_handles())
+    RemoteDBClient::inner_loop(rx.clone(), client, remotedb_client.get_stat_handles())
         .await
         .unwrap();
     let from_db = db_select_all_helper(
@@ -230,7 +229,7 @@ async fn do_test_store_network_interface_state(
         gateways_ping: HashMap::new(), // unused
     };
     let device_uuid = Uuid::from_u128(0x1111_2222_3333_4444_5555);
-    let (tx, mut rx) = mpsc::channel(10);
+    let (tx, rx) = async_channel::bounded(10);
     tx.send(
         RemoteDBClientMessages::StoreNetworkInterfaceState {
             network_interface_state: state.clone(),
@@ -241,7 +240,7 @@ async fn do_test_store_network_interface_state(
     .await
     .unwrap();
     drop(tx); // need to drop rx otherwise inner_loop won't return
-    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_stat_handles())
+    RemoteDBClient::inner_loop(rx.clone(), client, remotedb_client.get_stat_handles())
         .await
         .unwrap();
     let from_db = db_select_all_helper(
@@ -273,7 +272,7 @@ async fn do_test_store_aggregated_ping_data(
         rtt_p99_ns: 99_000,
         rtt_max_ns: 100_000,
     }];
-    let (tx, mut rx) = mpsc::channel(10);
+    let (tx, rx) = async_channel::bounded(10);
     tx.send(
         RemoteDBClientMessages::StoreGatewayPingData {
             ping_data: ping_data.clone(),
@@ -283,7 +282,7 @@ async fn do_test_store_aggregated_ping_data(
     .await
     .unwrap();
     drop(tx); // need to drop rx otherwise inner_loop won't return
-    RemoteDBClient::inner_loop(&mut rx, client, remotedb_client.get_stat_handles())
+    RemoteDBClient::inner_loop(rx.clone(), client, remotedb_client.get_stat_handles())
         .await
         .unwrap();
 
