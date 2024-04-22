@@ -1,16 +1,16 @@
 # Places to update
 * `desktop/Cargo.toml`: update the version
-* `electron/package.json`: update the version
-* `electron/src/pages/Home.tsx`: update version and "what's new" section
-* `electron/src/pages/About.tsx`: update version and release notes.
+* `webserver/Cargo.toml`: update the version
+* `frontend/electron/package.json`: update the version
+* `frontend/electron/src/pages/Home.tsx`: update version and "what's new" section
+* `frontend/electron/src/pages/ReleaseNotes.tsx`: update version and release notes.
 
 # Land code and build binaries
 
 * Find the commit you want to use a release:
 * `git checkout COMMIT`
-* For MacOS: ./mac-os-universal-build.sh 
-* For Windows: TODO
-* Copy artifacts to topology server: `scripts/copy-desktop-binaries.sh`. Currently only does MacOS
+* To create the build artifacts, run `./cut-desktop-release.sh` (works on Mac and windows, but not cross-platform building)
+* Copy artifacts to topology server: `scripts/copy-desktop-binaries.sh`. Works for both Mac and windows, but no cross-platform building.
 
 # Tag the Release
 
