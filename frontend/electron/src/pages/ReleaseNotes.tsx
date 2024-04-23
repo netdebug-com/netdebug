@@ -15,6 +15,26 @@ export const ReleaseNotes: React.FC = () => {
   return (
     <ul style={ul_style}>
       <li style={li_top_style}>
+        <b>Release 0.2.5 - Apr 22th, 2024</b>
+        <ul style={ul_style}>
+          <li style={li_style}>
+            {" "}
+            Improved the JSON Flow details rendering to read UI!{" "}
+          </li>
+          <li style={li_style}>
+            {" "}
+            Added PingTree support to ping routers with ICMP Echo
+          </li>
+          <li style={li_style}>
+            {" "}
+            Can now (manually) re-probe flows (TODO: automated)
+          </li>
+          <li style={li_style}>
+            {" "}
+            Periodically export long-lived flows (not just on evict)
+          </li>
+          <li style={li_style}> Added Seattle webtest server</li>
+        </ul>
         <b>Release 0.2.4 - Mar 26th, 2024</b>
         <ul style={ul_style}>
           <li style={li_style}>

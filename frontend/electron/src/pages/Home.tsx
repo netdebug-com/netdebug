@@ -116,14 +116,18 @@ const Home: React.FC = () => {
           <Stack spacing={2} direction="row" useFlexGap>
             <Item sx={{ width: "45%", textAlign: "left" }}>
               <b>
-                <em>What's New with v0.2.4</em>{" "}
+                <em>What's New with v0.2.5</em>{" "}
               </b>
               <ul>
                 <li>
-                  Fix bug that missed packets if IP addresses change (e.g.,
-                  temporary IPv6 address)
+                  Improved the JSON{" "}
+                  <Link to={"/flows/by_flow"}>Flow details</Link> rendering to
+                  read UI!
                 </li>
-                <li>Export gateway ping and uplink changes to backend</li>
+                <li>
+                  Periodically export long-lived flows (not just on evict)
+                </li>
+                <li> Added Seattle webtest server</li>
                 <li>
                   See full <Link to={"/about"}>Release Notes</Link>
                 </li>

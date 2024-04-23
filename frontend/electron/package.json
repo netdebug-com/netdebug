@@ -1,7 +1,7 @@
 {
     "name": "desktop",
     "productName": "NetDebug",
-    "version": "0.2.4",
+    "version": "0.2.5",
     "description": "NetDebug Desktop Application",
     "main": ".webpack/main",
     "scripts": {

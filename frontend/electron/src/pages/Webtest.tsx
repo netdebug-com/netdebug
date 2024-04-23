@@ -10,6 +10,7 @@ import { useState } from "react";
 function getVantageUrl(vantagePoint: string) {
   const urlSuffix = "topology.netdebug.com/webtest_8338550042";
   switch (vantagePoint) {
+    case "sea1":
     case "bay1":
     case "nyc1":
       return `https://${vantagePoint}.${urlSuffix}`;
@@ -43,6 +44,7 @@ export default function Webtest() {
             label="Server Location"
             fullWidth
           >
+            <MenuItem value="sea1">Seattle</MenuItem>
             <MenuItem value="bay1">SF Bay Area</MenuItem>
             <MenuItem value="dal1">Texas</MenuItem>
             <MenuItem value="nyc1">New York</MenuItem>
