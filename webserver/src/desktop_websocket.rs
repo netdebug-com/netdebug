@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::{
     context::Context,
+    organizations::NETDEBUG_EMPLOYEE_ORG_ID,
     remotedb_client::{RemoteDBClientMessages, RemoteDBClientSender, StorageSourceType},
 };
 
@@ -28,13 +29,26 @@ pub async fn handle_desktop_websocket(
     user_agent: String,
     addr: SocketAddr,
 ) {
-    info!("DesktopWebsocket connection from {}", addr);
+    info!(
+        "DesktopWebsocket connection from {} :: uuid = {}",
+        addr, device_uuid
+    );
     let (ws_tx, mut ws_rx) = websocket.split();
     let ws_tx = spawn_websocket_writer(ws_tx, DEFAULT_CHANNEL_BUFFER_SIZE, addr.to_string()).await;
     let (topology_server, remotedb_client) = {
         let lock = context.read().await;
         (lock.topology_server.clone(), lock.remotedb_client.clone())
     };
+    if let Some(remotedb_client) = remotedb_client.clone() {
+        log_device_connection(
+            remotedb_client,
+            context.clone(),
+            device_uuid,
+            user_agent.clone(),
+            addr,
+        )
+        .await;
+    }
 
     /*
      * Unwrap the layering here:
@@ -74,6 +88,31 @@ pub async fn handle_desktop_websocket(
         }
     }
     info!("DesktopWebsocket connection from {} closing", addr);
+}
+
+/// Tell the remotedb_client about this connection so it can log it and create the device entry if necessary
+///
+/// TODO: include auth components and return an error if the auth components don't check out
+async fn log_device_connection(
+    remotedb_client: RemoteDBClientSender,
+    _context: Context,
+    device_uuid: Uuid,
+    user_agent: String,
+    addr: SocketAddr,
+) {
+    try_send_or_log!(
+        remotedb_client,
+        "handle_register_device",
+        RemoteDBClientMessages::LogDeviceConnect {
+            device_uuid,
+            // TODO: add a way for the device to communicate it's organization to the server
+            // with the appropriate auth
+            // For now, default to all devices being NETDEBUG_EMPLOYEES just to keep things separated
+            organization: NETDEBUG_EMPLOYEE_ORG_ID,
+            description: user_agent,
+            addr
+        }
+    );
 }
 
 async fn handle_desktop_message(

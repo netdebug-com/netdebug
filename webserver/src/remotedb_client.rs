@@ -1,6 +1,7 @@
 use std::{
     error::Error,
     fmt::{Debug, Display},
+    net::SocketAddr,
     time::Duration,
 };
 
@@ -8,6 +9,7 @@ use chrono::{DateTime, Utc};
 use common::test_utils::test_dir;
 use common_wasm::timeseries_stats::{ExportedStatRegistry, StatHandleDuration, StatType, Units};
 use futures::pin_mut;
+use gui_types::OrganizationId;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use libconntrack::utils::PerfMsgCheck;
@@ -53,6 +55,7 @@ pub struct RemoteDBClientStatHandles {
     pub store_network_interface_state_duration: StatHandleDuration,
     pub store_gateway_ping_data_duration: StatHandleDuration,
     pub store_dns_entries_duration: StatHandleDuration,
+    pub handle_log_device: StatHandleDuration,
 }
 
 /// CREATE TABLE desktop_counters (
@@ -143,6 +146,13 @@ pub enum RemoteDBClientMessages {
     StoreDnsEntries {
         dns_entries: Vec<DnsTrackerEntry>,
         device_uuid: Uuid,
+    },
+    LogDeviceConnect {
+        device_uuid: Uuid,
+        // defaults to '1' for the beta program
+        organization: OrganizationId,
+        description: String,
+        addr: SocketAddr,
     },
 }
 
@@ -264,6 +274,11 @@ impl RemoteDBClient {
                 ),
                 store_dns_entries_duration: stats.add_duration_stat(
                     "remotedb_client_store_dns_entries_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
+                handle_log_device: stats.add_duration_stat(
+                    "remotedb_client_handle_log_device_duration",
                     Units::Microseconds,
                     [StatType::AVG, StatType::MAX, StatType::COUNT],
                 ),
@@ -436,6 +451,22 @@ impl RemoteDBClient {
                     let _stat_perf_recorder =
                         stat_handles.store_dns_entries_duration.get_raii_recorder();
                     Self::handle_store_dns_entries(client, dns_entries, device_uuid).await
+                }
+                LogDeviceConnect {
+                    device_uuid,
+                    organization,
+                    description,
+                    addr,
+                } => {
+                    let _stat_perf_recorder = stat_handles.handle_log_device.get_raii_recorder();
+                    Self::handle_log_device_connect(
+                        client,
+                        organization,
+                        device_uuid,
+                        description,
+                        addr,
+                    )
+                    .await
                 }
             }?;
         }
@@ -838,6 +869,11 @@ impl RemoteDBClient {
                     Units::Microseconds,
                     [StatType::AVG, StatType::MAX, StatType::COUNT],
                 ),
+                handle_log_device: stat_registry.add_duration_stat(
+                    "test_store_dns_entries_duration",
+                    Units::Microseconds,
+                    [StatType::AVG, StatType::MAX, StatType::COUNT],
+                ),
             },
         }
     }
@@ -887,6 +923,41 @@ impl RemoteDBClient {
         // Why allow negative!?
         let count = rows.first().unwrap().get::<_, i64>(0);
         Ok(count)
+    }
+
+    /// A device has just connected to the webserver; check it against the 'devices' table
+    /// and if it's not there, create an entry for it.
+    ///
+    /// Also log this device in the 'device_connections' table to show where it's connected from
+    ///
+    /// TODO: implement device authentication here and have it return a thumbs up/down for if this device is
+    /// authenticated
+    pub async fn handle_log_device_connect(
+        client: &Client,
+        organization: &i64,
+        device_uuid: &Uuid,
+        description: &str,
+        addr: &SocketAddr,
+    ) -> Result<(), tokio_postgres::Error> {
+        // the 'ON CONFLICT DO NOTHING' says "if this entry already exists, do nothing"
+        // this simplifies our logic to insert into the table if this device does not exist
+        client
+            .query(
+                &format!(
+                    // UUID is the primary key
+                    "INSERT INTO {} (uuid, organization, name, description) 
+        VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+                    DEVICE_TABLE_NAME
+                ),
+                &[
+                    device_uuid,
+                    &organization,
+                    &addr.ip().to_string(), // as default 'name'
+                    &description,           // as default 'description'
+                ],
+            )
+            .await?;
+        Ok(())
     }
 }
 

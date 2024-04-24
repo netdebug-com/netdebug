@@ -224,6 +224,7 @@ impl TopologyServerConnection {
             .header("Host", url.authority())
             .header("User-Agent", "NetDebug Desktop version x.y.z")
             .header(X_NETDEBUG_DEVICE_UUID_HEADER, device_uuid_header)
+            // TODO: add some auth headers/info here
             .header("Authorization", auth_header)
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
