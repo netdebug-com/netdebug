@@ -213,6 +213,7 @@ pub struct TrafficStats {
     /// Total packets
     packets: u64,
     /// Lost bytes, as indicated by SACK blocks. None for non-TCP connections
+    /// No loss is represented as `None`. We should never see Some(0)
     lost_bytes: Option<u64>,
     /// Timestamp of first packet
     first_time: DateTime<Utc>,

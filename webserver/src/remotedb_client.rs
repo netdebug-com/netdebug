@@ -94,6 +94,12 @@ pub enum RemoteDBClientError {
     DbInvariateError { err: String },
     #[error("PermissionDenied: {err}")]
     PermissionDenied { err: String },
+    #[error("Invalid IP Address format from DB column")]
+    InvalidIpFormat(#[from] std::net::AddrParseError),
+    #[error("Cannot parse via serde_json")]
+    InvalidJson(#[from] serde_json::Error),
+    #[error("Column does not exist")]
+    NoSuchColumn { col_name: String },
 }
 
 impl Display for StorageSourceType {

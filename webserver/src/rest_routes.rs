@@ -1,21 +1,56 @@
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{Response, StatusCode},
     response::IntoResponse,
     Json,
 };
 use axum_login::AuthUser;
+use chrono::{DateTime, Utc};
 use gui_types::{PublicDeviceDetails, PublicDeviceInfo, PublicOrganizationInfo};
+use libconntrack_wasm::ConnectionMeasurements;
 use log::warn;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     devices::{DeviceDetails, DeviceInfo},
+    flows::flow_queries,
     mockable_dbclient::MockableDbClient,
     organizations::OrganizationInfo,
     users::{AuthSession, NetDebugUser},
 };
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimeRangeQueryParams {
+    pub start: Option<DateTime<Utc>>,
+    pub end: Option<DateTime<Utc>>,
+}
+
+impl TimeRangeQueryParams {
+    pub fn to_sql_where(&self) -> String {
+        let mut parts = Vec::new();
+        // string formatting for SQL is save here, because we use
+        if let Some(start) = self.start {
+            // the timestamp will be well-formed since we are using DateTime
+            parts.push(format!(
+                "start_tracking_time >= '{}'",
+                start.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+            ));
+        }
+        if let Some(end) = self.end {
+            parts.push(format!(
+                "last_packet_time <= '{}'",
+                end.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+            ));
+        }
+        if parts.is_empty() {
+            "".to_owned()
+        } else {
+            format!("({})", parts.join(" AND "))
+        }
+    }
+}
 
 fn check_user(opt_user: Option<NetDebugUser>) -> Result<NetDebugUser, Response<Body>> {
     match opt_user {
@@ -118,6 +153,27 @@ pub async fn get_device(
     }
 }
 
+pub async fn get_device_flows(
+    Path(uuid): Path<Uuid>,
+    Query(params): Query<TimeRangeQueryParams>,
+    auth_session: AuthSession,
+    State(client): State<MockableDbClient>,
+) -> Result<Json<Vec<ConnectionMeasurements>>, Response<Body>> {
+    let user = check_user(auth_session.user)?;
+    match flow_queries(client.get_client(), &user, uuid, params, &[]).await {
+        Ok(measurements) => Ok(Json(measurements)),
+        Err(e) => {
+            warn!("/api/get_device_flows/{}: {}", uuid, e);
+            // TODO: don't return the raw error to caller
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Backend database error: {}", e),
+            )
+                .into_response())
+        }
+    }
+}
+
 pub async fn get_organization_info(
     auth_session: AuthSession,
     State(client): State<MockableDbClient>,
@@ -149,4 +205,61 @@ pub async fn get_organization_info(
         };
     let pub_org: PublicOrganizationInfo = organization.into();
     Ok(Json(pub_org))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_time_range_query_param() {
+        assert_eq!(
+            TimeRangeQueryParams {
+                start: None,
+                end: None,
+            }
+            .to_sql_where(),
+            ""
+        );
+        assert_eq!(
+            TimeRangeQueryParams {
+                start: Some(
+                    DateTime::parse_from_rfc3339("2024-01-05T12:34:56.123Z")
+                        .unwrap()
+                        .into()
+                ),
+                end: None,
+            }
+            .to_sql_where(),
+            "(start_tracking_time >= '2024-01-05T12:34:56.123Z')"
+        );
+        assert_eq!(
+            TimeRangeQueryParams {
+                start: None,
+                end: Some(
+                    DateTime::parse_from_rfc3339("2024-01-05T12:34:56.123Z")
+                        .unwrap()
+                        .into()
+                ),
+            }
+            .to_sql_where(),
+            "(last_packet_time <= '2024-01-05T12:34:56.123Z')"
+        );
+        assert_eq!(
+            TimeRangeQueryParams {
+                start: Some(
+                    DateTime::parse_from_rfc3339("2024-02-02T01:01:01.123456Z")
+                        .unwrap()
+                        .into()
+                ),
+                end: Some(
+                    DateTime::parse_from_rfc3339("2024-01-05T12:34:56.123Z")
+                        .unwrap()
+                        .into()
+                ),
+            }
+            .to_sql_where(),
+            "(start_tracking_time >= '2024-02-02T01:01:01.123456Z' AND last_packet_time <= '2024-01-05T12:34:56.123Z')"
+        );
+    }
 }

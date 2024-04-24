@@ -2,6 +2,7 @@ pub mod congestion_analysis;
 pub mod context;
 pub mod desktop_websocket;
 pub mod devices;
+pub mod flows;
 pub mod http_routes;
 pub mod mockable_dbclient;
 pub mod organizations;

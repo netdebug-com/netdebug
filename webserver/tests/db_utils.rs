@@ -4,7 +4,10 @@ use axum::Router;
 use axum_login::tower_sessions::cookie::{self, Cookie};
 use axum_login::tower_sessions::{MemoryStore, SessionManagerLayer};
 use axum_login::AuthManagerLayerBuilder;
+use common::test_utils::test_dir;
+use common_wasm::{PingtreeUiResult, ProbeReportSummary};
 use gui_types::OrganizationId;
+use http_body_util::BodyExt;
 use libconntrack_wasm::ConnectionMeasurements;
 use libwebserver::context::make_test_context;
 use libwebserver::http_routes::{
@@ -209,6 +212,24 @@ pub async fn add_fake_devices(db_client: &Client) {
     }
 }
 
+pub fn get_alice_dev1_uuid() -> Uuid {
+    mk_uuid_from_string(FAKE_PEOPLE_DATA[0].0)
+}
+
+// also see add_fake_connection_logs
+pub fn get_expected_fake_connection_logs_alice() -> Vec<ConnectionMeasurements> {
+    let org_id = FAKE_PEOPLE_DATA[0].1;
+    let mut m1 = ConnectionMeasurements::make_mock_with_ips(
+        &format!("{}.{}.{}.{}", org_id, org_id, org_id, org_id),
+        "128.8.128.38",
+    );
+    let m2 = m1.clone();
+    // The mock by default sets lost_bytes= 1500; make this flow 'good' by marking it zero
+    m1.tx_stats.lost_bytes = None;
+    m1.key.local_l4_port = 6667; // and give it a different source port
+    vec![m1, m2]
+}
+
 pub async fn add_fake_connection_logs(db_client: &Client) -> Result<(), tokio_postgres::Error> {
     // make two flows for each person; one happy, one sad
     for (name, org_id) in FAKE_PEOPLE_DATA {
@@ -219,7 +240,7 @@ pub async fn add_fake_connection_logs(db_client: &Client) -> Result<(), tokio_po
         );
         let m2 = m1.clone();
         // The mock by default sets lost_bytes= 1500; make this flow 'good' by marking it zero
-        m1.tx_stats.lost_bytes = Some(0);
+        m1.tx_stats.lost_bytes = None;
         m1.key.local_l4_port = 6667; // and give it a different source port
         for m in &[m1, m2] {
             RemoteDBClient::handle_store_connection_measurement(
@@ -232,6 +253,44 @@ pub async fn add_fake_connection_logs(db_client: &Client) -> Result<(), tokio_po
         }
     }
     Ok(())
+}
+
+// also see add_fake_connection_logs_for_flow_query_test
+pub fn get_expected_fake_connection_log_for_flow_query_alice() -> ConnectionMeasurements {
+    let org_id = FAKE_PEOPLE_DATA[0].1;
+    let mut m1 = ConnectionMeasurements::make_mock_with_ips(
+        &format!("{}.{}.{}.{}", org_id, org_id, org_id, org_id),
+        "128.8.128.38",
+    );
+    m1.key.local_l4_port = 4242;
+    m1.tx_stats.bytes = 8420;
+    m1.tx_stats.pkts = 10;
+
+    let json = std::fs::read_to_string(test_dir(
+        "libconntrack",
+        "tests/data/probe-report-summary.json",
+    ))
+    .unwrap();
+    m1.probe_report_summary = serde_json::from_str::<ProbeReportSummary>(&json).unwrap();
+    let json =
+        std::fs::read_to_string(test_dir("libconntrack", "tests/data/pingtrees.json")).unwrap();
+    m1.pingtrees = serde_json::from_str::<Vec<PingtreeUiResult>>(&json).unwrap();
+    m1
+}
+
+pub async fn add_fake_connection_logs_for_flow_query_test(
+    db_client: &Client,
+) -> Result<ConnectionMeasurements, tokio_postgres::Error> {
+    let device_uuid = &get_alice_dev1_uuid();
+    let m1 = get_expected_fake_connection_log_for_flow_query_alice();
+    RemoteDBClient::handle_store_connection_measurement(
+        db_client,
+        &m1,
+        device_uuid,
+        &StorageSourceType::Desktop,
+    )
+    .await?;
+    Ok(m1)
 }
 
 pub async fn get_auth_token_from_rest_router(router: Router, user: &str) -> String {
@@ -278,6 +337,15 @@ pub async fn get_resp_from_rest_router(
         .unwrap();
     println!("Making request {:?}", request);
     router.oneshot(request).await.unwrap()
+}
+
+pub async fn response_to_bytes(resp: Response<Body>) -> Vec<u8> {
+    resp.into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec()
 }
 
 pub fn get_session_cookie(res: &Response<Body>) -> Option<Result<Cookie, cookie::ParseError>> {
