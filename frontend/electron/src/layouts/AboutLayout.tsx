@@ -9,6 +9,7 @@ import { Link, Outlet } from "react-router-dom";
 const ABOUT_INFOS: NavInfo[] = [
   { label: "Release Notes", to: "", exactMatch: true },
   { label: "Internal Counters", to: "counters" },
+  { label: "Device", to: "about_device" },
 ];
 
 const AboutNav: React.FC = () => {

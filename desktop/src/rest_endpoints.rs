@@ -9,7 +9,7 @@ use axum::{
     extract::{Path, State},
     http::{Response, StatusCode},
     response::IntoResponse,
-    Router,
+    Json, Router,
 };
 use axum::{response, routing};
 use common_wasm::timeseries_stats::{CounterProvider, CounterProviderWithTimeUpdate};
@@ -51,6 +51,7 @@ pub fn setup_axum_router() -> Router<Arc<Trackers>> {
         .make_span_with(DefaultMakeSpan::new().level(tracing::Level::DEBUG));
     Router::new()
         .route("/api/get_counters", routing::get(handle_get_counters))
+        .route("/api/get_device_uuid", routing::get(handle_get_device_uuid))
         .route("/api/get_flows", routing::get(handle_get_flows))
         .route(
             "/api/get_one_flow/:conn_id",
@@ -97,6 +98,16 @@ pub async fn handle_get_counters(State(trackers): State<Arc<Trackers>>) -> Strin
         locked_registries.append_counters(&mut map);
     }
     serde_json::to_string_pretty(&map).unwrap()
+}
+
+// return the UUID of the device
+// If run from electron, this will always be configured
+pub async fn handle_get_device_uuid(State(trackers): State<Arc<Trackers>>) -> Json<String> {
+    if let Some(uuid) = trackers.device_uuid {
+        Json(uuid.to_string())
+    } else {
+        Json("ERR: Unknown Device UUID - broken config!?".to_string())
+    }
 }
 
 // TODO: for all teh handle_FOO handlers. Instead of returning empty on an error, we should
