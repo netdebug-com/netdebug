@@ -131,6 +131,14 @@ impl NetDebugUser {
     pub fn check_org_superuser(&self) -> bool {
         self.organization_id == NETDEBUG_EMPLOYEE_ORG_ID
     }
+
+    pub fn make_internal_superuser() -> Self {
+        NetDebugUser {
+            user_id: "netdebug_webserver_user".to_string(),
+            organization_id: NETDEBUG_EMPLOYEE_ORG_ID,
+            session_key: Vec::new(),
+        }
+    }
 }
 
 /// Translation layer to tell Axum how to get our user's IDs and session auth token
