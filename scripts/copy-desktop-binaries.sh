@@ -18,7 +18,7 @@ if test "$os" == "Darwin"; then
         scp frontend/electron/out/make/zip/darwin/universal/RELEASES.json root@${dest}.topology.netdebug.com:updates_dir/darwin/universal/
         scp frontend/electron/out/make/*.dmg root@${dest}.topology.netdebug.com:updates_dir/darwin/universal/
 	# create latest symlink
-	ssh root@${dest}.topology.netdebug.com "cd updates_dir/darwin/universal/ && ln -sf ${dmg} desktop-latest.zip" 
+	ssh root@${dest}.topology.netdebug.com "cd updates_dir/darwin/universal/ && ln -sf ${dmg} desktop-latest.dmg" 
     done
 elif test "$os" == MINGW64_NT-10.0-22631 ; then 
     win_out=frontend/electron/out/make/squirrel.windows/x64
