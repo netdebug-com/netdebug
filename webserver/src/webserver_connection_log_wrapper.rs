@@ -1,4 +1,5 @@
 use libconntrack::{send_or_log, topology_client::DataStorageSender};
+use libconntrack_wasm::IpProtocol;
 use log::{debug, warn};
 use tokio::sync::mpsc::channel;
 
@@ -23,6 +24,13 @@ pub fn spawn_webserver_connection_log_wrapper(
                 StoreConnectionMeasurements {
                     connection_measurements,
                 } => {
+                    if connection_measurements.key.ip_proto == IpProtocol::ICMP
+                        || connection_measurements.key.ip_proto == IpProtocol::ICMP6
+                    {
+                        // Apparently the equinix servers are exposed to *a lot* of icmp echo's hitting it.
+                        // If we export all of them, they flood the DB, so lets ignore them.
+                        continue;
+                    }
                     send_or_log!(
                         remotedb_client,
                         "handle_store",
