@@ -7,7 +7,9 @@ use axum::{
 };
 use axum_login::AuthUser;
 use chrono::{DateTime, Utc};
-use gui_types::{PublicDeviceDetails, PublicDeviceInfo, PublicOrganizationInfo};
+use gui_types::{
+    FirstHopPacketLossReportEntry, PublicDeviceDetails, PublicDeviceInfo, PublicOrganizationInfo,
+};
 use libconntrack_wasm::ConnectionMeasurements;
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -15,6 +17,7 @@ use uuid::Uuid;
 
 use crate::{
     devices::{DeviceDetails, DeviceInfo},
+    first_hop_analysis::first_hop_worst_n_by_packet_loss,
     flows::flow_queries,
     mockable_dbclient::MockableDbClient,
     organizations::OrganizationInfo,
@@ -28,19 +31,27 @@ pub struct TimeRangeQueryParams {
 }
 
 impl TimeRangeQueryParams {
+    /// for desktop_connections
     pub fn to_sql_where(&self) -> String {
+        self.to_sql_where_with_keys("start_tracking_time", "last_packet_time")
+    }
+
+    /// for other tables
+    pub fn to_sql_where_with_keys(&self, start_key: &str, end_key: &str) -> String {
         let mut parts = Vec::new();
         // string formatting for SQL is save here, because we use
         if let Some(start) = self.start {
             // the timestamp will be well-formed since we are using DateTime
             parts.push(format!(
-                "start_tracking_time >= '{}'",
+                "{} >= '{}'",
+                start_key,
                 start.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
             ));
         }
         if let Some(end) = self.end {
             parts.push(format!(
-                "last_packet_time <= '{}'",
+                "{} <= '{}'",
+                end_key,
                 end.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
             ));
         }
@@ -205,6 +216,31 @@ pub async fn get_organization_info(
         };
     let pub_org: PublicOrganizationInfo = organization.into();
     Ok(Json(pub_org))
+}
+
+/// Query for the worst devices by packet_loss for this users's org
+pub async fn get_first_hop_top_five_worst_by_packet_loss(
+    auth_session: AuthSession,
+    Query(params): Query<TimeRangeQueryParams>,
+    State(client): State<MockableDbClient>,
+) -> Result<Json<Vec<FirstHopPacketLossReportEntry>>, Response<Body>> {
+    let client = client.get_client();
+    const N: u32 = 5; // const for now
+    let user = check_user(auth_session.user)?;
+    match first_hop_worst_n_by_packet_loss(&client, N, user.organization_id, &params).await {
+        Ok(data) => Ok(Json(data)),
+        Err(e) => {
+            warn!(
+                "Problem running first_hop_worst_n_by_packet_loss(client, n={}, org={}, time={:?}) :: {}",
+                N, user.organization_id, params, e
+            );
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Database Problem".to_string(),
+            )
+                .into_response())
+        }
+    }
 }
 
 #[cfg(test)]

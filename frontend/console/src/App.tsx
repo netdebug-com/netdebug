@@ -16,7 +16,7 @@ if (!CLERK_PUBLISHABLE_KEY) {
 if (import.meta.env.MODE == "development") {
   console.log("Running in development mode");
 }
-import Home from "./pages/Home";
+import Home, { worstDevicesPacketLossLoader } from "./pages/Home";
 import About from "./pages/About";
 import Devices, { devicesLoader } from "./pages/Devices";
 import { RouterProvider } from "react-router-dom";
@@ -40,7 +40,13 @@ const router = createBrowserRouter(
       element={<RootLayout />}
       errorElement={<DefaultErrorElement />}
     >
-      <Route index element={<Home />} errorElement={<DefaultErrorElement />} />,
+      <Route
+        index
+        element={<Home />}
+        loader={worstDevicesPacketLossLoader}
+        errorElement={<DefaultErrorElement />}
+      />
+      ,
       <Route
         path="devices/device/:uuid"
         loader={deviceLoader}

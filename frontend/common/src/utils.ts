@@ -2,6 +2,7 @@
 
 import { SxProps } from "@mui/material";
 import { ConnectionKey, ConnectionMeasurements } from "./netdebug_types";
+import { GridSortCellParams } from "@mui/x-data-grid";
 
 export function desktop_api_url(path: string): string {
   return "http://localhost:33434/api/" + path;
@@ -348,3 +349,28 @@ export function prettyPrintDuration(start_ns: number, end_ns: number): string {
   // if we got here, we just have <60 seconds, so let's just use prettyPrintSiUnits()
   return prettyPrintSiUnits(duration / 1_000_000_000, "s", 2);
 }
+
+// siktiri boktan javascript : defaults to sorting as Strings instead of numbers
+// so that 0.9 comes ahead of 1.1
+export const numberSorter = (
+  a: number,
+  b: number,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  p1: GridSortCellParams<number>,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  p2: GridSortCellParams<number>,
+): number => {
+  return a - b;
+};
+export const percentStringSorter = (
+  a_percent: string,
+  b_percent: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  p1: GridSortCellParams<string>,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  p2: GridSortCellParams<string>,
+): number => {
+  const a = Number(a_percent.replace("%", ""));
+  const b = Number(b_percent.replace("%", ""));
+  return a - b;
+};

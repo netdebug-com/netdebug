@@ -17,6 +17,7 @@ export const deviceLoader = async ({ params }: DeviceLoaderArgs) => {
   const res = await fetchAndCheckResultWithAuth(url);
   return await res.json();
 };
+
 export function Device() {
   const { uuid } = useParams();
   const device = useLoaderData() as PublicDeviceDetails;
