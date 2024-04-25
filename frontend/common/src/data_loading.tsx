@@ -73,6 +73,20 @@ export function renderDataLoadingState<T>(
   }
 }
 
+export function renderIpStringData(state: DataLoadingState<string>) {
+  if (state.isPending) {
+    return <em>Loading ...</em>;
+  } else if (state.error) {
+    return <ErrorMessage msg={"ERROR: " + state.error} />;
+  } else if (state.data === "0.0.0.0") {
+    return <ErrorMessage msg={"No public IP"} />;
+  } else if (state.data) {
+    return <em>{state.data.replace(/^::ffff:/, "")}</em>;
+  } else {
+    return "Loaded data is null??";
+  }
+}
+
 // like loadData(), but delays the actual loading by 1sec. Allows one to
 // see what the page looks like with the loading indicator
 export function forTesting_loadDataWithDelay<T>(

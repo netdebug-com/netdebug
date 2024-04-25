@@ -5,8 +5,8 @@ import {
   DataLoadingState,
   loadData as loadData,
   renderDataLoadingState,
+  renderIpStringData,
 } from "../common/data_loading";
-import { ErrorMessage } from "../common/components/ErrorMessage";
 import Stack from "@mui/material/Stack";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
@@ -42,20 +42,6 @@ ChartJS.register(
   LineElement,
   Title,
 );
-
-function renderIpStringData(state: DataLoadingState<string>) {
-  if (state.isPending) {
-    return <em>Loading ...</em>;
-  } else if (state.error) {
-    return <ErrorMessage msg={"ERROR: " + state.error} />;
-  } else if (state.data === "0.0.0.0") {
-    return <ErrorMessage msg={"No public IP"} />;
-  } else if (state.data) {
-    return <em>{state.data.replace(/^::ffff:/, "")}</em>;
-  } else {
-    return "Loaded data is null??";
-  }
-}
 
 const Item = styled(Paper)(({ theme }) => ({
   backgroundColor: theme.palette.mode === "dark" ? "#1A2027" : "#fff",

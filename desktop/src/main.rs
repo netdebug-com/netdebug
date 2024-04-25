@@ -47,6 +47,7 @@ pub struct Trackers {
     // The +Send + Sync boundss are needed because PingTreeManager is an async trait
     pub pingtree_manager: Option<Arc<dyn PingTreeManager + Send + Sync>>,
     pub counter_registries: Option<SharedExportedStatRegistries>,
+    pub device_uuid: Option<Uuid>,
 }
 
 impl Trackers {
@@ -169,6 +170,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let raw_sock = libconntrack::pcap::bind_writable_pcap(local_addrs.clone());
     let prober_tx = spawn_raw_prober(raw_sock, MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE);
 
+    trackers.device_uuid = Some(config_data.device_uuid);
     let (topology_rpc_client, data_storage_client) = TopologyServerConnection::spawn(
         args.topology_server_url.clone(),
         MAX_MSGS_PER_CONNECTION_TRACKER_QUEUE,

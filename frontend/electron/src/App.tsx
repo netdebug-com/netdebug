@@ -35,6 +35,7 @@ import FlowsByHostLatency, {
 } from "./pages/FlowsByHost";
 import { ReleaseNotes } from "./pages/ReleaseNotes";
 import Webtest from "./pages/Webtest";
+import { AboutDevice } from "./pages/AboutDevice";
 
 const router = createHashRouter(
   createRoutesFromElements(
@@ -117,6 +118,11 @@ const router = createHashRouter(
           path="counters"
           element={<Counters />}
           loader={countersLoader}
+          errorElement={<DefaultErrorElement />}
+        />
+        <Route
+          path="about_device"
+          element={<AboutDevice />}
           errorElement={<DefaultErrorElement />}
         />
       </Route>
