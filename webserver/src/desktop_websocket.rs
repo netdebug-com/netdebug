@@ -1,7 +1,9 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::extract::ws::{self, WebSocket};
+
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
+use gui_types::OrganizationId;
 use libconntrack::{
     send_or_log,
     topology_client::{TopologyRpcMessage, TopologyRpcSender},
@@ -17,9 +19,54 @@ use uuid::Uuid;
 
 use crate::{
     context::Context,
+    devices::DeviceInfo,
     organizations::NETDEBUG_EMPLOYEE_ORG_ID,
-    remotedb_client::{RemoteDBClientMessages, RemoteDBClientSender, StorageSourceType},
+    remotedb_client::{
+        RemoteDBClient, RemoteDBClientMessages, RemoteDBClientSender, StorageSourceType,
+    },
+    secrets_db::Secrets,
+    users::NetDebugUser,
 };
+
+// TODO: add a way for the device to communicate it's organization to the server
+// with the appropriate auth
+// For now, check the DB if the device already exists if it does, return the appropriate
+// org_id, otherwise default to NETDEBUG_EMPLOYEES
+async fn get_organization_id_for_device(
+    secrets: &Secrets,
+    device_uuid: Uuid,
+) -> Option<OrganizationId> {
+    let client = match RemoteDBClient::make_read_only_client(secrets).await {
+        Ok(client) => Arc::new(client),
+        Err(e) => {
+            warn!(
+                "Failed to get DB connection. Closing Websocket connection. {}",
+                e
+            );
+            return None;
+        }
+    };
+    match DeviceInfo::from_uuid(
+        device_uuid,
+        &NetDebugUser::make_internal_superuser(),
+        client,
+    )
+    .await
+    {
+        Ok(Some(device)) => Some(device.organization_id),
+        Ok(None) => {
+            info!(
+                "Websocket connection from device not in DB. Using netdebug org_id. device: {}",
+                device_uuid
+            );
+            Some(NETDEBUG_EMPLOYEE_ORG_ID)
+        }
+        Err(e) => {
+            warn!("Failed to query DB for device {}: {}", device_uuid, e);
+            None
+        }
+    }
+}
 
 const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 4096;
 pub async fn handle_desktop_websocket(
@@ -33,6 +80,17 @@ pub async fn handle_desktop_websocket(
         "DesktopWebsocket connection from {} :: uuid = {}",
         addr, device_uuid
     );
+    // clone secrets so we don't hold the lock acress the await from
+    // make_read_only_client
+    let secrets = context.read().await.secrets.clone();
+    let organization_id = get_organization_id_for_device(&secrets, device_uuid).await;
+    if organization_id.is_none() {
+        // no need to log here, `get_organization_id_for_device()` takes care of that
+        // for us
+        return;
+    }
+    let organization_id = organization_id.unwrap();
+
     let (ws_tx, mut ws_rx) = websocket.split();
     let ws_tx = spawn_websocket_writer(ws_tx, DEFAULT_CHANNEL_BUFFER_SIZE, addr.to_string()).await;
     let (topology_server, remotedb_client) = {
@@ -44,6 +102,7 @@ pub async fn handle_desktop_websocket(
             remotedb_client,
             context.clone(),
             device_uuid,
+            organization_id,
             user_agent.clone(),
             addr,
         )
@@ -69,6 +128,7 @@ pub async fn handle_desktop_websocket(
                             &user_agent,
                             &addr,
                             device_uuid,
+                            organization_id,
                         )
                         .await;
                     }
@@ -97,6 +157,7 @@ async fn log_device_connection(
     remotedb_client: RemoteDBClientSender,
     _context: Context,
     device_uuid: Uuid,
+    organization_id: OrganizationId,
     user_agent: String,
     addr: SocketAddr,
 ) {
@@ -105,16 +166,15 @@ async fn log_device_connection(
         "handle_register_device",
         RemoteDBClientMessages::LogDeviceConnect {
             device_uuid,
-            // TODO: add a way for the device to communicate it's organization to the server
-            // with the appropriate auth
-            // For now, default to all devices being NETDEBUG_EMPLOYEES just to keep things separated
-            organization: NETDEBUG_EMPLOYEE_ORG_ID,
+            organization: organization_id,
             description: user_agent,
             addr
         }
     );
 }
 
+// yes, it's a lot of arguments. But at least they all have a different type
+#[allow(clippy::too_many_arguments)]
 async fn handle_desktop_message(
     topology_server: &TopologyRpcSender,
     remotedb_client: &Option<RemoteDBClientSender>,
@@ -123,6 +183,7 @@ async fn handle_desktop_message(
     user_agent: &str,
     addr: &SocketAddr,
     device_uuid: Uuid,
+    organization_id: OrganizationId,
 ) {
     use DesktopToTopologyServer::*;
     match msg {
@@ -130,7 +191,7 @@ async fn handle_desktop_message(
         StoreConnectionMeasurement {
             connection_measurements: connection_measurement,
             // TODO: put client Info (OS, version, etc.) in the message
-        } => handle_store_measurements(connection_measurement, device_uuid, remotedb_client).await,
+        } => handle_store_measurements(connection_measurement, device_uuid, organization_id, remotedb_client).await,
         InferCongestion {
             connection_measurements,
         } => handle_infer_congestion(ws_tx, connection_measurements, topology_server).await,
@@ -294,6 +355,7 @@ async fn handle_infer_congestion(
 async fn handle_store_measurements(
     connection_measurements: Box<libconntrack_wasm::ConnectionMeasurements>,
     device_uuid: Uuid,
+    organization_id: OrganizationId,
     remotedb_client: &Option<RemoteDBClientSender>,
 ) {
     if let Some(remotedb_client) = remotedb_client {
@@ -303,6 +365,7 @@ async fn handle_store_measurements(
             RemoteDBClientMessages::StoreConnectionMeasurements {
                 connection_measurements,
                 device_uuid,
+                organization_id,
                 source_type: StorageSourceType::Desktop,
             }
         )

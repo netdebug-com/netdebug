@@ -3,7 +3,10 @@ use libconntrack_wasm::IpProtocol;
 use log::{debug, warn};
 use tokio::sync::mpsc::channel;
 
-use crate::remotedb_client::{RemoteDBClientMessages, RemoteDBClientSender, StorageSourceType};
+use crate::{
+    organizations::NETDEBUG_EMPLOYEE_ORG_ID,
+    remotedb_client::{RemoteDBClientMessages, RemoteDBClientSender, StorageSourceType},
+};
 
 /// Simple helper to take ConnectionMeasurement storage request from the *Webserver's* connection
 /// tracker and send them to the remote DB.
@@ -37,6 +40,7 @@ pub fn spawn_webserver_connection_log_wrapper(
                         RemoteDBClientMessages::StoreConnectionMeasurements {
                             connection_measurements,
                             device_uuid,
+                            organization_id: NETDEBUG_EMPLOYEE_ORG_ID,
                             source_type: StorageSourceType::TopologyServer,
                         }
                     )

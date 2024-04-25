@@ -119,6 +119,7 @@ pub enum RemoteDBClientMessages {
     StoreConnectionMeasurements {
         connection_measurements: Box<ConnectionMeasurements>,
         device_uuid: Uuid,
+        organization_id: OrganizationId,
         source_type: StorageSourceType,
     },
     StoreCounters {
@@ -412,6 +413,7 @@ impl RemoteDBClient {
                 StoreConnectionMeasurements {
                     connection_measurements,
                     device_uuid,
+                    organization_id,
                     source_type,
                 } => {
                     let _stat_perf_recorder =
@@ -420,6 +422,7 @@ impl RemoteDBClient {
                         client,
                         connection_measurements,
                         device_uuid,
+                        *organization_id,
                         source_type,
                     )
                     .await
@@ -742,6 +745,7 @@ impl RemoteDBClient {
         client: &Client,
         m: &ConnectionMeasurements,
         device_uuid: &Uuid,
+        organization_id: OrganizationId,
         source_type: &StorageSourceType,
     ) -> Result<(), tokio_postgres::Error> {
         // store a bunch of more complex members as JSON blobs, for now
@@ -782,9 +786,10 @@ impl RemoteDBClient {
                     device_uuid,
                     source_type,
                     pingtrees,
-                    was_evicted
+                    was_evicted,
+                    organization
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 
-                        $14, $15, $16, $17, $18, $19 , $20, $21, $22, $23, $24)"#,
+                        $14, $15, $16, $17, $18, $19 , $20, $21, $22, $23, $24, $25)"#,
                     CONNECTIONS_TABLE_NAME
                 )
                 .as_str(),
@@ -814,6 +819,7 @@ impl RemoteDBClient {
                     &source_type.to_string(),
                     &serde_json::to_string(&m.pingtrees).unwrap(),
                     &m.was_evicted,
+                    &organization_id,
                 ],
             )
             .await?;

@@ -247,6 +247,7 @@ pub async fn add_fake_connection_logs(db_client: &Client) -> Result<(), tokio_po
                 db_client,
                 m,
                 device_uuid,
+                org_id,
                 &StorageSourceType::Desktop,
             )
             .await?;
@@ -287,6 +288,7 @@ pub async fn add_fake_connection_logs_for_flow_query_test(
         db_client,
         &m1,
         device_uuid,
+        FAKE_PEOPLE_DATA[0].1,
         &StorageSourceType::Desktop,
     )
     .await?;
