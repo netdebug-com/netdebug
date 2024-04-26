@@ -626,6 +626,34 @@ export type DesktopToTopologyServer = ({
 } | {
     "tag": "Ping";
 });
+export type FirstHopPacketLossReportEntry = {
+
+    /**
+     * Unique ID of the Device
+     */
+    "device_uuid": string;
+
+    /**
+     * Name of Device
+     */
+    "device_name": (string | null);
+    "device_description": (string | null);
+
+    /**
+     * Number of outgoing ICMP probes sent to first hop device
+     */
+    "probes_sent": U64;
+
+    /**
+     * Number of incoming ICMP responses received back from first hop device
+     */
+    "probes_recv": U64;
+
+    /**
+     * 100 * probes_recv / probes_sent (to make percent, not a fraction)
+     */
+    "percent_loss": F64;
+};
 
 /**
  * The elements of OrganizationInfo that are safe for anyone to read

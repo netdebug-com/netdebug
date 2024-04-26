@@ -1,6 +1,11 @@
 import { PublicDeviceDetails } from "../common";
 
-import { dataGridDefaultSxProp, sortCmpWithNull } from "../common/utils";
+import {
+  dataGridDefaultSxProp,
+  numberSorter,
+  percentStringSorter,
+  sortCmpWithNull,
+} from "../common/utils";
 
 import { Box, Link } from "@mui/material";
 import {
@@ -9,7 +14,6 @@ import {
   GridToolbar,
   GridValueFormatterParams,
   GridValueGetterParams,
-  GridSortCellParams,
 } from "@mui/x-data-grid";
 import { fetchAndCheckResultWithAuth } from "../console_utils";
 import { useLoaderData } from "react-router";
@@ -33,31 +37,6 @@ export const devicesLoader = async () => {
       return sortCmpWithNull(b_badness, a_badness);
     }),
   );
-};
-
-// siktiri boktan javascript : defaults to sorting as Strings instead of numbers
-// so that 0.9 comes ahead of 1.1
-const numberSorter = (
-  a: number,
-  b: number,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  p1: GridSortCellParams<number>,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  p2: GridSortCellParams<number>,
-): number => {
-  return a - b;
-};
-const percentStringSorter = (
-  a_percent: string,
-  b_percent: string,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  p1: GridSortCellParams<string>,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  p2: GridSortCellParams<string>,
-): number => {
-  const a = Number(a_percent.replace("%", ""));
-  const b = Number(b_percent.replace("%", ""));
-  return a - b;
 };
 
 // FYI: https://mui.com/x/api/data-grid/grid-col-def/ for documentation of this madness

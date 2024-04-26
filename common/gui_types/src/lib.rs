@@ -68,6 +68,22 @@ pub struct PublicDeviceDetails {
     pub newest_flow_time: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Serialize, Deserialize, TypeDef)]
+pub struct FirstHopPacketLossReportEntry {
+    #[type_def(type_of = "String")]
+    /// Unique ID of the Device
+    pub device_uuid: Uuid,
+    /// Name of Device
+    pub device_name: Option<String>,
+    pub device_description: Option<String>,
+    /// Number of outgoing ICMP probes sent to first hop device
+    pub probes_sent: u64,
+    /// Number of incoming ICMP responses received back from first hop device
+    pub probes_recv: u64,
+    /// 100 * probes_recv / probes_sent (to make percent, not a fraction)
+    pub percent_loss: f64,
+}
+
 /// A helper type alias. It list all the types that are used in the UI
 /// This is the magic that exports anything with #[derive(TypeDef)] into
 /// netdebug_types.ts
@@ -80,6 +96,7 @@ pub type GuiApiTypes = (
     NetworkInterfaceState,
     ExportedNeighborState,
     DesktopToTopologyServer,
+    FirstHopPacketLossReportEntry,
     PublicOrganizationInfo,
     PublicDeviceInfo,
     PublicDeviceDetails,
