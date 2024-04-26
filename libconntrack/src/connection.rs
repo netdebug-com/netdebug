@@ -163,7 +163,9 @@ pub struct Connection {
     /// Human readable time of the last packet for logging. From packet timestamps
     last_packet_time: DateTime<Utc>,
     /// The last time this flow was exported (i.e., sent to storage)
-    last_export_time: DateTime<Utc>,
+    prev_export_time: Option<DateTime<Utc>>,
+    /// Number of times this connection has been exported to the DB
+    export_count: u64,
     /// data packet sent from the local side, used for probe retransmits
     local_data: Option<OwnedParsedPacket>,
     /// if true, when the next probe round is sent, we don't check the rate
@@ -204,7 +206,8 @@ impl Connection {
             associated_apps: None,
             start_tracking_time: ts,
             last_packet_time: ts,
-            last_export_time: ts,
+            prev_export_time: None,
+            export_count: 0,
             remote_hostname: None,
             traffic_stats: BidirectionalStats::new(
                 std::time::Duration::from_millis(MAX_BURST_RATE_TIME_WINDOW_MILLIS),
@@ -963,9 +966,10 @@ impl Connection {
                 self.generate_probe_report(None, false);
             }
         }
-        libconntrack_wasm::ConnectionMeasurements {
-            tx_stats: self.traffic_stats.tx_stats_summary(now),
-            rx_stats: self.traffic_stats.rx_stats_summary(now),
+
+        let m = libconntrack_wasm::ConnectionMeasurements {
+            tx_stats: self.traffic_stats.alltime_tx_stats_summary(now),
+            rx_stats: self.traffic_stats.alltime_rx_stats_summary(now),
             local_hostname: Some("localhost".to_string()),
             key: self.connection_key.clone(),
             remote_hostname: self.remote_hostname.clone(),
@@ -979,11 +983,27 @@ impl Connection {
             four_way_close_done: self.is_four_way_close_done_or_rst(),
             pingtrees: self.pingtrees.clone(),
             was_evicted: reason == ConnMeasurementReason::Evicted,
-        }
+            rx_stats_since_prev_export: self
+                .traffic_stats
+                .rx_stats_summary_since_prev_and_reset(now),
+            tx_stats_since_prev_export: self
+                .traffic_stats
+                .tx_stats_summary_since_prev_and_reset(now),
+            prev_export_time: self.prev_export_time,
+            export_count: self.export_count,
+        };
+        match reason {
+            ConnMeasurementReason::Evicted | ConnMeasurementReason::PeriodicExport => {
+                self.prev_export_time = Some(now);
+                self.export_count += 1;
+            }
+            ConnMeasurementReason::Other => (),
+        };
+        m
     }
 
-    pub fn set_let_export_time(&mut self, now: DateTime<Utc>) {
-        self.last_export_time = now;
+    pub fn should_export(&self, now: DateTime<Utc>, interval: chrono::Duration) -> bool {
+        now - self.prev_export_time.unwrap_or(self.start_tracking_time) > interval
     }
 }
 
@@ -1369,13 +1389,14 @@ pub mod test {
         assert_eq!(pkts_and_rtt[9].2, None);
         assert_relative_eq!(pkts_and_rtt[10].2.unwrap(), 57.543);
 
-        let m = conn.unwrap().to_connection_measurements(
+        let m = conn.as_mut().unwrap().to_connection_measurements(
             pkts_and_rtt.last().unwrap().0.timestamp,
             None,
-            ConnMeasurementReason::Evicted,
+            ConnMeasurementReason::PeriodicExport,
         );
         let tx_rtt_stat = m
             .tx_stats
+            .clone()
             .rtt_stats_ms
             .expect("tx_rtt_stat should be Some(...)");
         assert_eq!(tx_rtt_stat.num_samples(), 4);
@@ -1386,6 +1407,7 @@ pub mod test {
 
         let rx_rtt_stat = m
             .rx_stats
+            .clone()
             .rtt_stats_ms
             .expect("rx_rtt_stat should be Some(...)");
         assert_eq!(rx_rtt_stat.num_samples(), 2);
@@ -1393,5 +1415,116 @@ pub mod test {
         assert_relative_eq!(rx_rtt_stat.mean(), 0.3605, epsilon = 1e-5);
         assert_relative_eq!(rx_rtt_stat.min(), 0.357, epsilon = 1e-5);
         assert_relative_eq!(rx_rtt_stat.max(), 0.364, epsilon = 1e-5);
+
+        assert_eq!(
+            m.tx_stats_since_prev_export.rtt_stats_ms,
+            m.tx_stats.rtt_stats_ms
+        );
+        assert_eq!(
+            m.rx_stats_since_prev_export.rtt_stats_ms,
+            m.rx_stats.rtt_stats_ms
+        );
+
+        // Export the connection again. The RTT all-time stats are unchanged,
+        // the stats_since_prev_export are reset.
+        let m = conn.unwrap().to_connection_measurements(
+            pkts_and_rtt.last().unwrap().0.timestamp,
+            None,
+            ConnMeasurementReason::Evicted,
+        );
+
+        assert_eq!(m.tx_stats.rtt_stats_ms, Some(tx_rtt_stat));
+        assert_eq!(m.rx_stats.rtt_stats_ms, Some(rx_rtt_stat));
+        assert_eq!(m.tx_stats_since_prev_export.rtt_stats_ms, None);
+        assert_eq!(m.rx_stats_since_prev_export.rtt_stats_ms, None);
+    }
+
+    #[test]
+    fn test_to_connection_measurements_since_prev_export() {
+        let local_addrs = HashSet::from([IpAddr::from_str("192.168.1.238").unwrap()]);
+        let mut helper = Helper::new(local_addrs.clone());
+
+        let mut capture = pcap::Capture::from_file(test_dir(
+            "libconntrack",
+            "tests/normal-conn-syn-and-fin.pcap",
+        ))
+        .unwrap();
+        let mut conn = None;
+        let mut ts = DateTime::UNIX_EPOCH;
+        let mut num_pkts = 0usize;
+        while let Ok(pkt) = capture.next_packet() {
+            let parsed_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
+            let (key, _src_is_local) = parsed_pkt.to_connection_key(&local_addrs).unwrap();
+            ts = parsed_pkt.timestamp;
+            let conn = conn.get_or_insert_with(|| {
+                Connection::new(key.clone(), parsed_pkt.timestamp, mk_stat_handles())
+            });
+            helper.update_conn(conn, parsed_pkt.clone());
+            num_pkts += 1;
+            if num_pkts > 5 {
+                break;
+            }
+        }
+
+        let m = conn.as_mut().unwrap().to_connection_measurements(
+            ts,
+            None,
+            ConnMeasurementReason::PeriodicExport,
+        );
+        assert_eq!(m.prev_export_time, None);
+        assert_eq!(m.export_count, 0);
+        assert_eq!(m.rx_stats.pkts, 2);
+        assert_eq!(m.tx_stats.pkts, 4);
+        assert!(m.rx_stats.rtt_stats_ms.is_some());
+        assert!(m.tx_stats.rtt_stats_ms.is_some());
+        assert_eq!(m.rx_stats_since_prev_export.pkts, 2);
+        assert_eq!(m.tx_stats_since_prev_export.pkts, 4);
+        assert!(m.rx_stats_since_prev_export.rtt_stats_ms.is_some());
+        assert!(m.tx_stats_since_prev_export.rtt_stats_ms.is_some());
+
+        // do another export
+        let m = conn.as_mut().unwrap().to_connection_measurements(
+            ts,
+            None,
+            ConnMeasurementReason::PeriodicExport,
+        );
+        assert_eq!(m.prev_export_time, Some(ts));
+        assert_eq!(m.export_count, 1);
+        assert_eq!(m.rx_stats.pkts, 2);
+        assert_eq!(m.tx_stats.pkts, 4);
+        assert!(m.rx_stats.rtt_stats_ms.is_some());
+        assert!(m.tx_stats.rtt_stats_ms.is_some());
+        assert_eq!(m.rx_stats_since_prev_export.pkts, 0);
+        assert_eq!(m.tx_stats_since_prev_export.pkts, 0);
+        assert!(m.rx_stats_since_prev_export.rtt_stats_ms.is_none());
+        assert!(m.tx_stats_since_prev_export.rtt_stats_ms.is_none());
+        let prev_export_time = ts;
+
+        // add the more packets.
+        while let Ok(pkt) = capture.next_packet() {
+            let parsed_pkt = OwnedParsedPacket::try_from_pcap(pkt).unwrap();
+            let (key, _src_is_local) = parsed_pkt.to_connection_key(&local_addrs).unwrap();
+            ts = parsed_pkt.timestamp;
+            let conn = conn.get_or_insert_with(|| {
+                Connection::new(key.clone(), parsed_pkt.timestamp, mk_stat_handles())
+            });
+            helper.update_conn(conn, parsed_pkt.clone());
+        }
+
+        let m = conn.as_mut().unwrap().to_connection_measurements(
+            ts,
+            None,
+            ConnMeasurementReason::PeriodicExport,
+        );
+        assert_eq!(m.prev_export_time, Some(prev_export_time));
+        assert_eq!(m.export_count, 2);
+        assert_eq!(m.rx_stats.pkts, 5);
+        assert_eq!(m.tx_stats.pkts, 6);
+        assert!(m.rx_stats.rtt_stats_ms.is_some());
+        assert!(m.tx_stats.rtt_stats_ms.is_some());
+        assert_eq!(m.rx_stats_since_prev_export.pkts, 3);
+        assert_eq!(m.tx_stats_since_prev_export.pkts, 2);
+        assert!(m.rx_stats_since_prev_export.rtt_stats_ms.is_some());
+        assert!(m.tx_stats_since_prev_export.rtt_stats_ms.is_some());
     }
 }

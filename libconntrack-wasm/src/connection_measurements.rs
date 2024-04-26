@@ -44,6 +44,22 @@ pub struct ConnectionMeasurements {
     pub rx_stats: TrafficStatsSummary,
     #[serde(default)]
     pub tx_stats: TrafficStatsSummary,
+
+    /// The stats (num bytes, pkts, etc.) since the last time this flow was
+    /// exported to the DB.
+    #[serde(default)]
+    pub rx_stats_since_prev_export: TrafficStatsSummary,
+    /// The stats (num bytes, pkts, etc.) since the last time this flow was
+    /// exported to the DB.
+    #[serde(default)]
+    pub tx_stats_since_prev_export: TrafficStatsSummary,
+    /// The prev time this flow was exported.     
+    #[type_def(type_of = "Option<String>")]
+    pub prev_export_time: Option<DateTime<Utc>>,
+    /// Number of times this flow has been exported
+    #[serde(default)]
+    pub export_count: u64,
+
     /// Pingtrees, that have been iniated and run based on the routers discovered by this connection's
     /// inband probes.
     #[serde(default)]
@@ -102,6 +118,10 @@ impl ConnectionMeasurements {
             last_packet_time: Utc::now(),
             rx_stats: TrafficStatsSummary::make_mock(),
             tx_stats: TrafficStatsSummary::make_mock(),
+            rx_stats_since_prev_export: TrafficStatsSummary::default(),
+            tx_stats_since_prev_export: TrafficStatsSummary::default(),
+            prev_export_time: None,
+            export_count: 0,
             pingtrees: Vec::new(),
             was_evicted: true,
         }

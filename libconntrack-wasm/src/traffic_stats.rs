@@ -213,18 +213,24 @@ pub struct TrafficStats {
     /// Total packets
     packets: u64,
     /// Lost bytes, as indicated by SACK blocks. None for non-TCP connections
-    /// No loss is represented as `None`. We should never see Some(0)
+    /// No loss is represented as `None`. We should never see Soe(0)
     lost_bytes: Option<u64>,
     /// Timestamp of first packet
     first_time: DateTime<Utc>,
     /// Timestamp of last packet
     last_time: DateTime<Utc>,
-    /// Tracks the maximum burst rate
-    max_burst_rate: MaxBurstRate,
+    /// Tracks the maximum burst rate since the beginning of the connection
+    alltime_max_burst_rate: MaxBurstRate,
+    /// Tracks the current max_burst_rate (generally, since the last DB export).
+    since_prev_burst_rate: MaxBurstRate,
     last_5_sec: BucketedTimeSeries<DateTime<Utc>>,
     last_min: BucketedTimeSeries<DateTime<Utc>>,
     last_hour: BucketedTimeSeries<DateTime<Utc>>,
-    rtt_stats_ms: Option<SimpleStats>,
+    alltime_rtt_stats_ms: Option<SimpleStats>,
+    since_prev_rtt_stats_ms: Option<SimpleStats>,
+    prev_bytes: u64,
+    prev_packets: u64,
+    prev_lost_bytes: Option<u64>,
 }
 
 impl TrafficStats {
@@ -241,7 +247,8 @@ impl TrafficStats {
             lost_bytes: None,
             first_time: now,
             last_time: now,
-            max_burst_rate: MaxBurstRate::new(burst_time_window),
+            alltime_max_burst_rate: MaxBurstRate::new(burst_time_window),
+            since_prev_burst_rate: MaxBurstRate::new(burst_time_window),
             last_5_sec: BucketedTimeSeries::new_with_create_time(
                 now,
                 Duration::from_millis(10),
@@ -253,7 +260,11 @@ impl TrafficStats {
                 120,
             ),
             last_hour: BucketedTimeSeries::new_with_create_time(now, Duration::from_secs(30), 120),
-            rtt_stats_ms: None,
+            alltime_rtt_stats_ms: None,
+            since_prev_rtt_stats_ms: None,
+            prev_bytes: 0,
+            prev_packets: 0,
+            prev_lost_bytes: None,
         }
     }
 
@@ -276,7 +287,10 @@ impl TrafficStats {
 
         self.bytes += bytes;
         self.packets += 1;
-        self.max_burst_rate.add_packet_with_time(bytes, timestamp);
+        self.alltime_max_burst_rate
+            .add_packet_with_time(bytes, timestamp);
+        self.since_prev_burst_rate
+            .add_packet_with_time(bytes, timestamp);
         self.last_5_sec.add_value(bytes, timestamp);
         self.last_min.add_value(bytes, timestamp);
         self.last_hour.add_value(bytes, timestamp);
@@ -313,12 +327,21 @@ impl TrafficStats {
     }
 
     pub fn add_rtt_sample(&mut self, rtt_sample: chrono::Duration) {
-        let rtt_stats_ms = self.rtt_stats_ms.get_or_insert_with(SimpleStats::new);
+        let alltime_rtt_stats_ms = self
+            .alltime_rtt_stats_ms
+            .get_or_insert_with(SimpleStats::new);
+        let cur_rtt_stats_ms = self
+            .since_prev_rtt_stats_ms
+            .get_or_insert_with(SimpleStats::new);
         let rtt_millis = rtt_sample.num_nanoseconds().unwrap() as f64 / 1e6;
-        rtt_stats_ms.add_sample(rtt_millis);
+        alltime_rtt_stats_ms.add_sample(rtt_millis);
+        cur_rtt_stats_ms.add_sample(rtt_millis);
     }
 
-    pub fn as_stats_summary(&mut self, now: DateTime<Utc>) -> TrafficStatsSummary {
+    fn advance_time_and_get_pkt_byte_rate(
+        &mut self,
+        now: DateTime<Utc>,
+    ) -> (Option<f64>, Option<f64>) {
         self.advance_time(now);
         let active_dur = self.last_time - self.first_time;
         let (pkt_rate, byte_rate) =
@@ -334,16 +357,56 @@ impl TrafficStats {
             } else {
                 (None, None)
             };
+        (pkt_rate, byte_rate)
+    }
+
+    /// Convert to a TrafficStatsSummary with values since the previous export / the previous
+    /// time `reset_cur()` has been called.
+    pub fn as_stats_summary_since_prev(&mut self, now: DateTime<Utc>) -> TrafficStatsSummary {
+        // this is the rate over the last minutes, so we don't need to handle
+        // cur vs. alltime differently.
+        let lost_bytes = match self
+            .lost_bytes
+            .map(|cur_lost_bytes| cur_lost_bytes - self.prev_lost_bytes.unwrap_or_default())
+        {
+            // We represent "no loss" as None, not Some(0)
+            Some(x) if x > 0 => Some(x),
+            _ => None,
+        };
+        let (pkt_rate, byte_rate) = self.advance_time_and_get_pkt_byte_rate(now);
+        TrafficStatsSummary {
+            bytes: self.bytes - self.prev_bytes,
+            pkts: self.packets - self.prev_packets,
+            burst_pkt_rate: self.since_prev_burst_rate.get_packet_rate(),
+            burst_byte_rate: self.since_prev_burst_rate.get_byte_rate(),
+            last_min_pkt_rate: pkt_rate,
+            last_min_byte_rate: byte_rate,
+            lost_bytes,
+            rtt_stats_ms: self.since_prev_rtt_stats_ms.clone().map(Into::into),
+        }
+    }
+
+    pub fn as_stats_summary(&mut self, now: DateTime<Utc>) -> TrafficStatsSummary {
+        let (pkt_rate, byte_rate) = self.advance_time_and_get_pkt_byte_rate(now);
         TrafficStatsSummary {
             bytes: self.bytes,
             pkts: self.packets,
-            burst_pkt_rate: self.max_burst_rate.get_packet_rate(),
-            burst_byte_rate: self.max_burst_rate.get_byte_rate(),
+            burst_pkt_rate: self.alltime_max_burst_rate.get_packet_rate(),
+            burst_byte_rate: self.alltime_max_burst_rate.get_byte_rate(),
             last_min_pkt_rate: pkt_rate,
             last_min_byte_rate: byte_rate,
             lost_bytes: self.lost_bytes,
-            rtt_stats_ms: self.rtt_stats_ms.clone().map(Into::into),
+            rtt_stats_ms: self.alltime_rtt_stats_ms.clone().map(Into::into),
         }
+    }
+
+    /// Resets the "since_prev_export" values. This should be called after the stats have
+    /// been exported to the DB.
+    pub fn update_prev_export(&mut self) {
+        self.prev_bytes = self.bytes;
+        self.prev_packets = self.packets;
+        self.prev_lost_bytes = self.lost_bytes;
+        self.since_prev_rtt_stats_ms = None;
     }
 
     pub fn as_bandwidth_history(&mut self, now: DateTime<Utc>) -> BandwidthHistory {
@@ -452,18 +515,48 @@ impl BidirectionalStats {
         }
     }
 
-    fn to_stats_summary(s: &mut Option<TrafficStats>, now: DateTime<Utc>) -> TrafficStatsSummary {
+    fn to_alltime_stats_summary(
+        s: &mut Option<TrafficStats>,
+        now: DateTime<Utc>,
+    ) -> TrafficStatsSummary {
         s.as_mut()
             .map(|s| s.as_stats_summary(now))
             .unwrap_or_default()
     }
 
-    pub fn tx_stats_summary(&mut self, now: DateTime<Utc>) -> TrafficStatsSummary {
-        Self::to_stats_summary(&mut self.tx, now)
+    pub fn alltime_tx_stats_summary(&mut self, now: DateTime<Utc>) -> TrafficStatsSummary {
+        Self::to_alltime_stats_summary(&mut self.tx, now)
     }
 
-    pub fn rx_stats_summary(&mut self, now: DateTime<Utc>) -> TrafficStatsSummary {
-        Self::to_stats_summary(&mut self.rx, now)
+    pub fn alltime_rx_stats_summary(&mut self, now: DateTime<Utc>) -> TrafficStatsSummary {
+        Self::to_alltime_stats_summary(&mut self.rx, now)
+    }
+
+    fn to_stats_summary_since_prev_and_reset(
+        s: &mut Option<TrafficStats>,
+        now: DateTime<Utc>,
+    ) -> TrafficStatsSummary {
+        if let Some(stats) = s {
+            let stat_summary = stats.as_stats_summary_since_prev(now);
+            stats.update_prev_export();
+            stat_summary
+        } else {
+            TrafficStatsSummary::default()
+        }
+    }
+
+    pub fn tx_stats_summary_since_prev_and_reset(
+        &mut self,
+        now: DateTime<Utc>,
+    ) -> TrafficStatsSummary {
+        Self::to_stats_summary_since_prev_and_reset(&mut self.tx, now)
+    }
+
+    pub fn rx_stats_summary_since_prev_and_reset(
+        &mut self,
+        now: DateTime<Utc>,
+    ) -> TrafficStatsSummary {
+        Self::to_stats_summary_since_prev_and_reset(&mut self.rx, now)
     }
 
     fn to_bandwidth_history(
@@ -478,8 +571,8 @@ impl BidirectionalStats {
 
     pub fn as_bidir_stats_summary(&mut self, now: DateTime<Utc>) -> BidirTrafficStatsSummary {
         BidirTrafficStatsSummary {
-            rx: self.rx_stats_summary(now),
-            tx: self.tx_stats_summary(now),
+            rx: self.alltime_rx_stats_summary(now),
+            tx: self.alltime_tx_stats_summary(now),
         }
     }
 
@@ -637,27 +730,36 @@ mod test {
     fn test_bidir_traffic_stats_summary_1() {
         let start = Utc::now();
         let mut bds = BidirectionalStats::new(Duration::from_millis(10), start);
-        assert_eq!(bds.tx_stats_summary(start), TrafficStatsSummary::default());
-        assert_eq!(bds.rx_stats_summary(start), TrafficStatsSummary::default());
+        assert_eq!(
+            bds.alltime_tx_stats_summary(start),
+            TrafficStatsSummary::default()
+        );
+        assert_eq!(
+            bds.alltime_rx_stats_summary(start),
+            TrafficStatsSummary::default()
+        );
 
         // Add a TX packet ==> only TX should have a non-zero summary stat
         bds.add_packet_with_time(true, 100, start);
         assert_eq!(
-            bds.tx_stats_summary(start),
+            bds.alltime_tx_stats_summary(start),
             TrafficStatsSummary {
                 bytes: 100,
                 pkts: 1,
                 ..Default::default()
             }
         );
-        assert_eq!(bds.rx_stats_summary(start), TrafficStatsSummary::default());
+        assert_eq!(
+            bds.alltime_rx_stats_summary(start),
+            TrafficStatsSummary::default()
+        );
 
         // Add two rx packets.
         bds.add_packet_with_time(false, 200, start);
         bds.add_packet_with_time(false, 200, start);
         // tx stats are unchanged
         assert_eq!(
-            bds.tx_stats_summary(start),
+            bds.alltime_tx_stats_summary(start),
             TrafficStatsSummary {
                 bytes: 100,
                 pkts: 1,
@@ -665,7 +767,7 @@ mod test {
             }
         );
         assert_eq!(
-            bds.rx_stats_summary(start),
+            bds.alltime_rx_stats_summary(start),
             TrafficStatsSummary {
                 bytes: 400,
                 pkts: 2,
@@ -696,20 +798,29 @@ mod test {
     fn test_bidir_traffic_stats_summary_2() {
         let start = Utc::now();
         let mut bds = BidirectionalStats::new(Duration::from_millis(10), start);
-        assert_eq!(bds.tx_stats_summary(start), TrafficStatsSummary::default());
-        assert_eq!(bds.rx_stats_summary(start), TrafficStatsSummary::default());
+        assert_eq!(
+            bds.alltime_tx_stats_summary(start),
+            TrafficStatsSummary::default()
+        );
+        assert_eq!(
+            bds.alltime_rx_stats_summary(start),
+            TrafficStatsSummary::default()
+        );
 
         // Add a RX packet ==> only RX should have a non-zero summary stat
         bds.add_packet_with_time(false, 100, start);
         assert_eq!(
-            bds.rx_stats_summary(start),
+            bds.alltime_rx_stats_summary(start),
             TrafficStatsSummary {
                 bytes: 100,
                 pkts: 1,
                 ..Default::default()
             }
         );
-        assert_eq!(bds.tx_stats_summary(start), TrafficStatsSummary::default());
+        assert_eq!(
+            bds.alltime_tx_stats_summary(start),
+            TrafficStatsSummary::default()
+        );
     }
 
     #[test]
@@ -724,15 +835,21 @@ mod test {
             bds.add_packet_with_time(false, 200, t);
         }
         assert_eq!(
-            bds.tx_stats_summary(t).burst_byte_rate.unwrap(),
+            bds.alltime_tx_stats_summary(t).burst_byte_rate.unwrap(),
             10_000. /* 100 bytes / 10ms */
         );
         assert_eq!(
-            bds.rx_stats_summary(t).burst_byte_rate.unwrap(),
+            bds.alltime_rx_stats_summary(t).burst_byte_rate.unwrap(),
             20_000. /* 2000 bytes / 10ms */
         );
-        assert_eq!(bds.tx_stats_summary(t).last_min_byte_rate.unwrap(), 100.);
-        assert_eq!(bds.rx_stats_summary(t).last_min_byte_rate.unwrap(), 200.);
+        assert_eq!(
+            bds.alltime_tx_stats_summary(t).last_min_byte_rate.unwrap(),
+            100.
+        );
+        assert_eq!(
+            bds.alltime_rx_stats_summary(t).last_min_byte_rate.unwrap(),
+            200.
+        );
     }
 
     #[test]
@@ -755,6 +872,23 @@ mod test {
         assert_eq!(stats.as_stats_summary(t).pkts, 30);
         assert_eq!(stats.as_stats_summary(t).last_min_byte_rate.unwrap(), 100.);
         assert_eq!(stats.as_stats_summary(t).last_min_pkt_rate.unwrap(), 1.);
+        assert_eq!(stats.as_stats_summary_since_prev(t).bytes, 3000);
+        assert_eq!(stats.as_stats_summary_since_prev(t).pkts, 30);
+        assert_eq!(
+            stats
+                .as_stats_summary_since_prev(t)
+                .last_min_byte_rate
+                .unwrap(),
+            100.
+        );
+        assert_eq!(
+            stats
+                .as_stats_summary_since_prev(t)
+                .last_min_pkt_rate
+                .unwrap(),
+            1.
+        );
+        stats.update_prev_export();
 
         // For 30sec: add two 100 bytes packets per sec
         // Now we have 1 min of data
@@ -767,6 +901,22 @@ mod test {
         assert_eq!(stats.as_stats_summary(t).pkts, 90);
         assert_eq!(stats.as_stats_summary(t).last_min_byte_rate.unwrap(), 150.);
         assert_eq!(stats.as_stats_summary(t).last_min_pkt_rate.unwrap(), 1.5);
+        assert_eq!(stats.as_stats_summary_since_prev(t).bytes, 6_000);
+        assert_eq!(stats.as_stats_summary_since_prev(t).pkts, 60);
+        assert_eq!(
+            stats
+                .as_stats_summary_since_prev(t)
+                .last_min_byte_rate
+                .unwrap(),
+            150.
+        );
+        assert_eq!(
+            stats
+                .as_stats_summary_since_prev(t)
+                .last_min_pkt_rate
+                .unwrap(),
+            1.5
+        );
 
         // For 60sec: add three 150 bytes packets per sec
         for _ in 1..=60 {
@@ -789,6 +939,77 @@ mod test {
         t += Duration::from_secs(60);
         assert_eq!(stats.as_stats_summary(t).last_min_byte_rate.unwrap(), 0.);
         assert_eq!(stats.as_stats_summary(t).last_min_pkt_rate.unwrap(), 0.);
+    }
+
+    #[test]
+    fn test_traffic_stats_loss() {
+        let start = Utc::now();
+        let mut stats = TrafficStats::new(start, Duration::from_millis(10));
+
+        assert_eq!(stats.as_stats_summary(start).lost_bytes, None);
+        assert_eq!(stats.as_stats_summary_since_prev(start).lost_bytes, None);
+
+        stats.add_lost_bytes(123);
+        stats.add_lost_bytes(123);
+        assert_eq!(stats.as_stats_summary(start).lost_bytes, Some(246));
+        assert_eq!(
+            stats.as_stats_summary_since_prev(start).lost_bytes,
+            Some(246)
+        );
+
+        stats.update_prev_export();
+        assert_eq!(stats.as_stats_summary(start).lost_bytes, Some(246));
+        assert_eq!(stats.as_stats_summary_since_prev(start).lost_bytes, None);
+
+        stats.add_lost_bytes(10);
+        assert_eq!(stats.as_stats_summary(start).lost_bytes, Some(256));
+        assert_eq!(
+            stats.as_stats_summary_since_prev(start).lost_bytes,
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn test_traffic_stats_rtt_since_prev() {
+        let start = Utc::now();
+        let mut stats = TrafficStats::new(start, Duration::from_millis(10));
+
+        assert_eq!(stats.as_stats_summary(start).rtt_stats_ms, None);
+        assert_eq!(stats.as_stats_summary_since_prev(start).rtt_stats_ms, None);
+
+        stats.add_rtt_sample(chrono::Duration::milliseconds(2));
+        stats.add_rtt_sample(chrono::Duration::milliseconds(4));
+
+        let alltime_rtt_stats = stats.as_stats_summary(start).rtt_stats_ms.unwrap();
+        let since_prev_rtt_stats = stats
+            .as_stats_summary_since_prev(start)
+            .rtt_stats_ms
+            .unwrap();
+        assert_eq!(alltime_rtt_stats.min(), 2.0);
+        assert_eq!(alltime_rtt_stats.max(), 4.0);
+        assert_eq!(alltime_rtt_stats.num_samples(), 2);
+        assert_eq!(alltime_rtt_stats, since_prev_rtt_stats);
+
+        stats.update_prev_export();
+
+        let alltime_rtt_stats = stats.as_stats_summary(start).rtt_stats_ms.unwrap();
+        assert_eq!(stats.as_stats_summary_since_prev(start).rtt_stats_ms, None);
+        assert_eq!(alltime_rtt_stats.min(), 2.0);
+        assert_eq!(alltime_rtt_stats.max(), 4.0);
+        assert_eq!(alltime_rtt_stats.num_samples(), 2);
+
+        stats.add_rtt_sample(chrono::Duration::milliseconds(5));
+        let alltime_rtt_stats = stats.as_stats_summary(start).rtt_stats_ms.unwrap();
+        let since_prev_rtt_stats = stats
+            .as_stats_summary_since_prev(start)
+            .rtt_stats_ms
+            .unwrap();
+        assert_eq!(alltime_rtt_stats.min(), 2.0);
+        assert_eq!(alltime_rtt_stats.max(), 5.0);
+        assert_eq!(alltime_rtt_stats.num_samples(), 3);
+        assert_eq!(since_prev_rtt_stats.min(), 5.0);
+        assert_eq!(since_prev_rtt_stats.max(), 5.0);
+        assert_eq!(since_prev_rtt_stats.num_samples(), 1);
     }
 
     #[test]

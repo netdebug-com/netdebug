@@ -3,7 +3,7 @@ use std::{collections::HashMap, net::IpAddr, str::FromStr, sync::Arc};
 use common_wasm::ProbeReportSummary;
 use futures::{pin_mut, StreamExt};
 use itertools::Itertools;
-use libconntrack_wasm::{ConnectionKey, ConnectionMeasurements, IpProtocol};
+use libconntrack_wasm::{ConnectionKey, ConnectionMeasurements, IpProtocol, TrafficStatsSummary};
 use tokio_postgres::{
     binary_copy::{BinaryCopyOutRow, BinaryCopyOutStream},
     types::{FromSql, Type},
@@ -128,6 +128,10 @@ pub async fn flow_queries(
         ("was_evicted", Type::BOOL),
         ("tx_stats", Type::TEXT),
         ("rx_stats", Type::TEXT),
+        ("rx_stats_since_prev_export", Type::TEXT),
+        ("tx_stats_since_prev_export", Type::TEXT),
+        ("prev_export_time", Type::TIMESTAMPTZ),
+        ("export_count", Type::INT8),
     ];
     for extra_col in extra_columns {
         cols.push(extra_col.col_info());
@@ -193,6 +197,14 @@ pub async fn flow_queries(
                 .map(serde_json::from_str)
                 .unwrap_or_else(|_| Ok(Vec::default()))?,
             was_evicted: helper.get(&row, "was_evicted")?,
+            rx_stats_since_prev_export: helper
+                .get::<Option<&str>>(&row, "rx_stats_since_prev_export")?
+                .map_or(Ok(TrafficStatsSummary::default()), serde_json::from_str)?,
+            tx_stats_since_prev_export: helper
+                .get::<Option<&str>>(&row, "tx_stats_since_prev_export")?
+                .map_or(Ok(TrafficStatsSummary::default()), serde_json::from_str)?,
+            prev_export_time: helper.get(&row, "prev_export_time")?,
+            export_count: helper.get::<i64>(&row, "export_count")? as u64,
         });
     }
     Ok(measurements)

@@ -204,6 +204,28 @@ export type ConnectionMeasurements = {
     "tx_stats"?: TrafficStatsSummary;
 
     /**
+     * The stats (num bytes, pkts, etc.) since the last time this flow was
+     * exported to the DB.
+     */
+    "rx_stats_since_prev_export"?: TrafficStatsSummary;
+
+    /**
+     * The stats (num bytes, pkts, etc.) since the last time this flow was
+     * exported to the DB.
+     */
+    "tx_stats_since_prev_export"?: TrafficStatsSummary;
+
+    /**
+     * The prev time this flow was exported.     
+     */
+    "prev_export_time": (string | null);
+
+    /**
+     * Number of times this flow has been exported
+     */
+    "export_count"?: U64;
+
+    /**
      * Pingtrees, that have been iniated and run based on the routers discovered by this connection's
      * inband probes.
      */
