@@ -526,7 +526,6 @@ export type ExportedNeighborState = {
     "learn_time": string;
     "vendor_oui": (string | null);
 };
-export type DesktopLogLevel = ("Error" | "Warn" | "Info" | "Debug");
 export type AggregatedGatewayPingData = {
 
     /**
@@ -573,6 +572,38 @@ export type AggregatedGatewayPingData = {
     "rtt_p99_ns": U64;
     "rtt_max_ns": U64;
 };
+
+/**
+ * Used for plotting first-hop aggregated data over time
+ */
+export type FirstHopTimeSeriesData = {
+
+    /**
+     * Stats on the ping data, min/max/p50/etc.
+     */
+    "aggregate_ping_data": AggregatedGatewayPingData;
+
+    /**
+     * When the event occurred
+     */
+    "time": string;
+
+    /**
+     * Name of the interface as reported by the OS
+     */
+    "interface_name": string;
+
+    /**
+     * Was this a wireless interface?
+     */
+    "is_wireless": boolean;
+
+    /**
+     * Did we have link at the time?
+     */
+    "has_link": boolean;
+};
+export type DesktopLogLevel = ("Error" | "Warn" | "Info" | "Debug");
 
 /**
  * Messages sent over the websocket from the desktop app (both

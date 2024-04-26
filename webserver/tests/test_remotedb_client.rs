@@ -10,7 +10,8 @@ use itertools::Itertools;
 use libconntrack_wasm::{topology_server_messages::DesktopLogLevel, DnsTrackerEntry};
 use libconntrack_wasm::{AggregatedGatewayPingData, ConnectionMeasurements, NetworkInterfaceState};
 use libwebserver::remotedb_client::{
-    RemoteDBClient, RemoteDBClientMessages, StorageSourceType, NETWORK_INTERFACE_STATE_TABLE_NAME,
+    extract_aggregated_ping_data, RemoteDBClient, RemoteDBClientMessages, StorageSourceType,
+    NETWORK_INTERFACE_STATE_TABLE_NAME,
 };
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client as PostgresClient, Row};
@@ -372,33 +373,6 @@ pub fn extract_network_interface_state_row(
             gateways_ping: HashMap::new(),
         },
         row.try_get("device_uuid")?,
-    ))
-}
-
-/// Take a row from a SELECT * query and convert it into an
-/// AggregatedPingData (or rather a tuple of `(insert_time, ping_data, device_uuid)`)
-/// TODO: should this be moved to remotedb_client.rs?
-pub fn extract_aggregated_ping_data(
-    row: &Row,
-) -> Result<(DateTime<Utc>, AggregatedGatewayPingData), tokio_postgres::error::Error> {
-    Ok((
-        row.try_get("time")?,
-        AggregatedGatewayPingData {
-            network_interface_uuid: row.try_get("network_interface_state_uuid")?,
-            gateway_ip: IpAddr::from_str(row.try_get("gateway_ip")?).unwrap(),
-            num_probes_sent: row.try_get::<_, i64>("num_probes_sent")? as usize,
-            num_responses_recv: row.try_get::<_, i64>("num_responses_recv")? as usize,
-            rtt_mean_ns: row.try_get::<_, i64>("rtt_mean_ns")? as u64,
-            rtt_variance_ns: row
-                .try_get::<_, Option<i64>>("rtt_variance_ns")?
-                .map(|x| x as u64),
-            rtt_min_ns: row.try_get::<_, i64>("rtt_min_ns")? as u64,
-            rtt_p50_ns: row.try_get::<_, i64>("rtt_p50_ns")? as u64,
-            rtt_p75_ns: row.try_get::<_, i64>("rtt_p75_ns")? as u64,
-            rtt_p90_ns: row.try_get::<_, i64>("rtt_p90_ns")? as u64,
-            rtt_p99_ns: row.try_get::<_, i64>("rtt_p99_ns")? as u64,
-            rtt_max_ns: row.try_get::<_, i64>("rtt_max_ns")? as u64,
-        },
     ))
 }
 

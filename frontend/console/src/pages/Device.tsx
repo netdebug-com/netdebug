@@ -10,6 +10,7 @@ import {
 } from "../console_utils";
 import {
   DataLoadingState,
+  FirstHopTimeSeriesData,
   PublicDeviceDetails,
   renderDataLoadingState,
 } from "../common";
@@ -31,8 +32,25 @@ function renderDeviceDetails(
 ): JSX.Element {
   return (
     <details>
-      <summary>{uuid} Raw JSON</summary>
+      <summary>Device Details for {uuid} </summary>
       {renderDataLoadingState(deviceDetails, (d) => (
+        <pre>{JSON.stringify(d, null, 2)}</pre>
+      ))}
+    </details>
+  );
+}
+
+function renderFirstHopTimeSeries(
+  uuid: string,
+  firstHopTimeSeries: DataLoadingState<
+    Map<string, Array<FirstHopTimeSeriesData>>
+  >,
+): JSX.Element {
+  console.log("TimeSeries ", firstHopTimeSeries);
+  return (
+    <details>
+      <summary>First-Router Time Series for {uuid} </summary>
+      {renderDataLoadingState(firstHopTimeSeries, (d) => (
         <pre>{JSON.stringify(d, null, 2)}</pre>
       ))}
     </details>
@@ -48,7 +66,22 @@ export function Device() {
     loadDataWithAuth("api/get_device/" + uuid, setDeviceDetails);
   }, [uuid]);
 
-  return <div>{renderDeviceDetails(uuid, deviceDetails)}</div>;
+  const [firstHopTimeSeries, setFirstHopTimeSeries] = useState(
+    new DataLoadingState<Map<string, Array<FirstHopTimeSeriesData>>>(),
+  );
+  useEffect(() => {
+    loadDataWithAuth(
+      "api/get_first_hop_time_series/" + uuid,
+      setFirstHopTimeSeries,
+    );
+  }, [uuid]);
+
+  return (
+    <div>
+      {renderFirstHopTimeSeries(uuid, firstHopTimeSeries)}
+      {renderDeviceDetails(uuid, deviceDetails)}
+    </div>
+  );
 }
 
 export default Device;

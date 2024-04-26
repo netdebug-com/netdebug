@@ -5,8 +5,9 @@ use crate::context::Context;
 use crate::mockable_dbclient::MockableDbClient;
 use crate::remotedb_client::RemoteDBClient;
 use crate::rest_routes::{
-    get_device, get_device_flows, get_devices, get_devices_details,
-    get_first_hop_top_five_worst_by_packet_loss, get_organization_info, test_auth,
+    catchall_api_404, get_device, get_device_flows, get_devices, get_devices_details,
+    get_first_hop_time_series_data, get_first_hop_top_five_worst_by_packet_loss,
+    get_organization_info, test_auth,
 };
 use crate::secrets_db::Secrets;
 use crate::users::{AuthCredentials, AuthSession, NetDebugUserBackend, UserServiceData};
@@ -217,6 +218,10 @@ pub async fn setup_protected_rest_routes_with_auth_layer<
             "/get_worst_devices_by_packet_loss",
             routing::get(get_first_hop_top_five_worst_by_packet_loss),
         )
+        .route(
+            "/get_first_hop_time_series/:uuid",
+            routing::get(get_first_hop_time_series_data),
+        )
         .route("/organization_info", routing::get(get_organization_info))
         // don't use the login_required!() macro : can't figure out generic types so manually expand
         .route_layer(predicate_required!(
@@ -226,6 +231,7 @@ pub async fn setup_protected_rest_routes_with_auth_layer<
         // these are unauthenticated routes to get the auth token
         // TODO: decide whether having a login() function as a GET is a CSRV vulnerability
         .route("/login", routing::post(console_login))
+        .route("/*catchall", routing::get(catchall_api_404))
         .layer(auth_layer)
         .with_state(client)
 }
