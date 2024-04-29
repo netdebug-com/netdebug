@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use libconntrack_wasm::{
     topology_server_messages::{CongestionSummary, DesktopToTopologyServer},
-    AggregateStatEntry, ChartJsBandwidth, ConnectionMeasurements, DnsTrackerEntry,
-    ExportedNeighborState, NetworkInterfaceState,
+    AggregateStatEntry, AggregatedGatewayPingData, ChartJsBandwidth, ConnectionMeasurements,
+    DnsTrackerEntry, ExportedNeighborState, NetworkInterfaceState,
 };
 /**
  * Anything in this file must compile for both native rust/x86 AND WASM
@@ -84,6 +84,22 @@ pub struct FirstHopPacketLossReportEntry {
     pub percent_loss: f64,
 }
 
+/// Used for plotting first-hop aggregated data over time
+#[derive(Debug, Serialize, Deserialize, TypeDef)]
+pub struct FirstHopTimeSeriesData {
+    /// Stats on the ping data, min/max/p50/etc.
+    pub aggregate_ping_data: AggregatedGatewayPingData,
+    /// When the event occurred
+    #[type_def(type_of = "String")]
+    pub time: DateTime<Utc>,
+    /// Name of the interface as reported by the OS
+    pub interface_name: String,
+    /// Was this a wireless interface?
+    pub is_wireless: bool,
+    /// Did we have link at the time?
+    pub has_link: bool,
+}
+
 /// A helper type alias. It list all the types that are used in the UI
 /// This is the magic that exports anything with #[derive(TypeDef)] into
 /// netdebug_types.ts
@@ -95,6 +111,7 @@ pub type GuiApiTypes = (
     CongestedLinksReply,
     NetworkInterfaceState,
     ExportedNeighborState,
+    FirstHopTimeSeriesData,
     DesktopToTopologyServer,
     FirstHopPacketLossReportEntry,
     PublicOrganizationInfo,

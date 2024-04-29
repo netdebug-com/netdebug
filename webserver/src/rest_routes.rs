@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -8,7 +10,8 @@ use axum::{
 use axum_login::AuthUser;
 use chrono::{DateTime, Utc};
 use gui_types::{
-    FirstHopPacketLossReportEntry, PublicDeviceDetails, PublicDeviceInfo, PublicOrganizationInfo,
+    FirstHopPacketLossReportEntry, FirstHopTimeSeriesData, PublicDeviceDetails, PublicDeviceInfo,
+    PublicOrganizationInfo,
 };
 use libconntrack_wasm::ConnectionMeasurements;
 use log::warn;
@@ -17,7 +20,7 @@ use uuid::Uuid;
 
 use crate::{
     devices::{DeviceDetails, DeviceInfo},
-    first_hop_analysis::first_hop_worst_n_by_packet_loss,
+    first_hop_analysis::{first_hop_single_device_timeline, first_hop_worst_n_by_packet_loss},
     flows::flow_queries,
     mockable_dbclient::MockableDbClient,
     organizations::OrganizationInfo,
@@ -233,6 +236,69 @@ pub async fn get_first_hop_top_five_worst_by_packet_loss(
             warn!(
                 "Problem running first_hop_worst_n_by_packet_loss(client, n={}, org={}, time={:?}) :: {}",
                 N, user.organization_id, params, e
+            );
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Database Problem".to_string(),
+            )
+                .into_response())
+        }
+    }
+}
+
+/// Used to ensure any call to /api/WrongUrl doesn't fall down to the default
+/// URL handler which just serves an empty index.html and confuses poor developers
+pub async fn catchall_api_404(
+    _auth_session: AuthSession,
+    Path(catchall): Path<String>,
+    State(_client): State<MockableDbClient>,
+) -> Result<Json<Vec<FirstHopPacketLossReportEntry>>, Response<Body>> {
+    Err((
+        StatusCode::NOT_FOUND,
+        format!("API URL Not Found : /api/{}", catchall),
+    )
+        .into_response())
+}
+
+/// Query for one device's timeseries first-hop data
+pub async fn get_first_hop_time_series_data(
+    auth_session: AuthSession,
+    Path(device_uuid): Path<Uuid>,
+    State(client): State<MockableDbClient>,
+) -> Result<Json<HashMap<String, Vec<FirstHopTimeSeriesData>>>, Response<Body>> {
+    let client = client.get_client();
+    let user = check_user(auth_session.user)?;
+    // is this user allowed to see this device?
+    match DeviceDetails::from_uuid(device_uuid, &user, client.clone()).await {
+        Ok(Some(_)) => {
+            // device exists and allowed to read; continue
+            // we only get here if the user is allowed to access this device
+            match first_hop_single_device_timeline(&client, device_uuid).await {
+                Ok(data) => Ok(Json(data)),
+                Err(e) => {
+                    warn!(
+                "Problem running first_hop_single_device_timeline(client, device_uuid={}) :: {}",
+                device_uuid, e
+            );
+                    Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Database Problem".to_string(),
+                    )
+                        .into_response())
+                }
+            }
+        }
+        // Ok(None) can mean 'device not found' or 'exists, but this user not allowed to see it'
+        // in either case, return 404
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            format!("No such device {}", device_uuid),
+        )
+            .into_response()),
+        Err(e) => {
+            warn!(
+                "Called DeviceDetails::from_uuid(device_uuid={}, user={:?}, client) :: got {}",
+                device_uuid, user, e
             );
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
