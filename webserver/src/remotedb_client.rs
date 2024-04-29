@@ -759,6 +759,10 @@ impl RemoteDBClient {
         let rx_loss = m.rx_stats.lost_bytes.map(|b| b as i64);
         let tx_stats = serde_json::to_string(&m.tx_stats).unwrap();
         let rx_stats = serde_json::to_string(&m.rx_stats).unwrap();
+        let tx_stats_since_prev_export =
+            serde_json::to_string(&m.tx_stats_since_prev_export).unwrap();
+        let rx_stats_since_prev_export =
+            serde_json::to_string(&m.rx_stats_since_prev_export).unwrap();
         let now = Utc::now();
         client
             .execute(
@@ -788,9 +792,14 @@ impl RemoteDBClient {
                     source_type,
                     pingtrees,
                     was_evicted,
-                    organization
+                    organization,
+                    rx_stats_since_prev_export,
+                    tx_stats_since_prev_export,
+                    prev_export_time,
+                    export_count
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 
-                        $14, $15, $16, $17, $18, $19 , $20, $21, $22, $23, $24, $25)"#,
+                        $14, $15, $16, $17, $18, $19 , $20, $21, $22, $23, $24, $25,
+                        $26, $27, $28, $29)"#,
                     CONNECTIONS_TABLE_NAME
                 )
                 .as_str(),
@@ -821,6 +830,10 @@ impl RemoteDBClient {
                     &serde_json::to_string(&m.pingtrees).unwrap(),
                     &m.was_evicted,
                     &organization_id,
+                    &rx_stats_since_prev_export,
+                    &tx_stats_since_prev_export,
+                    &m.prev_export_time,
+                    &(m.export_count as i64),
                 ],
             )
             .await?;

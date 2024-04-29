@@ -4,6 +4,7 @@ use axum::Router;
 use axum_login::tower_sessions::cookie::{self, Cookie};
 use axum_login::tower_sessions::{MemoryStore, SessionManagerLayer};
 use axum_login::AuthManagerLayerBuilder;
+use chrono::Utc;
 use common::test_utils::test_dir;
 use common_wasm::{PingtreeUiResult, ProbeReportSummary};
 use gui_types::OrganizationId;
@@ -276,6 +277,12 @@ pub fn get_expected_fake_connection_log_for_flow_query_alice() -> ConnectionMeas
     let json =
         std::fs::read_to_string(test_dir("libconntrack", "tests/data/pingtrees.json")).unwrap();
     m1.pingtrees = serde_json::from_str::<Vec<PingtreeUiResult>>(&json).unwrap();
+    m1.tx_stats_since_prev_export.pkts = 3;
+    m1.tx_stats_since_prev_export.bytes = 300;
+    m1.rx_stats_since_prev_export.pkts = 2;
+    m1.rx_stats_since_prev_export.bytes = 200;
+    m1.export_count = 3;
+    m1.prev_export_time = Some(Utc::now());
     m1
 }
 

@@ -132,6 +132,7 @@ async fn test_device_flows_rest() {
             expected.probe_report_summary = ProbeReportSummary::new();
             expected.start_tracking_time = truncate_nanos(expected.start_tracking_time);
             expected.last_packet_time = truncate_nanos(expected.last_packet_time);
+            expected.prev_export_time = expected.prev_export_time.map(truncate_nanos);
             assert_eq!(m, &expected);
         }
     }
