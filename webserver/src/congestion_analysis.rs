@@ -232,6 +232,10 @@ mod test {
             tx_stats: make_simple_traffic_stats_summary(),
             pingtrees: Vec::new(),
             was_evicted: true,
+            rx_stats_since_prev_export: TrafficStatsSummary::default(),
+            tx_stats_since_prev_export: TrafficStatsSummary::default(),
+            prev_export_time: None,
+            export_count: 0,
         }]
     }
 

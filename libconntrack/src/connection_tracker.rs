@@ -86,8 +86,10 @@ pub enum TimeMode {
 /// connection instance
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum ConnMeasurementReason {
-    /// ConnectionMeasurement was generated because/after the connection was evicted from conn tracker
+    /// ConnectionMeasurement was generated because/after the connection was evicted from conn tracker and exported to the DB
     Evicted,
+    /// ConnectionMeasurement was generated to export it to the DB w/o it being evicted (still active flow)
+    PeriodicExport,
     Other,
 }
 
@@ -613,16 +615,15 @@ impl<'a> ConnectionTracker<'a> {
                 // Cheeck active flow export interval
                 let active_flow_export_interval =
                     chrono::Duration::milliseconds(ACTIVE_FLOW_EXPORT_INTERVAL_MS);
-                if pkt_timestamp - connection.last_export_time() > active_flow_export_interval {
+                if connection.should_export(pkt_timestamp, active_flow_export_interval) {
                     debug!("Active flow export timeout for {}", key);
                     send_connection_storage_msg(
                         &self.topology_client,
                         &self.all_evicted_connections_listener,
                         connection,
                         pkt_timestamp,
-                        ConnMeasurementReason::Other,
+                        ConnMeasurementReason::PeriodicExport,
                     );
-                    connection.set_let_export_time(pkt_timestamp);
                 }
                 if needs_dns_and_process_lookup {
                     // only new connections that we don't immediately tear down need DNS lookups
