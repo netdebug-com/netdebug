@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -265,7 +263,7 @@ pub async fn get_first_hop_time_series_data(
     auth_session: AuthSession,
     Path(device_uuid): Path<Uuid>,
     State(client): State<MockableDbClient>,
-) -> Result<Json<HashMap<String, Vec<FirstHopTimeSeriesData>>>, Response<Body>> {
+) -> Result<Json<Vec<Vec<FirstHopTimeSeriesData>>>, Response<Body>> {
     let client = client.get_client();
     let user = check_user(auth_session.user)?;
     // is this user allowed to see this device?

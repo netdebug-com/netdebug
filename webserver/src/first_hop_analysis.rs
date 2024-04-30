@@ -45,9 +45,7 @@ INNER JOIN devices ON devices.uuid = T.device_uuid;
 */
 
 use gui_types::{FirstHopPacketLossReportEntry, OrganizationId};
-use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
 use gui_types::FirstHopTimeSeriesData;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -104,25 +102,26 @@ INNER JOIN devices ON devices.uuid = T.device_uuid;
 
 /// Collect the data on a single device to build a time series graph of
 /// first-hop data
+///
 pub async fn first_hop_single_device_timeline(
     db_client: &Client,
     device_uuid: Uuid,
-) -> Result<HashMap<String, Vec<FirstHopTimeSeriesData>>, tokio_postgres::Error> {
-    let mut results: HashMap<String, Vec<FirstHopTimeSeriesData>> = HashMap::new();
+) -> Result<Vec<Vec<FirstHopTimeSeriesData>>, tokio_postgres::Error> {
+    let mut results: Vec<Vec<FirstHopTimeSeriesData>> = Vec::new();
     let rows = db_client.query( "
-        SELECT interface_name, has_link, is_wireless, start_time, end_time,  desktop_aggregated_ping_data.time, 
+        SELECT interface_name, has_link, is_wireless, start_time, desktop_aggregated_ping_data.time, 
             gateway_ip, num_probes_sent, num_responses_recv, 
             network_interface_state_uuid, gateway_ip,
             rtt_mean_ns , rtt_variance_ns , rtt_min_ns, rtt_p50_ns, rtt_p75_ns, rtt_p90_ns, rtt_p99_ns, rtt_max_ns 
         FROM desktop_network_interface_state  
         INNER JOIN desktop_aggregated_ping_data 
         ON desktop_network_interface_state.state_uuid = desktop_aggregated_ping_data.network_interface_state_uuid 
-        WHERE device_uuid = $1 ORDER BY desktop_aggregated_ping_data.time; ", &[&device_uuid]).await?;
+        WHERE device_uuid = $1 ORDER BY desktop_aggregated_ping_data.time LIMIT 2000; ", &[&device_uuid]).await?;
+
+    let mut prev_interface_uuid: Option<Uuid> = None;
     for row in rows {
         let interface_name = row.try_get::<_, String>("interface_name")?;
-        // TODO: instead of UTC, should we convert this to localtime?  How do we do that?
-        let intf_start_time = row.try_get::<_, DateTime<Utc>>("start_time")?;
-        let intf_key = format!("{} {}", interface_name, intf_start_time);
+        // NOTE: Javascript can convert easily from UTC to local time, so push the conversion off until display
         let (time, aggregate_ping_data) = extract_aggregated_ping_data(&row)?;
         let data = FirstHopTimeSeriesData {
             aggregate_ping_data,
@@ -131,13 +130,20 @@ pub async fn first_hop_single_device_timeline(
             is_wireless: row.try_get("is_wireless")?,
             has_link: row.try_get("has_link")?,
         };
-        // I've decided I hate the HashMap Entry API and will just do this the dumb way at the cost of
-        // one additional line of code
-        if let Some(ping_datas) = results.get_mut(&intf_key) {
-            ping_datas.push(data);
+        let new_interface_uuid = data.aggregate_ping_data.network_interface_uuid;
+        if let Some(prev_state_uuid) = prev_interface_uuid {
+            if prev_state_uuid == new_interface_uuid {
+                // the same interface is still up continuously, just apprend the data
+                results.last_mut().unwrap().push(data);
+            } else {
+                // the interface changed, create a new series
+                results.push(vec![data]);
+            }
         } else {
-            results.insert(intf_key, vec![data]);
+            // this is our first row
+            results.push(vec![data]);
         }
+        prev_interface_uuid = Some(new_interface_uuid);
     }
     Ok(results)
 }
