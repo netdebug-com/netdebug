@@ -3,6 +3,7 @@ pub mod context;
 pub mod desktop_websocket;
 pub mod devices;
 pub mod first_hop_analysis;
+pub mod flow_aggregation;
 pub mod flows;
 pub mod http_routes;
 pub mod mockable_dbclient;
