@@ -6,17 +6,17 @@ use axum::{
     Json,
 };
 use axum_login::AuthUser;
-use chrono::{DateTime, Utc};
 use gui_types::{
     FirstHopPacketLossReportEntry, FirstHopTimeSeriesData, PublicDeviceDetails, PublicDeviceInfo,
     PublicOrganizationInfo,
 };
 use libconntrack_wasm::ConnectionMeasurements;
 use log::warn;
-use serde::{Deserialize, Serialize};
+
 use uuid::Uuid;
 
 use crate::{
+    db_utils::TimeRangeQueryParams,
     devices::{DeviceDetails, DeviceInfo},
     first_hop_analysis::{first_hop_single_device_timeline, first_hop_worst_n_by_packet_loss},
     flows::flow_queries,
@@ -24,45 +24,6 @@ use crate::{
     organizations::OrganizationInfo,
     users::{AuthSession, NetDebugUser},
 };
-
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TimeRangeQueryParams {
-    pub start: Option<DateTime<Utc>>,
-    pub end: Option<DateTime<Utc>>,
-}
-
-impl TimeRangeQueryParams {
-    /// for desktop_connections
-    pub fn to_sql_where(&self) -> String {
-        self.to_sql_where_with_keys("start_tracking_time", "last_packet_time")
-    }
-
-    /// for other tables
-    pub fn to_sql_where_with_keys(&self, start_key: &str, end_key: &str) -> String {
-        let mut parts = Vec::new();
-        // string formatting for SQL is save here, because we use
-        if let Some(start) = self.start {
-            // the timestamp will be well-formed since we are using DateTime
-            parts.push(format!(
-                "{} >= '{}'",
-                start_key,
-                start.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
-            ));
-        }
-        if let Some(end) = self.end {
-            parts.push(format!(
-                "{} <= '{}'",
-                end_key,
-                end.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
-            ));
-        }
-        if parts.is_empty() {
-            "".to_owned()
-        } else {
-            format!("({})", parts.join(" AND "))
-        }
-    }
-}
 
 fn check_user(opt_user: Option<NetDebugUser>) -> Result<NetDebugUser, Response<Body>> {
     match opt_user {
@@ -309,6 +270,8 @@ pub async fn get_first_hop_time_series_data(
 
 #[cfg(test)]
 mod test {
+    use chrono::DateTime;
+
     use super::*;
 
     #[test]
@@ -343,7 +306,7 @@ mod test {
                 ),
             }
             .to_sql_where(),
-            "(last_packet_time <= '2024-01-05T12:34:56.123Z')"
+            "(last_packet_time < '2024-01-05T12:34:56.123Z')"
         );
         assert_eq!(
             TimeRangeQueryParams {
@@ -359,7 +322,7 @@ mod test {
                 ),
             }
             .to_sql_where(),
-            "(start_tracking_time >= '2024-02-02T01:01:01.123456Z' AND last_packet_time <= '2024-01-05T12:34:56.123Z')"
+            "(start_tracking_time >= '2024-02-02T01:01:01.123456Z' AND last_packet_time < '2024-01-05T12:34:56.123Z')"
         );
     }
 }

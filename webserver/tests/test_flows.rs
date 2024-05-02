@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use axum::{
     body::Body,
@@ -8,25 +8,30 @@ use chrono::{DateTime, Utc};
 #[cfg(test)]
 use common::init::netdebug_test_init;
 use common_wasm::ProbeReportSummary;
-use db_utils::{add_fake_connection_logs_for_flow_query_test, get_alice_dev1_uuid};
+use db_test_utils::{add_fake_connection_logs_for_flow_query_test, get_alice_dev1_uuid};
 
 use libconntrack_wasm::ConnectionMeasurements;
-use libwebserver::remotedb_client::RemoteDBClient;
+use libwebserver::db_utils::TimeRangeQueryParams;
+use libwebserver::{
+    flows::{flow_queries, FlowQueryExtraColumns},
+    remotedb_client::RemoteDBClient,
+    users::NetDebugUser,
+};
 use pg_embed::postgres::PgEmbed;
 use tokio_postgres::Client;
 
-use crate::db_utils::{
+use crate::db_test_utils::{
     add_fake_connection_logs, add_fake_devices, add_fake_users, get_auth_token_from_rest_router,
     get_resp_from_rest_router, make_mock_protected_routes, mk_test_db, response_to_bytes,
 };
 
-pub mod db_utils;
+pub mod db_test_utils;
 
 // there are unused fields in this struct that I think we'll want need at some point, so
 // lets allows dead_code to stop the compiler from complaining about them
 #[allow(dead_code)]
 struct FlowTestFixture {
-    db_client: Client,
+    db_client: Arc<Client>,
     test_db: PgEmbed,
     remotedb_client: RemoteDBClient,
     protected_routes: axum::Router,
@@ -44,7 +49,8 @@ struct FlowTestFixture {
 impl FlowTestFixture {
     async fn new() -> Self {
         netdebug_test_init();
-        let (db_client, test_db) = mk_test_db("devices_non_netdebug_employee").await.unwrap();
+        let db_name = format!("flow_test_fixture_{}", rand::random::<u16>());
+        let (db_client, test_db) = mk_test_db(&db_name).await.unwrap();
         let remotedb_client = RemoteDBClient::mk_mock(&test_db.db_uri);
         remotedb_client
             .create_table_schema(&db_client)
@@ -70,7 +76,7 @@ impl FlowTestFixture {
         let protected_routes = make_mock_protected_routes(&test_db).await;
         let after_connections_time = Utc::now();
         Self {
-            db_client,
+            db_client: Arc::new(db_client),
             test_db,
             remotedb_client,
             protected_routes,
@@ -165,4 +171,100 @@ async fn test_device_flows_rest() {
     assert_eq!(measurements.len(), 2);
     assert_ne!(measurements[0].key.local_l4_port, 4242);
     assert_ne!(measurements[1].key.local_l4_port, 4242);
+}
+
+#[tokio::test]
+async fn test_device_flows_sql() {
+    let fix = FlowTestFixture::new().await;
+
+    let device_uuid = get_alice_dev1_uuid();
+    let user = NetDebugUser::make_internal_superuser();
+
+    let measurements = flow_queries(
+        fix.db_client.clone(),
+        &user,
+        device_uuid,
+        TimeRangeQueryParams::default(),
+        &[],
+    )
+    .await
+    .unwrap();
+    assert_eq!(measurements.len(), 3);
+    let mut expected_local_ports = HashSet::from([6667, 4242, 12345]);
+    for m in &measurements {
+        expected_local_ports.remove(&m.key.local_l4_port);
+        if m.key.local_l4_port == 4242 {
+            let mut expected = fix.expected_measurement.clone();
+            // We don't query for probe_report_summary or pingtrees
+            // first sanity check
+            assert!(!expected.pingtrees.is_empty());
+            assert!(!expected.probe_report_summary.raw_reports.is_empty());
+            expected.pingtrees.clear();
+            expected.probe_report_summary = ProbeReportSummary::new();
+            expected.start_tracking_time = truncate_nanos(expected.start_tracking_time);
+            expected.last_packet_time = truncate_nanos(expected.last_packet_time);
+            expected.prev_export_time = expected.prev_export_time.map(truncate_nanos);
+            assert_eq!(m, &expected);
+        }
+    }
+
+    // repeat query with a time-range
+    let measurements = flow_queries(
+        fix.db_client.clone(),
+        &user,
+        device_uuid,
+        TimeRangeQueryParams {
+            start: Some(fix.between_connections_time),
+            end: None,
+        },
+        &[],
+    )
+    .await
+    .unwrap();
+    assert_eq!(measurements.len(), 1);
+    assert_eq!(measurements.first().unwrap().key.local_l4_port, 4242);
+
+    // repeat query with a time-range
+    let measurements = flow_queries(
+        fix.db_client.clone(),
+        &user,
+        device_uuid,
+        TimeRangeQueryParams {
+            start: None,
+            end: Some(fix.between_connections_time),
+        },
+        &[],
+    )
+    .await
+    .unwrap();
+    assert_eq!(measurements.len(), 2);
+    assert_ne!(measurements[0].key.local_l4_port, 4242);
+    assert_ne!(measurements[1].key.local_l4_port, 4242);
+
+    // Now a query with bot start and end time. Also query additional columns
+    // repeat query with a time-range
+    let measurements = flow_queries(
+        fix.db_client.clone(),
+        &user,
+        device_uuid,
+        TimeRangeQueryParams {
+            start: Some(fix.between_connections_time),
+            end: Some(fix.after_connections_time),
+        },
+        &[
+            FlowQueryExtraColumns::ProbeReportSummary,
+            FlowQueryExtraColumns::Pingtrees,
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(measurements.len(), 1);
+    assert_eq!(measurements.first().unwrap().key.local_l4_port, 4242);
+    let mut expected = fix.expected_measurement.clone();
+    assert!(!expected.pingtrees.is_empty());
+    assert!(!expected.probe_report_summary.raw_reports.is_empty());
+    expected.start_tracking_time = truncate_nanos(expected.start_tracking_time);
+    expected.last_packet_time = truncate_nanos(expected.last_packet_time);
+    expected.prev_export_time = expected.prev_export_time.map(truncate_nanos);
+    assert_eq!(measurements.first().unwrap(), &expected);
 }

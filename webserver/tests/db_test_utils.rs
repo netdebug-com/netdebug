@@ -46,7 +46,7 @@ pub async fn mk_test_db(database_name: &str) -> PgResult<(Client, PgEmbed)> {
     // "long enough" for the logging tasks to run and print the output
     let res = mk_test_db_impl(database_name).await;
     if res.is_err() {
-        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
     }
 
     res

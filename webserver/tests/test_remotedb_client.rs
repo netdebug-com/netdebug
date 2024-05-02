@@ -17,9 +17,9 @@ use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client as PostgresClient, Row};
 use uuid::Uuid;
 
-pub mod db_utils;
+pub mod db_test_utils;
 
-use db_utils::mk_test_db;
+use db_test_utils::mk_test_db;
 /**
  * Test against FAKE credentials!
  *

@@ -1,5 +1,5 @@
-pub mod db_utils;
-use crate::db_utils::{
+pub mod db_test_utils;
+use crate::db_test_utils::{
     add_fake_users, get_auth_token_from_rest_router, make_mock_protected_routes, mk_test_db,
 };
 
