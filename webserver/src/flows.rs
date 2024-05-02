@@ -1,5 +1,6 @@
 use std::{net::IpAddr, str::FromStr, sync::Arc};
 
+use chrono::{DateTime, Utc};
 use common_wasm::ProbeReportSummary;
 use futures::{pin_mut, StreamExt};
 use libconntrack_wasm::{ConnectionKey, ConnectionMeasurements, IpProtocol, TrafficStatsSummary};
@@ -11,8 +12,11 @@ use tokio_postgres::{
 use uuid::Uuid;
 
 use crate::{
-    db_utils::CopyOutQueryHelper, db_utils::TimeRangeQueryParams, devices::DeviceInfo,
-    remotedb_client::RemoteDBClientError, users::NetDebugUser,
+    db_utils::{CopyOutQueryHelper, TimeRangeQueryParams},
+    devices::DeviceInfo,
+    flow_aggregation::{AggregateByCategory, AggregatedBucket, BucketAggregator},
+    remotedb_client::RemoteDBClientError,
+    users::NetDebugUser,
 };
 
 /// These `desktop_connections` columns can be fairly large, so we make retrieving them in a
@@ -33,7 +37,8 @@ impl FlowQueryExtraColumns {
     }
 }
 
-const DEFAULT_COLUMNS: [(&str, Type); 22] = [
+const DEFAULT_COLUMNS: [(&str, Type); 23] = [
+    ("time", Type::TIMESTAMPTZ),
     ("local_ip", Type::TEXT),
     ("remote_ip", Type::TEXT),
     ("local_port", Type::INT4),
@@ -170,4 +175,36 @@ pub async fn flow_queries(
         measurements.push(copy_out_row_to_measurement(&helper, row)?);
     }
     Ok(measurements)
+}
+
+pub async fn query_and_aggregate_flows(
+    client: Arc<Client>,
+    time_range: TimeRangeQueryParams,
+    aggregate_bucket_size: chrono::Duration,
+) -> Result<Vec<AggregatedBucket<AggregateByCategory>>, RemoteDBClientError> {
+    let mut time_range_where = time_range.to_sql_where();
+    if !time_range_where.is_empty() {
+        time_range_where.insert_str(0, "WHERE ");
+    }
+    let helper = get_flow_query_helper(&[]);
+
+    // Note, COPY TO does not support placeholders. But it's safe to pass the UUID in a format
+    // string, since we use the uuid class (and not a raw string), so the uuid format is guranteed
+    let query = format!(
+        "COPY (SELECT {}
+        FROM desktop_connections {} ORDER BY TIME ASC) TO STDOUT BINARY",
+        helper.columns_names(),
+        time_range_where
+    );
+    let mut aggregator = BucketAggregator::<AggregateByCategory>::new(aggregate_bucket_size);
+    let copy_out = client.copy_out(&query).await?;
+    let reader = BinaryCopyOutStream::new(copy_out, helper.col_types());
+    pin_mut!(reader);
+    while let Some(maybe_row) = reader.next().await {
+        let row = maybe_row?;
+        let ts: DateTime<Utc> = helper.get(&row, "time")?;
+        let m = copy_out_row_to_measurement(&helper, row)?;
+        aggregator.add(ts, &m);
+    }
+    Ok(aggregator.to_vec())
 }

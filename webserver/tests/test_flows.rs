@@ -4,14 +4,14 @@ use axum::{
     body::Body,
     http::{Response, StatusCode},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 #[cfg(test)]
 use common::init::netdebug_test_init;
 use common_wasm::ProbeReportSummary;
 use db_test_utils::{add_fake_connection_logs_for_flow_query_test, get_alice_dev1_uuid};
 
 use libconntrack_wasm::ConnectionMeasurements;
-use libwebserver::db_utils::TimeRangeQueryParams;
+use libwebserver::{db_utils::TimeRangeQueryParams, flows::query_and_aggregate_flows};
 use libwebserver::{
     flows::{flow_queries, FlowQueryExtraColumns},
     remotedb_client::RemoteDBClient,
@@ -267,4 +267,33 @@ async fn test_device_flows_sql() {
     expected.last_packet_time = truncate_nanos(expected.last_packet_time);
     expected.prev_export_time = expected.prev_export_time.map(truncate_nanos);
     assert_eq!(measurements.first().unwrap(), &expected);
+}
+
+#[tokio::test]
+async fn test_query_aggregate_flows() {
+    let fix = FlowTestFixture::new().await;
+
+    let aggregates = query_and_aggregate_flows(
+        fix.db_client.clone(),
+        TimeRangeQueryParams::default(),
+        chrono::Duration::minutes(60),
+    )
+    .await
+    .unwrap();
+
+    // db_test_utils has 3 fake devices, two flows per device, plus
+    // an additional flow from `get_expected_fake_connection_log_for_flow_query_alice`
+    // ==> 7 total flows
+    // TODO: in theory we could end up with two entries in `aggregates`, if the DB writes
+    // in FlowTestFixture::new() happen to span an hour boundrary... But given that we can
+    // live with that for now
+    assert_eq!(aggregates.len(), 1);
+    assert_eq!(aggregates[0].aggregate.total.num_flows, 7);
+
+    // we use 60min buckets, with bucket boundraries at multiples of 60min
+    // since unix epoch. Therefore, the bucket_start should have 0 min and 0 sec
+    let bucket_start = aggregates[0].bucket_start;
+    assert_eq!(bucket_start.minute(), 0);
+    assert_eq!(bucket_start.second(), 0);
+    assert_eq!(bucket_start.nanosecond(), 0);
 }
