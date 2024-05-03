@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use axum::{
     body::Body,
@@ -10,8 +13,16 @@ use common::init::netdebug_test_init;
 use common_wasm::ProbeReportSummary;
 use db_test_utils::{add_fake_connection_logs_for_flow_query_test, get_alice_dev1_uuid};
 
+use itertools::Itertools;
 use libconntrack_wasm::ConnectionMeasurements;
-use libwebserver::{db_utils::TimeRangeQueryParams, flows::query_and_aggregate_flows};
+use libwebserver::{
+    db_utils::TimeRangeQueryParams,
+    flow_aggregation::{AggregateByCategory, AggregatedBucket, AggregatedConnectionMeasurement},
+    flows::{
+        query_aggregated_flows, query_and_aggregate_flows, write_aggregated_flows,
+        AggregatedFlowCategory, AggregatedFlowRow,
+    },
+};
 use libwebserver::{
     flows::{flow_queries, FlowQueryExtraColumns},
     remotedb_client::RemoteDBClient,
@@ -19,10 +30,12 @@ use libwebserver::{
 };
 use pg_embed::postgres::PgEmbed;
 use tokio_postgres::Client;
+use uuid::Uuid;
 
 use crate::db_test_utils::{
     add_fake_connection_logs, add_fake_devices, add_fake_users, get_auth_token_from_rest_router,
-    get_resp_from_rest_router, make_mock_protected_routes, mk_test_db, response_to_bytes,
+    get_bob_dev2_uuid, get_cathy_dev3_uuid, get_resp_from_rest_router, make_mock_protected_routes,
+    mk_test_db, response_to_bytes,
 };
 
 pub mod db_test_utils;
@@ -283,12 +296,36 @@ async fn test_query_aggregate_flows() {
 
     // db_test_utils has 3 fake devices, two flows per device, plus
     // an additional flow from `get_expected_fake_connection_log_for_flow_query_alice`
-    // ==> 7 total flows
     // TODO: in theory we could end up with two entries in `aggregates`, if the DB writes
     // in FlowTestFixture::new() happen to span an hour boundrary... But given that we can
     // live with that for now
     assert_eq!(aggregates.len(), 1);
-    assert_eq!(aggregates[0].aggregate.total.num_flows, 7);
+    assert_eq!(aggregates[0].aggregate.len(), 3); // three different devices
+    assert_eq!(
+        aggregates[0]
+            .aggregate
+            .get(&get_alice_dev1_uuid())
+            .unwrap()
+            .total
+            .num_flows,
+        3
+    );
+    assert_eq!(
+        aggregates[0]
+            .aggregate
+            .get(&get_bob_dev2_uuid())
+            .unwrap()
+            .total
+            .num_flows,
+        2
+    );
+    let cathys_dev_aggregate = aggregates[0].aggregate.get(&get_cathy_dev3_uuid()).unwrap();
+    assert_eq!(cathys_dev_aggregate.total.num_flows, 2);
+    assert_eq!(
+        cathys_dev_aggregate.total.device_uuid,
+        get_cathy_dev3_uuid()
+    );
+    assert_eq!(cathys_dev_aggregate.total.organization_id, 2);
 
     // we use 60min buckets, with bucket boundraries at multiples of 60min
     // since unix epoch. Therefore, the bucket_start should have 0 min and 0 sec
@@ -296,4 +333,288 @@ async fn test_query_aggregate_flows() {
     assert_eq!(bucket_start.minute(), 0);
     assert_eq!(bucket_start.second(), 0);
     assert_eq!(bucket_start.nanosecond(), 0);
+}
+
+fn mk_aggregated_connection_measurement(
+    dev_id: u128,
+    org_id: i64,
+    seed: i64,
+) -> AggregatedConnectionMeasurement {
+    AggregatedConnectionMeasurement {
+        device_uuid: Uuid::from_u128(dev_id),
+        organization_id: org_id,
+        num_flows: seed + 20,
+        num_flows_with_rx_loss: seed + 1,
+        num_flows_with_tx_loss: seed + 2,
+        num_tcp_flows: seed + 4,
+        num_udp_flows: seed + 5,
+        rx_packets: seed + 6,
+        tx_packets: seed + 7,
+        rx_bytes: seed + 8,
+        tx_bytes: seed + 9,
+        rx_lost_bytes: seed + 10,
+        tx_lost_bytes: seed + 11,
+        tcp_rx_bytes: seed + 12,
+        tcp_tx_bytes: seed + 13,
+        udp_rx_bytes: seed + 14,
+        udp_tx_bytes: seed + 15,
+    }
+}
+
+#[tokio::test]
+async fn test_write_aggregated_flows_read_aggregated_flows() {
+    // Don't need the full fixture here
+    let db_name = "flow_test_write_aggregated_flows";
+    let (mut db_client, test_db) = mk_test_db(db_name).await.unwrap();
+    let remotedb_client = RemoteDBClient::mk_mock(&test_db.db_uri);
+    remotedb_client
+        .create_table_schema(&db_client)
+        .await
+        .unwrap();
+
+    let mut b1_agg: HashMap<Uuid, AggregateByCategory> = HashMap::new();
+    b1_agg.insert(
+        Uuid::from_u128(42),
+        AggregateByCategory {
+            device_uuid: Uuid::from_u128(42),
+            organization_id: 2,
+            total: mk_aggregated_connection_measurement(42, 2, 0),
+            by_dns_dest_domain: HashMap::from([
+                (
+                    "example.com".to_string(),
+                    mk_aggregated_connection_measurement(42, 2, 100),
+                ),
+                (
+                    "netdebug.com".to_string(),
+                    mk_aggregated_connection_measurement(42, 2, 200),
+                ),
+            ]),
+            by_app: HashMap::from([
+                (
+                    "magic-app".to_string(),
+                    mk_aggregated_connection_measurement(42, 2, 300),
+                ),
+                (
+                    "super-duper-app".to_string(),
+                    mk_aggregated_connection_measurement(42, 2, 400),
+                ),
+            ]),
+        },
+    );
+    b1_agg.insert(
+        Uuid::from_u128(23),
+        AggregateByCategory {
+            device_uuid: Uuid::from_u128(23),
+            organization_id: 3,
+            total: mk_aggregated_connection_measurement(23, 3, 1000),
+            by_dns_dest_domain: HashMap::from([(
+                "foobar.com".to_string(),
+                mk_aggregated_connection_measurement(23, 3, 1100),
+            )]),
+            by_app: HashMap::from([(
+                "my-app".to_string(),
+                mk_aggregated_connection_measurement(23, 3, 1200),
+            )]),
+        },
+    );
+
+    let b1 = AggregatedBucket {
+        bucket_start: DateTime::from_timestamp(300_000, 0).unwrap(),
+        bucket_size: chrono::Duration::minutes(5),
+        aggregate: b1_agg,
+    };
+
+    let mut b2_agg: HashMap<Uuid, AggregateByCategory> = HashMap::new();
+    b2_agg.insert(
+        Uuid::from_u128(23),
+        AggregateByCategory {
+            device_uuid: Uuid::from_u128(23),
+            organization_id: 3,
+            total: mk_aggregated_connection_measurement(23, 3, 2000),
+            by_dns_dest_domain: HashMap::from([(
+                "foobar.com".to_string(),
+                mk_aggregated_connection_measurement(23, 3, 2100),
+            )]),
+            by_app: HashMap::from([(
+                "my-app".to_string(),
+                mk_aggregated_connection_measurement(23, 3, 2200),
+            )]),
+        },
+    );
+    let b2 = AggregatedBucket {
+        bucket_start: DateTime::from_timestamp(300_900, 0).unwrap(),
+        bucket_size: chrono::Duration::minutes(5),
+        aggregate: b2_agg,
+    };
+
+    let transaction = db_client.transaction().await.unwrap();
+    write_aggregated_flows(&transaction, vec![b1, b2])
+        .await
+        .unwrap();
+    transaction.commit().await.unwrap();
+
+    //
+    // Now read back and verify
+    //
+    let agg_flow_rows = query_aggregated_flows(
+        &NetDebugUser::make_internal_superuser(),
+        None,
+        TimeRangeQueryParams::default(),
+        &db_client,
+    )
+    .await
+    .unwrap();
+
+    let agg_flow_rows_set: HashSet<AggregatedFlowRow> =
+        HashSet::from_iter(agg_flow_rows.into_iter());
+
+    let t0 = DateTime::from_timestamp(300_000, 0).unwrap();
+    let t1 = DateTime::from_timestamp(300_900, 0).unwrap();
+    let bucket_size = chrono::Duration::minutes(5);
+    let expected = HashSet::from([
+        AggregatedFlowRow {
+            bucket_start: t0,
+            bucket_size,
+            category: AggregatedFlowCategory::Total,
+            aggregate: mk_aggregated_connection_measurement(42, 2, 0),
+        },
+        AggregatedFlowRow {
+            bucket_start: t0,
+            bucket_size,
+            category: AggregatedFlowCategory::ByDnsDestDomain("example.com".to_string()),
+            aggregate: mk_aggregated_connection_measurement(42, 2, 100),
+        },
+        AggregatedFlowRow {
+            bucket_start: t0,
+            bucket_size,
+            category: AggregatedFlowCategory::ByDnsDestDomain("netdebug.com".to_string()),
+            aggregate: mk_aggregated_connection_measurement(42, 2, 200),
+        },
+        AggregatedFlowRow {
+            bucket_start: t0,
+            bucket_size,
+            category: AggregatedFlowCategory::ByApp("magic-app".to_string()),
+            aggregate: mk_aggregated_connection_measurement(42, 2, 300),
+        },
+        AggregatedFlowRow {
+            bucket_start: t0,
+            bucket_size,
+            category: AggregatedFlowCategory::ByApp("super-duper-app".to_string()),
+            aggregate: mk_aggregated_connection_measurement(42, 2, 400),
+        },
+        AggregatedFlowRow {
+            bucket_start: t0,
+            bucket_size,
+            category: AggregatedFlowCategory::Total,
+            aggregate: mk_aggregated_connection_measurement(23, 3, 1000),
+        },
+        AggregatedFlowRow {
+            bucket_start: t0,
+            bucket_size,
+            category: AggregatedFlowCategory::ByDnsDestDomain("foobar.com".to_string()),
+            aggregate: mk_aggregated_connection_measurement(23, 3, 1100),
+        },
+        AggregatedFlowRow {
+            bucket_start: t0,
+            bucket_size,
+            category: AggregatedFlowCategory::ByApp("my-app".to_string()),
+            aggregate: mk_aggregated_connection_measurement(23, 3, 1200),
+        },
+        AggregatedFlowRow {
+            bucket_start: t1,
+            bucket_size,
+            category: AggregatedFlowCategory::Total,
+            aggregate: mk_aggregated_connection_measurement(23, 3, 2000),
+        },
+        AggregatedFlowRow {
+            bucket_start: t1,
+            bucket_size,
+            category: AggregatedFlowCategory::ByDnsDestDomain("foobar.com".to_string()),
+            aggregate: mk_aggregated_connection_measurement(23, 3, 2100),
+        },
+        AggregatedFlowRow {
+            bucket_start: t1,
+            bucket_size,
+            category: AggregatedFlowCategory::ByApp("my-app".to_string()),
+            aggregate: mk_aggregated_connection_measurement(23, 3, 2200),
+        },
+    ]);
+    let only_in_actual = agg_flow_rows_set.difference(&expected).collect_vec();
+    let only_in_expected = expected.difference(&agg_flow_rows_set).collect_vec();
+
+    if !only_in_actual.is_empty() || !only_in_expected.is_empty() {
+        println!("\n\nOnly in actual: {}", only_in_actual.len());
+        for x in &only_in_actual {
+            println!("    {:?}", x);
+        }
+        println!("\nOnly in expected: {}", only_in_expected.len());
+        for x in &only_in_expected {
+            println!("    {:?}", x);
+        }
+        panic!("Actual and expected mismatch");
+    }
+
+    // Test query by org_id
+    let agg_flow_rows = query_aggregated_flows(
+        &NetDebugUser::make_internal_superuser(),
+        Some(2),
+        TimeRangeQueryParams::default(),
+        &db_client,
+    )
+    .await
+    .unwrap();
+    assert_eq!(agg_flow_rows.len(), 5);
+
+    // Test query by org_id. No flows for this org
+    let agg_flow_rows = query_aggregated_flows(
+        &NetDebugUser::make_internal_superuser(),
+        Some(7),
+        TimeRangeQueryParams::default(),
+        &db_client,
+    )
+    .await
+    .unwrap();
+    assert_eq!(agg_flow_rows.len(), 0);
+
+    // Test time-range query
+    let agg_flow_rows = query_aggregated_flows(
+        &NetDebugUser::make_internal_superuser(),
+        None,
+        TimeRangeQueryParams {
+            start: Some(t0),
+            end: Some(t1),
+        },
+        &db_client,
+    )
+    .await
+    .unwrap();
+    assert_eq!(agg_flow_rows.len(), 8);
+
+    // Test time-range query -- start only
+    let agg_flow_rows = query_aggregated_flows(
+        &NetDebugUser::make_internal_superuser(),
+        None,
+        TimeRangeQueryParams {
+            start: Some(t1),
+            end: None,
+        },
+        &db_client,
+    )
+    .await
+    .unwrap();
+    assert_eq!(agg_flow_rows.len(), 3);
+
+    // Test time-range query and org query
+    let agg_flow_rows = query_aggregated_flows(
+        &NetDebugUser::make_internal_superuser(),
+        Some(3),
+        TimeRangeQueryParams {
+            start: Some(t0),
+            end: Some(t1),
+        },
+        &db_client,
+    )
+    .await
+    .unwrap();
+    assert_eq!(agg_flow_rows.len(), 3);
 }

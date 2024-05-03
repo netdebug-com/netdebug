@@ -217,6 +217,14 @@ pub fn get_alice_dev1_uuid() -> Uuid {
     mk_uuid_from_string(FAKE_PEOPLE_DATA[0].0)
 }
 
+pub fn get_bob_dev2_uuid() -> Uuid {
+    mk_uuid_from_string(FAKE_PEOPLE_DATA[1].0)
+}
+
+pub fn get_cathy_dev3_uuid() -> Uuid {
+    mk_uuid_from_string(FAKE_PEOPLE_DATA[2].0)
+}
+
 // also see add_fake_connection_logs
 pub fn get_expected_fake_connection_logs_alice() -> Vec<ConnectionMeasurements> {
     let org_id = FAKE_PEOPLE_DATA[0].1;
@@ -247,6 +255,7 @@ pub async fn add_fake_connection_logs(db_client: &Client) -> Result<(), tokio_po
             RemoteDBClient::handle_store_connection_measurement(
                 db_client,
                 m,
+                None,
                 device_uuid,
                 org_id,
                 &StorageSourceType::Desktop,
@@ -294,6 +303,7 @@ pub async fn add_fake_connection_logs_for_flow_query_test(
     RemoteDBClient::handle_store_connection_measurement(
         db_client,
         &m1,
+        None,
         device_uuid,
         FAKE_PEOPLE_DATA[0].1,
         &StorageSourceType::Desktop,

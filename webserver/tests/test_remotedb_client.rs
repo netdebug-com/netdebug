@@ -87,6 +87,7 @@ async fn test_remotedb_client() {
     RemoteDBClient::handle_store_connection_measurement(
         &client,
         &ConnectionMeasurements::make_mock(),
+        None,
         &Uuid::from_u128(0x1234_1234_1234_1234),
         1,
         &StorageSourceType::Desktop,

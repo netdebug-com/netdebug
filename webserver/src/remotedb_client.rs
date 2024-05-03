@@ -422,6 +422,7 @@ impl RemoteDBClient {
                     Self::handle_store_connection_measurement(
                         client,
                         connection_measurements,
+                        None,
                         device_uuid,
                         *organization_id,
                         source_type,
@@ -745,6 +746,7 @@ impl RemoteDBClient {
     pub async fn handle_store_connection_measurement(
         client: &Client,
         m: &ConnectionMeasurements,
+        timestamp: Option<DateTime<Utc>>,
         device_uuid: &Uuid,
         organization_id: OrganizationId,
         source_type: &StorageSourceType,
@@ -763,7 +765,7 @@ impl RemoteDBClient {
             serde_json::to_string(&m.tx_stats_since_prev_export).unwrap();
         let rx_stats_since_prev_export =
             serde_json::to_string(&m.rx_stats_since_prev_export).unwrap();
-        let now = Utc::now();
+        let ts = timestamp.unwrap_or_else(Utc::now);
         client
             .execute(
                 format!(
@@ -824,7 +826,7 @@ impl RemoteDBClient {
                     &rx_loss,
                     &tx_stats,
                     &rx_stats,
-                    &now,
+                    &ts,
                     &device_uuid,
                     &source_type.to_string(),
                     &serde_json::to_string(&m.pingtrees).unwrap(),

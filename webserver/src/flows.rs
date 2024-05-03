@@ -1,20 +1,23 @@
-use std::{net::IpAddr, str::FromStr, sync::Arc};
+use std::{collections::HashMap, net::IpAddr, str::FromStr, sync::Arc};
 
 use chrono::{DateTime, Utc};
 use common_wasm::ProbeReportSummary;
 use futures::{pin_mut, StreamExt};
+use gui_types::OrganizationId;
 use libconntrack_wasm::{ConnectionKey, ConnectionMeasurements, IpProtocol, TrafficStatsSummary};
+use serde::{Deserialize, Serialize};
 use tokio_postgres::{
     binary_copy::{BinaryCopyOutRow, BinaryCopyOutStream},
-    types::Type,
-    Client,
+    types::{ToSql, Type},
+    Client, Row, Transaction,
 };
 use uuid::Uuid;
 
 use crate::{
-    db_utils::{CopyOutQueryHelper, TimeRangeQueryParams},
+    db_utils::{make_where_clause, CopyOutQueryHelper, TimeRangeQueryParams},
     devices::DeviceInfo,
-    flow_aggregation::{AggregateByCategory, AggregatedBucket, BucketAggregator},
+    flow_aggregation::{AggregatedBucket, AggregatedConnectionMeasurement, BucketAggregator},
+    organizations::NETDEBUG_EMPLOYEE_ORG_ID,
     remotedb_client::RemoteDBClientError,
     users::NetDebugUser,
 };
@@ -37,6 +40,9 @@ impl FlowQueryExtraColumns {
     }
 }
 
+// The columns from desktop_connections table that we always want to query,
+// with their Postgres type. We use it to facilitate nicer column access for
+// COPY OUT queries. See `copy_out_row_to_measurement()` and `CopyOutQueryHelper`
 const DEFAULT_COLUMNS: [(&str, Type); 23] = [
     ("time", Type::TIMESTAMPTZ),
     ("local_ip", Type::TEXT),
@@ -63,6 +69,72 @@ const DEFAULT_COLUMNS: [(&str, Type); 23] = [
     ("export_count", Type::INT8),
 ];
 
+/// The columns common across all of the `aggregated_connections_*` table.
+/// (The ..._total table only has these columns_
+const AGGREGATED_CONNS_COMMON_COLUMNS: [&str; 19] = [
+    "bucket_start_time",
+    "bucket_size_minutes",
+    "device_uuid",
+    "organization",
+    "num_flows",
+    "num_flows_with_rx_loss",
+    "num_flows_with_tx_loss",
+    "num_tcp_flows",
+    "num_udp_flows",
+    "rx_packets",
+    "tx_packets",
+    "rx_bytes",
+    "tx_bytes",
+    "rx_lost_bytes",
+    "tx_lost_bytes",
+    "tcp_rx_bytes",
+    "tcp_tx_bytes",
+    "udp_rx_bytes",
+    "udp_tx_bytes",
+];
+
+/// convert an aggregated_connection_measurement into a list of parameters
+/// to pass to `::execute()`. The order here must match the order in
+/// AGGREGATED_CONNS_COMMON_COLUMNS.
+/// In addition we add anything in extra_vals to the end of the parameter list
+fn aggregated_flow_to_sql_params<'a>(
+    bucket_start: &'a DateTime<Utc>,
+    bucket_size_minutes: &'a i64,
+    agg: &'a AggregatedConnectionMeasurement,
+    // TODO: for extra_vals I really just wanted an `Option<&str>` or `Option<String>` but
+    // I lost my battle with the borrow checker. So Vec it is.
+    extra_vals: &'a [&'a str],
+) -> Vec<&'a (dyn ToSql + Sync)> {
+    let mut params: Vec<&'a (dyn ToSql + Sync)> = Vec::with_capacity(20);
+
+    params.push(bucket_start);
+    params.push(bucket_size_minutes);
+    params.push(&agg.device_uuid);
+    params.push(&agg.organization_id);
+    params.push(&agg.num_flows);
+    params.push(&agg.num_flows_with_rx_loss);
+    params.push(&agg.num_flows_with_tx_loss);
+    params.push(&agg.num_tcp_flows);
+    params.push(&agg.num_udp_flows);
+
+    params.push(&agg.rx_packets);
+    params.push(&agg.tx_packets);
+    params.push(&agg.rx_bytes);
+    params.push(&agg.tx_bytes);
+    params.push(&agg.rx_lost_bytes);
+    params.push(&agg.tx_lost_bytes);
+
+    params.push(&agg.tcp_rx_bytes);
+    params.push(&agg.tcp_tx_bytes);
+    params.push(&agg.udp_rx_bytes);
+    params.push(&agg.udp_tx_bytes);
+    for extra in extra_vals {
+        params.push(extra);
+    }
+
+    params
+}
+
 fn get_flow_query_helper(extra_columns: &[FlowQueryExtraColumns]) -> CopyOutQueryHelper {
     let mut cols = DEFAULT_COLUMNS.to_vec();
     for extra_col in extra_columns {
@@ -71,6 +143,7 @@ fn get_flow_query_helper(extra_columns: &[FlowQueryExtraColumns]) -> CopyOutQuer
     CopyOutQueryHelper::new(cols)
 }
 
+// Extract a ConnectionMeasurement from a given COPY OUT row.
 fn copy_out_row_to_measurement(
     helper: &CopyOutQueryHelper,
     row: BinaryCopyOutRow,
@@ -177,11 +250,15 @@ pub async fn flow_queries(
     Ok(measurements)
 }
 
+/// Query the desktop_connections table for the given timerange, and aggregate
+/// all flows.
+/// This function does not do any permission checks all will always query all
+/// flows from all devices/orgs
 pub async fn query_and_aggregate_flows(
     client: Arc<Client>,
     time_range: TimeRangeQueryParams,
     aggregate_bucket_size: chrono::Duration,
-) -> Result<Vec<AggregatedBucket<AggregateByCategory>>, RemoteDBClientError> {
+) -> Result<Vec<AggregatedBucket>, RemoteDBClientError> {
     let mut time_range_where = time_range.to_sql_where();
     if !time_range_where.is_empty() {
         time_range_where.insert_str(0, "WHERE ");
@@ -196,15 +273,236 @@ pub async fn query_and_aggregate_flows(
         helper.columns_names(),
         time_range_where
     );
-    let mut aggregator = BucketAggregator::<AggregateByCategory>::new(aggregate_bucket_size);
-    let copy_out = client.copy_out(&query).await?;
-    let reader = BinaryCopyOutStream::new(copy_out, helper.col_types());
+    let mut aggregator = BucketAggregator::new(aggregate_bucket_size);
+    let copy_out_fut = client.copy_out(&query);
+    let superuser = NetDebugUser::make_internal_superuser();
+    let device_list_fut = DeviceInfo::get_devices(&superuser, None, client.clone());
+    let (device_list, copy_out) = futures::join!(device_list_fut, copy_out_fut);
+
+    let mut device_to_org = HashMap::new();
+    for dev in device_list? {
+        device_to_org.insert(dev.uuid, dev.organization_id);
+    }
+
+    let reader = BinaryCopyOutStream::new(copy_out?, helper.col_types());
     pin_mut!(reader);
     while let Some(maybe_row) = reader.next().await {
         let row = maybe_row?;
         let ts: DateTime<Utc> = helper.get(&row, "time")?;
+        let device_uuid: Uuid = helper.get(&row, "device_uuid")?;
+        let org_id = *device_to_org
+            .get(&device_uuid)
+            .unwrap_or(&NETDEBUG_EMPLOYEE_ORG_ID);
         let m = copy_out_row_to_measurement(&helper, row)?;
-        aggregator.add(ts, &m);
+        aggregator.add(ts, device_uuid, org_id, &m);
     }
     Ok(aggregator.to_vec())
+}
+
+/// Write aggregated flows to the DB. All inserts are performed insided the
+/// given transaction. It's the caller's responsibility to `commit` the transaction
+pub async fn write_aggregated_flows(
+    transaction: &Transaction<'_>,
+    buckets: Vec<AggregatedBucket>,
+) -> Result<(), RemoteDBClientError> {
+    let query_total = format!(
+        "INSERT INTO aggregated_connections_total ({}) VALUES ($1, $2, $3, $4, $5,
+               $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)",
+        AGGREGATED_CONNS_COMMON_COLUMNS.join(", ")
+    );
+    let query_by_app = format!(
+        "INSERT INTO aggregated_connections_by_application ({}, application) VALUES ($1, $2, $3, $4, $5,
+               $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
+        AGGREGATED_CONNS_COMMON_COLUMNS.join(", ")
+    );
+    let query_by_dest = format!(
+        "INSERT INTO aggregated_connections_by_dest ({}, dns_dest_domain) VALUES ($1, $2, $3, $4, $5,
+               $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
+        AGGREGATED_CONNS_COMMON_COLUMNS.join(", ")
+    );
+    // use futures::join to execute these in parallel (i.e., pipelined)
+    let (stmt_total, stmt_by_app, stmt_by_dest) = futures::join!(
+        transaction.prepare(&query_total),
+        transaction.prepare(&query_by_app),
+        transaction.prepare(&query_by_dest),
+    );
+    let stmt_total = stmt_total?;
+    let stmt_by_app = stmt_by_app?;
+    let stmt_by_dest = stmt_by_dest?;
+    for bucket in buckets {
+        for per_device in bucket.aggregate.values() {
+            transaction
+                .execute(
+                    &stmt_total,
+                    &aggregated_flow_to_sql_params(
+                        &bucket.bucket_start,
+                        &bucket.bucket_size.num_minutes(),
+                        &per_device.total,
+                        &[],
+                    ),
+                )
+                .await?;
+            for (application, entry) in &per_device.by_app {
+                transaction
+                    .execute(
+                        &stmt_by_app,
+                        &aggregated_flow_to_sql_params(
+                            &bucket.bucket_start,
+                            &bucket.bucket_size.num_minutes(),
+                            entry,
+                            &[application],
+                        ),
+                    )
+                    .await?;
+            }
+            for (dst_domain, entry) in &per_device.by_dns_dest_domain {
+                transaction
+                    .execute(
+                        &stmt_by_dest,
+                        &aggregated_flow_to_sql_params(
+                            &bucket.bucket_start,
+                            &bucket.bucket_size.num_minutes(),
+                            entry,
+                            &[dst_domain],
+                        ),
+                    )
+                    .await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(tag = "tag", content = "name")]
+pub enum AggregatedFlowCategory {
+    Total,
+    ByApp(String),
+    ByDnsDestDomain(String),
+}
+
+/// Represents one row of aggregated flows / connection measurements
+/// from the DB.
+#[derive(Debug, Eq, PartialEq, Hash)]
+pub struct AggregatedFlowRow {
+    pub bucket_start: DateTime<Utc>,
+    pub bucket_size: chrono::Duration,
+    pub category: AggregatedFlowCategory,
+    pub aggregate: AggregatedConnectionMeasurement,
+}
+
+pub fn row_to_aggregated_connection_measurement(
+    row: &Row,
+) -> Result<AggregatedConnectionMeasurement, RemoteDBClientError> {
+    Ok(AggregatedConnectionMeasurement {
+        device_uuid: row.try_get::<_, Uuid>("device_uuid")?,
+        organization_id: row.try_get("organization")?,
+        num_flows: row.try_get("num_flows")?,
+        num_flows_with_rx_loss: row.try_get("num_flows_with_rx_loss")?,
+        num_flows_with_tx_loss: row.try_get("num_flows_with_tx_loss")?,
+        num_tcp_flows: row.try_get("num_tcp_flows")?,
+        num_udp_flows: row.try_get("num_udp_flows")?,
+        rx_packets: row.try_get("rx_packets")?,
+        tx_packets: row.try_get("tx_packets")?,
+        rx_bytes: row.try_get("rx_bytes")?,
+        tx_bytes: row.try_get("tx_bytes")?,
+        rx_lost_bytes: row.try_get("rx_lost_bytes")?,
+        tx_lost_bytes: row.try_get("tx_lost_bytes")?,
+        tcp_rx_bytes: row.try_get("tcp_rx_bytes")?,
+        tcp_tx_bytes: row.try_get("tcp_tx_bytes")?,
+        udp_rx_bytes: row.try_get("udp_rx_bytes")?,
+        udp_tx_bytes: row.try_get("udp_tx_bytes")?,
+    })
+}
+
+/// Returns `(bucket_start, bucket_size)` of the given row
+fn row_to_aggregated_bucket_info(
+    row: &Row,
+) -> Result<(DateTime<Utc>, chrono::Duration), RemoteDBClientError> {
+    Ok((
+        row.try_get("bucket_start_time")?,
+        chrono::Duration::minutes(row.try_get("bucket_size_minutes")?),
+    ))
+}
+
+/// Query the DB for aggregated flows
+/// If org_id is None, all organazations are queried, it if
+/// `Some(id)` only the given org_id is queried. This functions
+/// checks if the `user` is allowed to access the requested org(s).
+/// If not a Permission error is returned.
+pub async fn query_aggregated_flows(
+    user: &NetDebugUser,
+    org_id: Option<OrganizationId>,
+    time_range: TimeRangeQueryParams,
+    client: &Client,
+) -> Result<Vec<AggregatedFlowRow>, RemoteDBClientError> {
+    user.check_org_allowed_or_fail(org_id)?;
+
+    let org_id_term = if let Some(org_id) = org_id {
+        format!("organization = {}", org_id)
+    } else {
+        String::new()
+    };
+    let time_range_term =
+        time_range.to_sql_where_with_keys("bucket_start_time", "bucket_start_time");
+    let where_clause = make_where_clause(&[&org_id_term, &time_range_term]);
+
+    let query_total = format!(
+        "SELECT {} FROM aggregated_connections_total {}",
+        AGGREGATED_CONNS_COMMON_COLUMNS.join(", "),
+        where_clause
+    );
+    let query_by_app = format!(
+        "SELECT {}, application FROM aggregated_connections_by_application {}",
+        AGGREGATED_CONNS_COMMON_COLUMNS.join(", "),
+        where_clause
+    );
+    let query_by_dest = format!(
+        "SELECT {}, dns_dest_domain FROM aggregated_connections_by_dest {}",
+        AGGREGATED_CONNS_COMMON_COLUMNS.join(", "),
+        where_clause
+    );
+
+    let (total_rows, by_app_rows, by_dest_rows) = futures::join!(
+        client.query(&query_total, &[]),
+        client.query(&query_by_app, &[]),
+        client.query(&query_by_dest, &[]),
+    );
+
+    let mut out = Vec::new();
+    for row in total_rows? {
+        let entry = row_to_aggregated_connection_measurement(&row)?;
+        let (bucket_start, bucket_size) = row_to_aggregated_bucket_info(&row)?;
+        out.push(AggregatedFlowRow {
+            bucket_start,
+            bucket_size,
+            category: AggregatedFlowCategory::Total,
+            aggregate: entry,
+        });
+    }
+    for row in by_app_rows? {
+        let (bucket_start, bucket_size) = row_to_aggregated_bucket_info(&row)?;
+        let application: String = row.try_get("application")?;
+        let entry = row_to_aggregated_connection_measurement(&row)?;
+        out.push(AggregatedFlowRow {
+            bucket_start,
+            bucket_size,
+            category: AggregatedFlowCategory::ByApp(application),
+            aggregate: entry,
+        });
+    }
+    for row in by_dest_rows? {
+        let (bucket_start, bucket_size) = row_to_aggregated_bucket_info(&row)?;
+        let dns_dest_domain: String = row.try_get("dns_dest_domain")?;
+        let entry = row_to_aggregated_connection_measurement(&row)?;
+        out.push(AggregatedFlowRow {
+            bucket_start,
+            bucket_size,
+            category: AggregatedFlowCategory::ByDnsDestDomain(dns_dest_domain),
+            aggregate: entry,
+        });
+    }
+
+    Ok(out)
 }
