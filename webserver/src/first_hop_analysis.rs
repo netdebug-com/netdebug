@@ -109,14 +109,18 @@ pub async fn first_hop_single_device_timeline(
 ) -> Result<Vec<Vec<FirstHopTimeSeriesData>>, tokio_postgres::Error> {
     let mut results: Vec<Vec<FirstHopTimeSeriesData>> = Vec::new();
     let rows = db_client.query( "
-        SELECT interface_name, has_link, is_wireless, start_time, desktop_aggregated_ping_data.time, 
-            gateway_ip, num_probes_sent, num_responses_recv, 
-            network_interface_state_uuid, gateway_ip,
-            rtt_mean_ns , rtt_variance_ns , rtt_min_ns, rtt_p50_ns, rtt_p75_ns, rtt_p90_ns, rtt_p99_ns, rtt_max_ns 
-        FROM desktop_network_interface_state  
-        INNER JOIN desktop_aggregated_ping_data 
-        ON desktop_network_interface_state.state_uuid = desktop_aggregated_ping_data.network_interface_state_uuid 
-        WHERE device_uuid = $1 ORDER BY desktop_aggregated_ping_data.time LIMIT 2000; ", &[&device_uuid]).await?;
+        SELECT q.* FROM ( 
+            SELECT interface_name, has_link, is_wireless, start_time, desktop_aggregated_ping_data.time, 
+                gateway_ip, num_probes_sent, num_responses_recv, 
+                network_interface_state_uuid, gateway_ip,
+                rtt_mean_ns , rtt_variance_ns , rtt_min_ns, rtt_p50_ns, rtt_p75_ns, rtt_p90_ns, rtt_p99_ns, rtt_max_ns 
+            FROM desktop_network_interface_state  
+            INNER JOIN desktop_aggregated_ping_data 
+            ON desktop_network_interface_state.state_uuid = desktop_aggregated_ping_data.network_interface_state_uuid 
+            WHERE device_uuid = $1 ORDER BY desktop_aggregated_ping_data.time) AS q
+        ORDER BY q.time
+            
+    ", &[&device_uuid]).await?;
 
     let mut prev_interface_uuid: Option<Uuid> = None;
     for row in rows {

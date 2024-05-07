@@ -15,7 +15,37 @@ import {
   renderDataLoadingState,
 } from "../common";
 import { useEffect, useState } from "react";
-import ReactApexChart from "react-apexcharts";
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  TimeScale,
+  Colors,
+  TimeSeriesScale,
+  ChartOptions,
+} from "chart.js";
+import "chartjs-adapter-date-fns";
+import { Line } from "react-chartjs-2";
+
+// weird ChartJs magic... TODO: figure it out...
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Tooltip,
+  Legend,
+  CategoryScale,
+  Title,
+  TimeScale,
+  TimeSeriesScale,
+  Colors,
+);
 
 interface DeviceLoaderArgs extends ActionFunctionArgs {
   params: Params<ParamParseKey<string>>;
@@ -41,133 +71,57 @@ function renderDeviceDetails(
   );
 }
 
-function generateTimeSeriesChartOptions(): ApexCharts.ApexOptions {
+function generateTimeSeriesChartOptions(): ChartOptions<"line"> {
   return {
-    chart: {
-      type: "area",
-      stacked: false,
-      height: 350,
-      zoom: {
-        type: "x",
-        enabled: true, // this is what allows autozooming of time
-        autoScaleYaxis: true,
-      },
-      toolbar: {
-        autoSelected: "zoom",
-      },
-    },
-    dataLabels: {
-      enabled: false,
-    },
-    markers: {
-      size: 0,
-    },
-    title: {
-      text: "Latency to First-Hop Router",
-      align: "left",
-    },
-    fill: {
-      type: "gradient",
-      gradient: {
-        shadeIntensity: 1,
-        inverseColors: false,
-        opacityFrom: 0.5,
-        opacityTo: 0,
-        stops: [0, 90, 100],
-      },
-    },
-    yaxis: {
-      labels: {
-        formatter: function (val) {
-          return (val / 1000000).toFixed(0); // map ns to ms
+    scales: {
+      x: {
+        type: "time",
+        time: {
+          unit: "hour",
         },
+      },
+      /*
+      y: {
+        max: 1000,
+      },
+      */
+    },
+    responsive: true,
+    plugins: {
+      legend: {
+        position: "top" as const,
       },
       title: {
-        text: "Latency (milliseconds)",
+        display: true,
+        text: "First Router Ping Times",
       },
-    },
-    xaxis: {
-      type: "datetime", // I think this is the magic that says interpret the 'x' value as seconds from the EPOCH
-      // ApexCharts documentation isn't super clear here
-    },
-    tooltip: {
-      shared: false,
-      y: {
-        formatter: function (val) {
-          return (val / 1000000).toFixed(2); // map ns to ms for the tooltip
-        },
+      colors: {
+        enabled: true,
+        forceOverride: true,
       },
     },
   };
 }
 
-interface PingDataPoint {
-  x: string;
-  y: number;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function generateTimeSeriesChartDataMerged(
-  firstHopTimeSeries: DataLoadingState<Array<Array<FirstHopTimeSeriesData>>>,
-): ApexAxisChartSeries | ApexNonAxisChartSeries {
-  // TODO: outer array for p50, p99, etc.
-  if (!firstHopTimeSeries.data) {
-    return []; // still loading or error
-  }
-  // else data is loaded
-  const p50_map = new Map<string, Array<PingDataPoint>>();
-  firstHopTimeSeries.data.forEach((intf: Array<FirstHopTimeSeriesData>) => {
-    const series_data = intf.map((ping_data: FirstHopTimeSeriesData) => ({
-      x: ping_data.time,
-      y: ping_data.aggregate_ping_data.rtt_p50_ns,
-    }));
-    const name = intf[0].interface_name + " p50";
-    if (p50_map.has(name)) {
-      p50_map.get(name).push(...series_data);
-    } else {
-      p50_map.set(name, series_data);
-    }
-  });
-  const p99_map = new Map<string, Array<PingDataPoint>>();
-  firstHopTimeSeries.data.forEach((intf: Array<FirstHopTimeSeriesData>) => {
-    const series_data = intf.map((ping_data: FirstHopTimeSeriesData) => ({
-      x: ping_data.time,
-      y: ping_data.aggregate_ping_data.rtt_p99_ns,
-    }));
-    const name = intf[0].interface_name + " p99";
-    if (p99_map.has(name)) {
-      p99_map.get(name).push(...series_data);
-    } else {
-      p99_map.set(name, series_data);
-    }
-  });
-  const p50_series = Array.from(
-    p50_map,
-    ([k, v]: [string, Array<PingDataPoint>]) => ({ name: k, data: v }),
-  );
-  const p99_series = Array.from(
-    p99_map,
-    ([k, v]: [string, Array<PingDataPoint>]) => ({ name: k, data: v }),
-  );
-  return [p50_series, p99_series].flat();
-}
-
 function generateTimeSeriesChartData(
   firstHopTimeSeries: DataLoadingState<Array<Array<FirstHopTimeSeriesData>>>,
-): ApexAxisChartSeries | ApexNonAxisChartSeries {
-  // TODO: outer array for p50, p99, etc.
+) {
   if (!firstHopTimeSeries.data) {
-    return []; // still loading or error
+    if (firstHopTimeSeries.error) {
+      console.warn("Error: ", +firstHopTimeSeries.error);
+    }
+    return { datasets: [] }; // empty if no data yet
   }
   // else data is loaded
+  // TODO: outer array for p50, p99, etc.
   const p50_series = firstHopTimeSeries.data.map(
     (intf: Array<FirstHopTimeSeriesData>) => {
       const series_data = intf.map((ping_data: FirstHopTimeSeriesData) => ({
         x: ping_data.time,
-        y: ping_data.aggregate_ping_data.rtt_p50_ns,
+        y: ping_data.aggregate_ping_data.rtt_p50_ns / 1e6, // 1e6 : ns to ms conversion
       }));
       return {
-        name: intf[0].interface_name + " p50",
+        label: intf[0].interface_name + " p50",
         data: series_data,
       };
     },
@@ -176,15 +130,17 @@ function generateTimeSeriesChartData(
     (intf: Array<FirstHopTimeSeriesData>) => {
       const series_data = intf.map((ping_data: FirstHopTimeSeriesData) => ({
         x: ping_data.time,
-        y: ping_data.aggregate_ping_data.rtt_p99_ns,
+        y: ping_data.aggregate_ping_data.rtt_p99_ns / 1e6, // 1e6 : ns to ms conversion
       }));
       return {
-        name: intf[0].interface_name + " p99",
+        label: intf[0].interface_name + " p99",
         data: series_data,
       };
     },
   );
-  return [p50_series, p99_series].flat();
+  return {
+    datasets: [p50_series, p99_series].flat(),
+  };
 }
 
 function renderFirstHopTimeSeries(
@@ -194,25 +150,22 @@ function renderFirstHopTimeSeries(
   const time_series_data = generateTimeSeriesChartData(firstHopTimeSeries);
   console.log(
     "TimeSeries Data : #labels=",
-    time_series_data.map((d) => d.name),
+    time_series_data.datasets.map((d) => d.label),
   );
   let count = 0;
-  time_series_data.forEach((d) => {
+  time_series_data.datasets.forEach((d) => {
     count += d.data.length;
     console.log(
-      "TimeSeries Data: label " + d.name + " :: points=" + d.data.length,
+      "TimeSeries Data: label " + d.label + " :: points=" + d.data.length,
     );
   });
   console.log("Time Series total data points graphed: " + count);
   return (
     <div>
-      <ReactApexChart
+      <Line
         options={generateTimeSeriesChartOptions()}
-        series={time_series_data}
-        type="area"
-        height={350}
+        data={time_series_data}
       />
-
       <details>
         <summary>First-Router Time Series for {uuid} </summary>
         {renderDataLoadingState(firstHopTimeSeries, (d) => (
