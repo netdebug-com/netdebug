@@ -56,7 +56,7 @@ pub async fn get_devices(
     State(client): State<MockableDbClient>,
 ) -> Result<Json<Vec<PublicDeviceInfo>>, Response<Body>> {
     let user = check_user(auth_session.user)?;
-    match DeviceInfo::get_devices(&user, Some(user.organization_id), client.get_client()).await {
+    match DeviceInfo::get_devices(&user, Some(user.organization_id), &client.get_client()).await {
         Ok(devices) => {
             let pub_devices: Vec<PublicDeviceInfo> =
                 devices.iter().map(|d| d.clone().into()).collect();

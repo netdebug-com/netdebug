@@ -18,12 +18,22 @@ use libconntrack_wasm::{
     topology_server_messages::DesktopLogLevel, AggregatedGatewayPingData, ConnectionMeasurements,
     DnsTrackerEntry, NetworkInterfaceState,
 };
-use log::{info, warn};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
+
 use tokio_postgres::{binary_copy::BinaryCopyInWriter, types::Type, Client, Row};
 use uuid::Uuid;
 
-use crate::secrets_db::Secrets;
+use crate::{
+    db_utils::TimeRangeQueryParams,
+    flows::{query_and_aggregate_flows, write_aggregated_flows},
+    secrets_db::Secrets,
+};
+
+// We only aggregate a full bucket_size worth of flows at a time. In order to make sure we don't have an stragglers
+// in the desktop_connections table, we only start the aggregation if the we are FLOW_AGGREGATION_TIME_GAP_MINUTES
+// after the end of the bucket.
+const FLOW_AGGREGATION_TIME_GAP_MINUTES: i64 = 15;
 
 /// An agent to manage the connection to the remote database service
 /// Currently we're using timescaledb.com b/c it supports both
@@ -981,6 +991,170 @@ impl RemoteDBClient {
             .await?;
         Ok(())
     }
+
+    /// Spawn a task for periodic flow aggregation. The task will establish its own DB
+    /// connection and will automatically try to reconnect on error (with exponential
+    /// backoff). The task will check every 60secs if new flows can be aggregated
+    ///
+    pub fn spawn_flow_aggregation_task(
+        secrets: Secrets,
+        retry_time_max: tokio::time::Duration,
+        aggregation_bucket_size: chrono::Duration,
+    ) {
+        tokio::spawn(async move {
+            let urls = make_db_url(&secrets, false);
+            let id = "(flow_agg)";
+            let mut retry_time = tokio::time::Duration::from_millis(INITIAL_RETRY_TIME_MS);
+            loop {
+                // reconnect loop
+                info!(
+                    "DbConn {}: Trying to connect to database server: {}",
+                    id, urls.url_without_auth
+                );
+                let connector =
+                    native_tls::TlsConnector::new().expect("Failed to create a TLS connector");
+                let connector = postgres_native_tls::MakeTlsConnector::new(connector);
+
+                let (mut client, connection) = match tokio_postgres::connect(
+                    &urls.url_with_auth,
+                    connector,
+                )
+                .await
+                {
+                    Ok((client, connection)) => (client, connection),
+                    Err(e) => {
+                        retry_time = std::cmp::min(retry_time * 2, retry_time_max);
+                        warn!(
+                        "DbConn {}: Failed to connect to postgres server {} - retrying in {:?} -- error {}", id,
+                        urls.url_without_auth, retry_time, e
+                    );
+                        tokio::time::sleep(retry_time).await;
+                        continue;
+                    }
+                };
+                // successful connect, reset retry timer
+                retry_time = Duration::from_millis(INITIAL_RETRY_TIME_MS);
+
+                // the tokio_postgres API requires that we spawn a task for the connection
+                // so it can handle multiple reads/writes in parallel on the backend
+                tokio::spawn(async move {
+                    if let Err(e) = connection.await {
+                        // TODO: figure out under what conditions this could exit and see
+                        // if we need to be more resilient here
+                        warn!(
+                            "DbConn {}: tokio_postgress connection exited with {}... uhmm.. TODO",
+                            id, e
+                        );
+                    }
+                });
+
+                loop {
+                    // inner loop
+                    if let Err(e) = do_flow_aggregation(&mut client, aggregation_bucket_size).await
+                    {
+                        warn!(
+                            "DbConn {}: RemoteClientDB loop produced error: restarting client: {}",
+                            id, e
+                        );
+                        break;
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+                }
+            }
+        });
+    }
+}
+
+///
+/// Perform the flow aggregation. All work is done inside a transaction. We first
+/// Order of operations:
+///    0. Start transaction
+///    1. acquire an exlusive lock on `aggregated_connections_lock` to prevent other
+///       instances from aggregating at the same time
+///    2. Read the timestamp from which we need to start aggregating (from
+///       `aggregated_connections_lock` table).
+///    3. Check if we have at least one bucket worth of flows to aggregate. If not,
+///       return.
+///    4. Compute time-window that we need to query (one or more buckets)
+///    5. perform read from desktop_connections and aggregate
+///    6. Write aggregated flow entries to `aggregated_connections_*` tables.
+///    7. Update timestamp in `aggregated_connections_lock` table
+///    8. COMMIT the transaction
+///
+async fn do_flow_aggregation(
+    client: &mut Client,
+    bucket_size: chrono::Duration,
+) -> Result<(), RemoteDBClientError> {
+    let transaction = client.transaction().await?;
+    // make sure only one process can update ==> aqcuire an exlusive lock
+    // lock will be released when the transaction ends. Concurrent reads are still
+    // allowed in `EXCLUSIVE` mode.
+    let lock_res = transaction
+        .execute(
+            "LOCK TABLE aggregated_connections_lock IN EXCLUSIVE mode NOWAIT",
+            &[],
+        )
+        .await;
+    if lock_res.is_err() {
+        warn!("Could not acquire lock on table `aggregated_connections_lock` -- is another instance running?");
+        return Ok(());
+    }
+    let next_bucket_time_rows = transaction
+        .query(
+            "SELECT next_bucket_start_time FROM aggregated_connections_lock",
+            &[],
+        )
+        .await?;
+    assert_eq!(
+        next_bucket_time_rows.len(),
+        1,
+        "Invalid number of rows in next_bucket_start_time -- expected exactly 1"
+    );
+    let next_bucket_time: DateTime<Utc> = next_bucket_time_rows.first().unwrap().try_get(0)?;
+
+    // We only aggregate a full bucket_size worth of flows at a time. In order to make sure we don't have an stragglers
+    // in the desktop_connections table, we only start the aggregation if the we are FLOW_AGGREGATION_TIME_GAP_MINUTES
+    // after the end of the bucket.
+    let max_time = Utc::now() - chrono::Duration::minutes(FLOW_AGGREGATION_TIME_GAP_MINUTES);
+    if next_bucket_time + bucket_size < max_time {
+        // We have at least one bucket worth of flows we can aggregate
+        let mut end_time = next_bucket_time + bucket_size;
+        while end_time + bucket_size < max_time {
+            end_time += bucket_size;
+        }
+        assert!(end_time < max_time);
+        let time_range = TimeRangeQueryParams {
+            start: Some(next_bucket_time),
+            end: Some(end_time),
+        };
+        info!(
+            "Aggregating flows from {} to {}",
+            next_bucket_time, end_time
+        );
+        let agg_buckets =
+            query_and_aggregate_flows(transaction.client(), time_range, bucket_size).await?;
+        write_aggregated_flows(&transaction, agg_buckets).await?;
+        transaction
+            .execute(
+                "UPDATE aggregated_connections_lock SET next_bucket_start_time = $1",
+                &[&end_time],
+            )
+            .await?;
+        transaction.commit().await?;
+        info!(
+            "Flow aggregation from {} to {} is DONE.",
+            next_bucket_time, end_time
+        );
+    } else {
+        // Nothing to do.
+        debug!(
+            "Flow Aggregation: nothing to aggregate at this time. Next bucket start time is {}",
+            next_bucket_time
+        );
+        transaction.rollback().await?;
+    }
+
+    Ok(())
 }
 
 /// Take a row from a SELECT * query and convert it into an

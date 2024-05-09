@@ -24,6 +24,7 @@ use libconntrack::{
 use uuid::Uuid;
 
 use crate::{
+    flow_aggregation::AGGREGATION_BUCKET_SIZE_MINUTES,
     remotedb_client::{RemoteDBClient, RemoteDBClientSender},
     secrets_db::Secrets,
     spawn_webserver_connection_log_wrapper, topology_server,
@@ -123,6 +124,16 @@ impl WebServerContext {
         let remotedb_client = if args.no_timescaledb {
             None
         } else {
+            if args.enable_flow_aggregation {
+                info!("Starting flow aggregation task");
+                RemoteDBClient::spawn_flow_aggregation_task(
+                    secrets.clone(),
+                    tokio::time::Duration::from_secs(30),
+                    chrono::Duration::minutes(AGGREGATION_BUCKET_SIZE_MINUTES),
+                );
+            } else {
+                info!("Flow aggregation is DISABLED");
+            }
             Some(
                 RemoteDBClient::spawn(
                     secrets.clone(),
@@ -251,9 +262,16 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub no_timescaledb: bool,
 
-    //
+    /// The number of connections to establish to the DB for writing
     #[arg(long, default_value_t = 10)]
     pub num_db_write_connections: usize,
+
+    /// If enabled, this instance will periodically aggregated flows.
+    /// Ideally, only the isntance closest to the DB server should have this
+    /// flag enabled for optimal performance. However, it's save to run it on
+    /// multiple instances
+    #[arg(long, default_value_t = false)]
+    pub enable_flow_aggregation: bool,
 }
 
 pub type Context = Arc<RwLock<WebServerContext>>;
