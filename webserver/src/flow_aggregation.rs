@@ -1,9 +1,18 @@
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use libconntrack_wasm::{ConnectionMeasurements, IpProtocol};
 use serde::{Deserialize, Serialize};
 
+pub const AGGREGATION_BUCKET_SIZE_MINUTES: i64 = 60;
+
+pub trait Aggregator {
+    fn add_to_aggregate(&mut self, rhs: &ConnectionMeasurements);
+}
+
+/// Represents the aggregation of several ConnectionMeasurements.
+/// This struct uses the *_stats_since_prev_export for aggregation
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct AggregatedConnectionMeasurement {
     pub num_flows: i64,
@@ -25,8 +34,8 @@ pub struct AggregatedConnectionMeasurement {
     pub udp_tx_bytes: i64,
 }
 
-impl AggregatedConnectionMeasurement {
-    pub fn add_to_aggregate(&mut self, rhs: &ConnectionMeasurements) {
+impl Aggregator for AggregatedConnectionMeasurement {
+    fn add_to_aggregate(&mut self, rhs: &ConnectionMeasurements) {
         self.num_flows += 1;
         match rhs.key.ip_proto {
             IpProtocol::TCP => {
@@ -57,6 +66,8 @@ impl AggregatedConnectionMeasurement {
     }
 }
 
+/// Aggregate ConnectionMeasurements and "group by" several dimenions
+/// (currently, by dns destination domain, and application)
 #[derive(Default, Clone, Debug)]
 pub struct AggregateByCategory {
     pub total: AggregatedConnectionMeasurement,
@@ -66,8 +77,8 @@ pub struct AggregateByCategory {
 
 const UNKNOWN: &str = "<UNKNOWN>";
 
-impl AggregateByCategory {
-    pub fn add_to_aggregate(&mut self, m: &ConnectionMeasurements) {
+impl Aggregator for AggregateByCategory {
+    fn add_to_aggregate(&mut self, m: &ConnectionMeasurements) {
         let domain = match m
             .remote_hostname
             .as_ref()
@@ -106,6 +117,97 @@ impl AggregateByCategory {
                 self.by_app.entry(name).or_default().add_to_aggregate(m);
             }
         }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct AggregatedBucket<T> {
+    pub bucket_start: DateTime<Utc>,
+    pub bucket_size: chrono::Duration,
+    pub aggregate: T,
+}
+
+impl<T> AggregatedBucket<T>
+where
+    T: Default,
+{
+    pub fn new(bucket_start: DateTime<Utc>, bucket_size: chrono::Duration) -> Self {
+        Self {
+            bucket_size,
+            bucket_start,
+            aggregate: Default::default(),
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct BucketAggregator<T> {
+    bucket_size_minuntes: i64,
+    first_bucket_idx_since_epoch: Option<usize>,
+    prev_bucket_idx_since_epoch: Option<usize>,
+    aggregates: Vec<AggregatedBucket<T>>,
+}
+
+impl<T> BucketAggregator<T>
+where
+    T: Aggregator + Default,
+{
+    pub fn new(bucket_size: chrono::Duration) -> Self {
+        assert!(bucket_size.num_minutes() > 0);
+        Self {
+            bucket_size_minuntes: bucket_size.num_minutes(),
+            aggregates: Vec::new(),
+            first_bucket_idx_since_epoch: None,
+            prev_bucket_idx_since_epoch: None,
+        }
+    }
+
+    pub fn add(&mut self, ts: DateTime<Utc>, m: &ConnectionMeasurements) {
+        let bucket_idx_since_epoch: usize = (ts.timestamp() / (60 * self.bucket_size_minuntes))
+            .try_into()
+            .unwrap();
+        let first_bucket_idx_since_epoch: usize = *self
+            .first_bucket_idx_since_epoch
+            .get_or_insert(bucket_idx_since_epoch);
+        let prev_bucket_idx_since_epoch: usize = *self
+            .prev_bucket_idx_since_epoch
+            .get_or_insert(bucket_idx_since_epoch);
+        assert!(
+            bucket_idx_since_epoch >= first_bucket_idx_since_epoch,
+            "Time must be monotonically increasing, but got time < first time",
+        );
+        assert!(
+            bucket_idx_since_epoch >= prev_bucket_idx_since_epoch,
+            "Time must be monotonically increasing, but got time < previous time",
+        );
+        let rel_bucket_idx = bucket_idx_since_epoch - first_bucket_idx_since_epoch;
+        let rel_prev_bucket_idx = prev_bucket_idx_since_epoch - first_bucket_idx_since_epoch;
+        if self.aggregates.is_empty() || rel_bucket_idx > rel_prev_bucket_idx {
+            // We either don't have any buckets, or the timestamp we got indicates that we
+            // need to start a new bucket. So lets do that.
+            let bucket_start = DateTime::from_timestamp(
+                bucket_idx_since_epoch as i64 * 60 * self.bucket_size_minuntes,
+                0,
+            )
+            .unwrap();
+            self.aggregates.push(AggregatedBucket::new(
+                bucket_start,
+                chrono::Duration::minutes(self.bucket_size_minuntes),
+            ));
+        }
+        self.aggregates
+            .last_mut()
+            .unwrap()
+            .aggregate
+            .add_to_aggregate(m);
+    }
+
+    pub fn to_vec(self) -> Vec<AggregatedBucket<T>> {
+        self.aggregates
+    }
+
+    pub fn aggregates_ref(&self) -> &Vec<AggregatedBucket<T>> {
+        &self.aggregates
     }
 }
 
@@ -336,5 +438,49 @@ mod test {
         assert_eq!(by_category.total.num_flows, 3);
         assert_eq!(by_category.by_app.keys().collect_vec(), vec!["DNS"]);
         assert_eq!(by_category.by_app.get("DNS").unwrap().num_flows, 3);
+    }
+
+    #[test]
+    fn test_bucket_aggregator() {
+        let bucket_size = chrono::Duration::minutes(5);
+        let mut agg = BucketAggregator::<AggregateByCategory>::new(bucket_size);
+
+        let ts = DateTime::from_timestamp(300_005, 0).unwrap();
+        agg.add(ts, &ConnectionMeasurements::make_mock());
+        assert_eq!(agg.aggregates_ref().len(), 1);
+        assert_eq!(agg.aggregates_ref()[0].bucket_size, bucket_size);
+        assert_eq!(
+            agg.aggregates_ref()[0].bucket_start,
+            DateTime::from_timestamp(300_000, 0).unwrap()
+        );
+        assert_eq!(agg.aggregates_ref()[0].aggregate.total.num_flows, 1);
+
+        // this is just at the end of the bucket
+        let ts = DateTime::from_timestamp(300_299, 0).unwrap();
+        agg.add(ts, &ConnectionMeasurements::make_mock());
+        assert_eq!(agg.aggregates_ref().len(), 1);
+        assert_eq!(agg.aggregates_ref()[0].bucket_size, bucket_size);
+        assert_eq!(
+            agg.aggregates_ref()[0].bucket_start,
+            DateTime::from_timestamp(300_000, 0).unwrap()
+        );
+        assert_eq!(agg.aggregates_ref()[0].aggregate.total.num_flows, 2);
+
+        // skip buckets.
+        let ts = DateTime::from_timestamp(300_912, 0).unwrap();
+        agg.add(ts, &ConnectionMeasurements::make_mock());
+        assert_eq!(agg.aggregates_ref().len(), 2);
+        assert_eq!(agg.aggregates_ref()[0].bucket_size, bucket_size);
+        assert_eq!(
+            agg.aggregates_ref()[0].bucket_start,
+            DateTime::from_timestamp(300_000, 0).unwrap()
+        );
+        assert_eq!(agg.aggregates_ref()[0].aggregate.total.num_flows, 2);
+        assert_eq!(agg.aggregates_ref()[1].bucket_size, bucket_size);
+        assert_eq!(
+            agg.aggregates_ref()[1].bucket_start,
+            DateTime::from_timestamp(300_900, 0).unwrap()
+        );
+        assert_eq!(agg.aggregates_ref()[1].aggregate.total.num_flows, 1);
     }
 }
