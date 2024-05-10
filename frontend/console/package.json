@@ -15,9 +15,11 @@
         "@mui/icons-material": "^5.15.14",
         "@mui/material": "^5.15.14",
         "@mui/x-data-grid": "^6.19.8",
-        "apexcharts": "^3.49.0",
+        "chart.js": "^4.4.2",
+        "chartjs-adapter-date-fns": "^3.0.0",
+        "date-fns": "^3.6.0",
         "react": "^18.2.0",
-        "react-apexcharts": "^1.4.1",
+        "react-chartjs-2": "^5.2.0",
         "react-dom": "^18.2.0",
         "react-router": "^6.22.3"
     },
