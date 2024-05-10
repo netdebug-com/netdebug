@@ -139,6 +139,33 @@ impl NetDebugUser {
             session_key: Vec::new(),
         }
     }
+
+    /// If org_id is Some(id), check if the user is allowed the see items from the
+    /// given org.
+    /// If org_id is None, checks if the use is allowed to see all orgs
+    pub fn check_org_allowed_or_fail(
+        &self,
+        org_id: Option<OrganizationId>,
+    ) -> Result<(), RemoteDBClientError> {
+        if let Some(org_id) = org_id {
+            if !self.check_org_allowed(org_id) {
+                return Err(RemoteDBClientError::PermissionDenied {
+                    err: format!(
+                        "User {} with org {} tried to access org {}",
+                        self.user_id, self.organization_id, org_id
+                    ),
+                });
+            }
+        } else if !self.check_org_superuser() {
+            return Err(RemoteDBClientError::PermissionDenied {
+                err: format!(
+                    "User {} with org {} tried to access all orgs",
+                    self.user_id, self.organization_id
+                ),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Translation layer to tell Axum how to get our user's IDs and session auth token
@@ -506,5 +533,22 @@ pub mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_check_org_allowed_or_fail() {
+        let user = NetDebugUser {
+            user_id: "testing".to_string(),
+            organization_id: 42,
+            session_key: Vec::new(),
+        };
+        assert!(user.check_org_allowed_or_fail(Some(42)).is_ok());
+        assert!(user.check_org_allowed_or_fail(Some(1)).is_err());
+        assert!(user.check_org_allowed_or_fail(None).is_err());
+
+        let user = NetDebugUser::make_internal_superuser();
+        assert!(user.check_org_allowed_or_fail(Some(42)).is_ok());
+        assert!(user.check_org_allowed_or_fail(Some(1)).is_ok());
+        assert!(user.check_org_allowed_or_fail(None).is_ok());
     }
 }

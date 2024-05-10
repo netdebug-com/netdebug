@@ -1,20 +1,20 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
+use gui_types::OrganizationId;
 use itertools::Itertools;
 use libconntrack_wasm::{ConnectionMeasurements, IpProtocol};
-use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 pub const AGGREGATION_BUCKET_SIZE_MINUTES: i64 = 60;
 
-pub trait Aggregator {
-    fn add_to_aggregate(&mut self, rhs: &ConnectionMeasurements);
-}
-
 /// Represents the aggregation of several ConnectionMeasurements.
 /// This struct uses the *_stats_since_prev_export for aggregation
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct AggregatedConnectionMeasurement {
+    pub device_uuid: Uuid,
+    pub organization_id: OrganizationId,
+
     pub num_flows: i64,
     pub num_flows_with_rx_loss: i64,
     pub num_flows_with_tx_loss: i64,
@@ -34,8 +34,8 @@ pub struct AggregatedConnectionMeasurement {
     pub udp_tx_bytes: i64,
 }
 
-impl Aggregator for AggregatedConnectionMeasurement {
-    fn add_to_aggregate(&mut self, rhs: &ConnectionMeasurements) {
+impl AggregatedConnectionMeasurement {
+    pub fn add_to_aggregate(&mut self, rhs: &ConnectionMeasurements) {
         self.num_flows += 1;
         match rhs.key.ip_proto {
             IpProtocol::TCP => {
@@ -64,12 +64,36 @@ impl Aggregator for AggregatedConnectionMeasurement {
         self.rx_packets += rhs.rx_stats_since_prev_export.pkts as i64;
         self.rx_bytes += rhs.rx_stats_since_prev_export.bytes as i64;
     }
+
+    pub fn new(device_uuid: Uuid, organization_id: OrganizationId) -> Self {
+        AggregatedConnectionMeasurement {
+            device_uuid,
+            organization_id,
+            num_flows: 0,
+            num_flows_with_rx_loss: 0,
+            num_flows_with_tx_loss: 0,
+            num_tcp_flows: 0,
+            num_udp_flows: 0,
+            rx_packets: 0,
+            tx_packets: 0,
+            rx_bytes: 0,
+            tx_bytes: 0,
+            rx_lost_bytes: 0,
+            tx_lost_bytes: 0,
+            tcp_rx_bytes: 0,
+            tcp_tx_bytes: 0,
+            udp_rx_bytes: 0,
+            udp_tx_bytes: 0,
+        }
+    }
 }
 
 /// Aggregate ConnectionMeasurements and "group by" several dimenions
 /// (currently, by dns destination domain, and application)
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AggregateByCategory {
+    pub device_uuid: Uuid,
+    pub organization_id: OrganizationId,
     pub total: AggregatedConnectionMeasurement,
     pub by_dns_dest_domain: HashMap<String, AggregatedConnectionMeasurement>,
     pub by_app: HashMap<String, AggregatedConnectionMeasurement>,
@@ -77,8 +101,8 @@ pub struct AggregateByCategory {
 
 const UNKNOWN: &str = "<UNKNOWN>";
 
-impl Aggregator for AggregateByCategory {
-    fn add_to_aggregate(&mut self, m: &ConnectionMeasurements) {
+impl AggregateByCategory {
+    pub fn add_to_aggregate(&mut self, m: &ConnectionMeasurements) {
         let domain = match m
             .remote_hostname
             .as_ref()
@@ -90,7 +114,9 @@ impl Aggregator for AggregateByCategory {
         self.total.add_to_aggregate(m);
         self.by_dns_dest_domain
             .entry(domain)
-            .or_default()
+            .or_insert_with(|| {
+                AggregatedConnectionMeasurement::new(self.device_uuid, self.organization_id)
+            })
             .add_to_aggregate(m);
 
         // associated_apps is Option<HashMap<u32, Option<String>>>
@@ -110,48 +136,59 @@ impl Aggregator for AggregateByCategory {
             };
             self.by_app
                 .entry(name.to_string())
-                .or_default()
+                .or_insert_with(|| {
+                    AggregatedConnectionMeasurement::new(self.device_uuid, self.organization_id)
+                })
                 .add_to_aggregate(m);
         } else {
             for name in app_names {
-                self.by_app.entry(name).or_default().add_to_aggregate(m);
+                self.by_app
+                    .entry(name)
+                    .or_insert_with(|| {
+                        AggregatedConnectionMeasurement::new(self.device_uuid, self.organization_id)
+                    })
+                    .add_to_aggregate(m);
             }
+        }
+    }
+
+    pub fn new(device_uuid: Uuid, organization_id: OrganizationId) -> Self {
+        Self {
+            device_uuid,
+            organization_id,
+            total: AggregatedConnectionMeasurement::new(device_uuid, organization_id),
+            by_dns_dest_domain: HashMap::new(),
+            by_app: HashMap::new(),
         }
     }
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct AggregatedBucket<T> {
+pub struct AggregatedBucket {
     pub bucket_start: DateTime<Utc>,
     pub bucket_size: chrono::Duration,
-    pub aggregate: T,
+    pub aggregate: HashMap<Uuid, AggregateByCategory>,
 }
 
-impl<T> AggregatedBucket<T>
-where
-    T: Default,
-{
+impl AggregatedBucket {
     pub fn new(bucket_start: DateTime<Utc>, bucket_size: chrono::Duration) -> Self {
         Self {
             bucket_size,
             bucket_start,
-            aggregate: Default::default(),
+            aggregate: HashMap::new(),
         }
     }
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct BucketAggregator<T> {
+pub struct BucketAggregator {
     bucket_size_minuntes: i64,
     first_bucket_idx_since_epoch: Option<usize>,
     prev_bucket_idx_since_epoch: Option<usize>,
-    aggregates: Vec<AggregatedBucket<T>>,
+    aggregates: Vec<AggregatedBucket>,
 }
 
-impl<T> BucketAggregator<T>
-where
-    T: Aggregator + Default,
-{
+impl BucketAggregator {
     pub fn new(bucket_size: chrono::Duration) -> Self {
         assert!(bucket_size.num_minutes() > 0);
         Self {
@@ -162,7 +199,13 @@ where
         }
     }
 
-    pub fn add(&mut self, ts: DateTime<Utc>, m: &ConnectionMeasurements) {
+    pub fn add(
+        &mut self,
+        ts: DateTime<Utc>,
+        device_uuid: Uuid,
+        organization_id: OrganizationId,
+        m: &ConnectionMeasurements,
+    ) {
         let bucket_idx_since_epoch: usize = (ts.timestamp() / (60 * self.bucket_size_minuntes))
             .try_into()
             .unwrap();
@@ -194,19 +237,22 @@ where
                 bucket_start,
                 chrono::Duration::minutes(self.bucket_size_minuntes),
             ));
+            self.prev_bucket_idx_since_epoch = Some(bucket_idx_since_epoch);
         }
         self.aggregates
             .last_mut()
             .unwrap()
             .aggregate
+            .entry(device_uuid)
+            .or_insert_with(|| AggregateByCategory::new(device_uuid, organization_id))
             .add_to_aggregate(m);
     }
 
-    pub fn to_vec(self) -> Vec<AggregatedBucket<T>> {
+    pub fn to_vec(self) -> Vec<AggregatedBucket> {
         self.aggregates
     }
 
-    pub fn aggregates_ref(&self) -> &Vec<AggregatedBucket<T>> {
+    pub fn aggregates_ref(&self) -> &Vec<AggregatedBucket> {
         &self.aggregates
     }
 }
@@ -219,7 +265,10 @@ mod test {
 
     #[test]
     fn test_add_to_aggregate() {
-        let mut agg = AggregatedConnectionMeasurement::default();
+        let mut agg = AggregatedConnectionMeasurement::new(Uuid::from_u128(0x1234_5678), 23);
+
+        assert_eq!(agg.device_uuid, Uuid::from_u128(0x1234_5678));
+        assert_eq!(agg.organization_id, 23);
 
         // The mock doesn't have anything in *_stats_since_prev_export
         // so the byte/pkt counts should all be 0
@@ -380,7 +429,10 @@ mod test {
             ..ConnectionMeasurements::make_mock()
         };
 
-        let mut x = AggregateByCategory::default();
+        let mut x = AggregateByCategory::new(Uuid::from_u128(0x1234_5678), 23);
+        assert_eq!(x.device_uuid, Uuid::from_u128(0x1234_5678));
+        assert_eq!(x.organization_id, 23);
+
         x.add_to_aggregate(&m1);
         x.add_to_aggregate(&m2.clone());
         x.add_to_aggregate(&m2);
@@ -412,7 +464,9 @@ mod test {
 
     #[test]
     fn test_aggregate_by_category_magic_apps() {
-        let mut by_category = AggregateByCategory::default();
+        let mut by_category = AggregateByCategory::new(Uuid::from_u128(0x1234_5678), 23);
+        assert_eq!(by_category.device_uuid, Uuid::from_u128(0x1234_5678));
+        assert_eq!(by_category.organization_id, 23);
 
         let mut m1 = ConnectionMeasurements::make_mock();
         m1.key.remote_l4_port = 53;
@@ -436,6 +490,8 @@ mod test {
         by_category.add_to_aggregate(&m1);
 
         assert_eq!(by_category.total.num_flows, 3);
+        assert_eq!(by_category.total.device_uuid, Uuid::from_u128(0x1234_5678));
+        assert_eq!(by_category.total.organization_id, 23);
         assert_eq!(by_category.by_app.keys().collect_vec(), vec!["DNS"]);
         assert_eq!(by_category.by_app.get("DNS").unwrap().num_flows, 3);
     }
@@ -443,44 +499,77 @@ mod test {
     #[test]
     fn test_bucket_aggregator() {
         let bucket_size = chrono::Duration::minutes(5);
-        let mut agg = BucketAggregator::<AggregateByCategory>::new(bucket_size);
+        let mut bucket_agg = BucketAggregator::new(bucket_size);
+        let uuid = Uuid::from_u128(0x1234_5678);
 
         let ts = DateTime::from_timestamp(300_005, 0).unwrap();
-        agg.add(ts, &ConnectionMeasurements::make_mock());
-        assert_eq!(agg.aggregates_ref().len(), 1);
-        assert_eq!(agg.aggregates_ref()[0].bucket_size, bucket_size);
+        bucket_agg.add(ts, uuid, 23, &ConnectionMeasurements::make_mock());
+        assert_eq!(bucket_agg.aggregates_ref().len(), 1);
+        assert_eq!(bucket_agg.aggregates_ref()[0].bucket_size, bucket_size);
         assert_eq!(
-            agg.aggregates_ref()[0].bucket_start,
+            bucket_agg.aggregates_ref()[0].bucket_start,
             DateTime::from_timestamp(300_000, 0).unwrap()
         );
-        assert_eq!(agg.aggregates_ref()[0].aggregate.total.num_flows, 1);
+        assert_eq!(bucket_agg.aggregates_ref()[0].aggregate.len(), 1);
+        let entry = bucket_agg.aggregates_ref()[0].aggregate.get(&uuid).unwrap();
+        assert_eq!(entry.total.num_flows, 1);
+        assert_eq!(entry.total.device_uuid, uuid);
+        assert_eq!(entry.total.organization_id, 23);
 
         // this is just at the end of the bucket
         let ts = DateTime::from_timestamp(300_299, 0).unwrap();
-        agg.add(ts, &ConnectionMeasurements::make_mock());
-        assert_eq!(agg.aggregates_ref().len(), 1);
-        assert_eq!(agg.aggregates_ref()[0].bucket_size, bucket_size);
+        bucket_agg.add(ts, uuid, 23, &ConnectionMeasurements::make_mock());
+        assert_eq!(bucket_agg.aggregates_ref().len(), 1);
+        assert_eq!(bucket_agg.aggregates_ref()[0].bucket_size, bucket_size);
         assert_eq!(
-            agg.aggregates_ref()[0].bucket_start,
+            bucket_agg.aggregates_ref()[0].bucket_start,
             DateTime::from_timestamp(300_000, 0).unwrap()
         );
-        assert_eq!(agg.aggregates_ref()[0].aggregate.total.num_flows, 2);
+        assert_eq!(
+            bucket_agg.aggregates_ref()[0]
+                .aggregate
+                .get(&uuid)
+                .unwrap()
+                .total
+                .num_flows,
+            2
+        );
 
-        // skip buckets.
+        // skip buckets. and also add a 2n device
         let ts = DateTime::from_timestamp(300_912, 0).unwrap();
-        agg.add(ts, &ConnectionMeasurements::make_mock());
-        assert_eq!(agg.aggregates_ref().len(), 2);
-        assert_eq!(agg.aggregates_ref()[0].bucket_size, bucket_size);
+        bucket_agg.add(ts, uuid, 23, &ConnectionMeasurements::make_mock());
+        let uuid2 = Uuid::from_u128(0x4242_4242);
+        bucket_agg.add(ts, uuid2, 42, &ConnectionMeasurements::make_mock());
+        bucket_agg.add(ts, uuid2, 42, &ConnectionMeasurements::make_mock());
+        for xx in bucket_agg.aggregates_ref() {
+            println!(
+                ">>> {} {:?}",
+                xx.bucket_start,
+                xx.aggregate.keys().collect_vec()
+            );
+        }
+        assert_eq!(bucket_agg.aggregates_ref().len(), 2);
+        assert_eq!(bucket_agg.aggregates_ref()[0].bucket_size, bucket_size);
         assert_eq!(
-            agg.aggregates_ref()[0].bucket_start,
+            bucket_agg.aggregates_ref()[0].bucket_start,
             DateTime::from_timestamp(300_000, 0).unwrap()
         );
-        assert_eq!(agg.aggregates_ref()[0].aggregate.total.num_flows, 2);
-        assert_eq!(agg.aggregates_ref()[1].bucket_size, bucket_size);
+        let entries = &bucket_agg.aggregates_ref()[0].aggregate;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries.get(&uuid).unwrap().total.num_flows, 2);
+
+        assert_eq!(bucket_agg.aggregates_ref()[1].bucket_size, bucket_size);
         assert_eq!(
-            agg.aggregates_ref()[1].bucket_start,
+            bucket_agg.aggregates_ref()[1].bucket_start,
             DateTime::from_timestamp(300_900, 0).unwrap()
         );
-        assert_eq!(agg.aggregates_ref()[1].aggregate.total.num_flows, 1);
+        let entries = &bucket_agg.aggregates_ref()[1].aggregate;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.get(&uuid).unwrap().total.num_flows, 1);
+        assert_eq!(entries.get(&uuid).unwrap().total.device_uuid, uuid);
+        assert_eq!(entries.get(&uuid).unwrap().total.organization_id, 23);
+        assert_eq!(entries.get(&uuid2).unwrap().total.num_flows, 2);
+        assert_eq!(entries.get(&uuid2).unwrap().total.device_uuid, uuid2);
+        assert_eq!(entries.get(&uuid2).unwrap().total.organization_id, 42);
     }
 }

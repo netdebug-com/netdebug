@@ -82,27 +82,12 @@ impl DeviceInfo {
         org_id: Option<i64>,
         client: Arc<Client>,
     ) -> Result<Vec<DeviceInfo>, RemoteDBClientError> {
+        user.check_org_allowed_or_fail(org_id)?;
         // NOTE: we don't need to worry about input validation as much here as
         // org_id will always be an int and can't be, e.g., a Little-Bobby-Tables-esque SQL statement
         let where_clause = if let Some(org_id) = org_id {
-            if !user.check_org_allowed(org_id) {
-                return Err(RemoteDBClientError::PermissionDenied {
-                    err: format!(
-                        "User {} with org {} tried to access org {}",
-                        user.user_id, user.organization_id, org_id
-                    ),
-                });
-            }
             format!("WHERE organization = {}", org_id)
         } else {
-            if !user.check_org_superuser() {
-                return Err(RemoteDBClientError::PermissionDenied {
-                    err: format!(
-                        "User {} with org {} tried to access all orgs",
-                        user.user_id, user.organization_id
-                    ),
-                });
-            }
             String::new()
         };
         let rows = client
@@ -232,26 +217,11 @@ impl DeviceDetails {
         client: Arc<Client>,
     ) -> Result<Vec<PublicDeviceDetails>, RemoteDBClientError> {
         let device_infos = DeviceInfo::get_devices(user, org_id, client.clone()).await?;
+        user.check_org_allowed_or_fail(org_id)?;
         // OK to use unescaped formatting here b/c it's just an int
         let org_qualifier = if let Some(org_id) = org_id {
-            if !user.check_org_allowed(org_id) {
-                return Err(RemoteDBClientError::PermissionDenied {
-                    err: format!(
-                        "User in org {} tried to access {}",
-                        user.organization_id, org_id
-                    ),
-                });
-            }
             format!("WHERE devices.organization = {}", org_id)
         } else {
-            if !user.check_org_superuser() {
-                return Err(RemoteDBClientError::PermissionDenied {
-                    err: format!(
-                        "User in org {} tried to access all orgs devices",
-                        user.organization_id
-                    ),
-                });
-            }
             "".to_string()
         };
         // TODO: monitor the perf of this JOIN and see if we need to put the 'org_id' directly

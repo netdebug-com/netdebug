@@ -50,7 +50,10 @@ impl TimeRangeQueryParams {
 }
 
 /// Keeps track column names, types, and a column name-to-index mapping to make
-/// `COPY TO` queries easier.
+/// `COPY TO` queries easier. While regular SELECT results allow one to get a column
+/// by its name, COPY OUT only supports numeric index. This calls allows us to use
+/// names. In addition, we track the postgre types of columns which are needed when
+/// reading COPY OUT results
 #[derive(Debug)]
 pub struct CopyOutQueryHelper {
     col_names: Vec<String>,
@@ -98,5 +101,38 @@ impl CopyOutQueryHelper {
 
     pub fn col_types(&self) -> &[Type] {
         &self.col_types
+    }
+}
+
+/// Take a list of terms for a SQL `WHERE` clause,
+/// `AND` the terms together. If the result is non empty,
+/// prepend `WHERE`.
+pub fn make_where_clause(terms: &[&str]) -> String {
+    let mut where_clause: String = terms.iter().filter(|x| !x.is_empty()).join(") AND (");
+    if !where_clause.is_empty() {
+        where_clause.insert_str(0, "WHERE (");
+        where_clause += ")";
+    }
+    where_clause
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_make_where_clause() {
+        assert_eq!(make_where_clause(&[]), "");
+        assert_eq!(make_where_clause(&[""]), "");
+        assert_eq!(make_where_clause(&["", ""]), "");
+        assert_eq!(make_where_clause(&["foo"]), "WHERE (foo)");
+        assert_eq!(
+            make_where_clause(&["foo", "", "bar"]),
+            "WHERE (foo) AND (bar)"
+        );
+        assert_eq!(
+            make_where_clause(&["foo", "", "(bar)"]),
+            "WHERE (foo) AND ((bar))"
+        );
     }
 }
