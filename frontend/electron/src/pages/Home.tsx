@@ -102,18 +102,12 @@ const Home: React.FC = () => {
           <Stack spacing={2} direction="row" useFlexGap>
             <Item sx={{ width: "45%", textAlign: "left" }}>
               <b>
-                <em>What's New with v0.2.5</em>{" "}
+                <em>What's New with v0.2.6</em>{" "}
               </b>
               <ul>
                 <li>
-                  Improved the JSON{" "}
-                  <Link to={"/flows/by_flow"}>Flow details</Link> rendering to
-                  read UI!
+                  Update flow export logic and also export incremental stats.
                 </li>
-                <li>
-                  Periodically export long-lived flows (not just on evict)
-                </li>
-                <li> Added Seattle webtest server</li>
                 <li>
                   See full <Link to={"/about"}>Release Notes</Link>
                 </li>

@@ -15,6 +15,13 @@ export const ReleaseNotes: React.FC = () => {
   return (
     <ul style={ul_style}>
       <li style={li_top_style}>
+        <b>Release 0.2.6 - May 09th, 2024</b>
+        <ul style={ul_style}>
+          <li style={li_style}>
+            {" "}
+            Update flow export logic and also export incremental stats.
+          </li>
+        </ul>
         <b>Release 0.2.5 - Apr 22th, 2024</b>
         <ul style={ul_style}>
           <li style={li_style}>

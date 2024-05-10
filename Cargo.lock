@@ -2578,7 +2578,7 @@ dependencies = [
 
 [[package]]
 name = "netdebug-desktop"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "axum 0.7.4",
  "chrono",
@@ -4974,7 +4974,7 @@ dependencies = [
 
 [[package]]
 name = "webserver"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "async-channel",
  "axum 0.7.4",
