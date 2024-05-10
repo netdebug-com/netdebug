@@ -1,5 +1,6 @@
 pub mod congestion_analysis;
 pub mod context;
+pub mod db_utils;
 pub mod desktop_websocket;
 pub mod devices;
 pub mod first_hop_analysis;

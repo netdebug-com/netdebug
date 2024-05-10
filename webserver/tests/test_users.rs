@@ -1,8 +1,8 @@
-pub mod db_utils;
+pub mod db_test_utils;
 use std::sync::Arc;
 
 use clerk_rs::models::User as ClerkUser;
-use db_utils::mk_test_db;
+use db_test_utils::mk_test_db;
 use libwebserver::{remotedb_client::RemoteDBClient, users::NetDebugUser};
 use tokio_postgres::types::ToSql;
 

@@ -50,7 +50,7 @@ use gui_types::FirstHopTimeSeriesData;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use crate::{remotedb_client::extract_aggregated_ping_data, rest_routes::TimeRangeQueryParams};
+use crate::{db_utils::TimeRangeQueryParams, remotedb_client::extract_aggregated_ping_data};
 
 /// Get the top n worst first hop devices in the time range, by packet loss
 pub async fn first_hop_worst_n_by_packet_loss(

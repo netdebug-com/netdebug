@@ -9,12 +9,12 @@ use libwebserver::{organizations::NETDEBUG_EMPLOYEE_ORG_ID, remotedb_client::Rem
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use crate::db_utils::{
+use crate::db_test_utils::{
     add_fake_connection_logs, add_fake_devices, add_fake_users, get_auth_token_from_rest_router,
     get_resp_from_rest_router, make_mock_protected_routes, mk_test_db,
 };
 
-pub mod db_utils;
+pub mod db_test_utils;
 
 #[tokio::test]
 async fn test_devices_non_netdebug_employee() {
