@@ -21,7 +21,7 @@ use libconntrack_wasm::{
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 
-use tokio_postgres::{binary_copy::BinaryCopyInWriter, types::Type, Client, Row};
+use tokio_postgres::{binary_copy::BinaryCopyInWriter, types::Type, Client, GenericClient, Row};
 use uuid::Uuid;
 
 use crate::{
@@ -33,7 +33,7 @@ use crate::{
 // We only aggregate a full bucket_size worth of flows at a time. In order to make sure we don't have an stragglers
 // in the desktop_connections table, we only start the aggregation if the we are FLOW_AGGREGATION_TIME_GAP_MINUTES
 // after the end of the bucket.
-const FLOW_AGGREGATION_TIME_GAP_MINUTES: i64 = 15;
+pub const FLOW_AGGREGATION_TIME_GAP_MINUTES: i64 = 5;
 
 /// An agent to manage the connection to the remote database service
 /// Currently we're using timescaledb.com b/c it supports both
@@ -1050,7 +1050,8 @@ impl RemoteDBClient {
 
                 loop {
                     // inner loop
-                    if let Err(e) = do_flow_aggregation(&mut client, aggregation_bucket_size).await
+                    if let Err(e) =
+                        do_flow_aggregation(&mut client, aggregation_bucket_size, Utc::now()).await
                     {
                         warn!(
                             "DbConn {}: RemoteClientDB loop produced error: restarting client: {}",
@@ -1081,9 +1082,12 @@ impl RemoteDBClient {
 ///    7. Update timestamp in `aggregated_connections_lock` table
 ///    8. COMMIT the transaction
 ///
-async fn do_flow_aggregation(
+/// This really shouldn't be called from outside this mod, but we want to test
+/// it from the integration tests. So, it's `pub`
+pub async fn do_flow_aggregation(
     client: &mut Client,
     bucket_size: chrono::Duration,
+    now: DateTime<Utc>,
 ) -> Result<(), RemoteDBClientError> {
     let transaction = client.transaction().await?;
     // make sure only one process can update ==> aqcuire an exlusive lock
@@ -1099,23 +1103,12 @@ async fn do_flow_aggregation(
         warn!("Could not acquire lock on table `aggregated_connections_lock` -- is another instance running?");
         return Ok(());
     }
-    let next_bucket_time_rows = transaction
-        .query(
-            "SELECT next_bucket_start_time FROM aggregated_connections_lock",
-            &[],
-        )
-        .await?;
-    assert_eq!(
-        next_bucket_time_rows.len(),
-        1,
-        "Invalid number of rows in next_bucket_start_time -- expected exactly 1"
-    );
-    let next_bucket_time: DateTime<Utc> = next_bucket_time_rows.first().unwrap().try_get(0)?;
+    let next_bucket_time = get_next_bucket_time(&transaction).await?;
 
     // We only aggregate a full bucket_size worth of flows at a time. In order to make sure we don't have an stragglers
     // in the desktop_connections table, we only start the aggregation if the we are FLOW_AGGREGATION_TIME_GAP_MINUTES
     // after the end of the bucket.
-    let max_time = Utc::now() - chrono::Duration::minutes(FLOW_AGGREGATION_TIME_GAP_MINUTES);
+    let max_time = now - chrono::Duration::minutes(FLOW_AGGREGATION_TIME_GAP_MINUTES);
     if next_bucket_time + bucket_size < max_time {
         // We have at least one bucket worth of flows we can aggregate
         let mut end_time = next_bucket_time + bucket_size;
@@ -1182,6 +1175,25 @@ pub fn extract_aggregated_ping_data(
             rtt_max_ns: row.try_get::<_, i64>("rtt_max_ns")? as u64,
         },
     ))
+}
+
+/// Get the value from `aggregated_connections_lock.next_bucket_start_time`. I.e.,
+/// the time after which we do NOT yet have aggregated flow data
+pub async fn get_next_bucket_time<C: GenericClient>(
+    generic_client: &C,
+) -> Result<DateTime<Utc>, RemoteDBClientError> {
+    let next_bucket_time_rows = generic_client
+        .query(
+            "SELECT next_bucket_start_time FROM aggregated_connections_lock",
+            &[],
+        )
+        .await?;
+    assert_eq!(
+        next_bucket_time_rows.len(),
+        1,
+        "Invalid number of rows in next_bucket_start_time -- expected exactly 1"
+    );
+    Ok(next_bucket_time_rows.first().unwrap().try_get(0)?)
 }
 
 /*

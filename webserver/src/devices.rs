@@ -220,7 +220,7 @@ impl DeviceDetails {
         user.check_org_allowed_or_fail(org_id)?;
         // OK to use unescaped formatting here b/c it's just an int
         let org_qualifier = if let Some(org_id) = org_id {
-            format!("WHERE devices.organization = {}", org_id)
+            format!("WHERE organization = {}", org_id)
         } else {
             "".to_string()
         };
@@ -229,7 +229,6 @@ impl DeviceDetails {
         let db_statement = client
             .prepare(&format!(
                 "{} from {} 
-                INNER JOIN devices ON desktop_connections.device_uuid = devices.uuid 
                 {} -- WHERE clause, if org_id isn't None
                 GROUP BY device_uuid",
                 DEVICE_DETAILS_PARTIAL_QUERY, CONNECTIONS_TABLE_NAME, org_qualifier
