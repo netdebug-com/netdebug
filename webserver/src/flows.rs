@@ -16,9 +16,12 @@ use uuid::Uuid;
 use crate::{
     db_utils::{make_where_clause, CopyOutQueryHelper, TimeRangeQueryParams},
     devices::DeviceInfo,
-    flow_aggregation::{AggregatedBucket, AggregatedConnectionMeasurement, BucketAggregator},
+    flow_aggregation::{
+        AggregatedBucket, AggregatedConnectionMeasurement, BucketAggregator,
+        AGGREGATION_BUCKET_SIZE_MINUTES,
+    },
     organizations::NETDEBUG_EMPLOYEE_ORG_ID,
-    remotedb_client::RemoteDBClientError,
+    remotedb_client::{get_next_bucket_time, RemoteDBClientError},
     users::NetDebugUser,
 };
 
@@ -433,7 +436,7 @@ fn row_to_aggregated_bucket_info(
 /// `Some(id)` only the given org_id is queried. This functions
 /// checks if the `user` is allowed to access the requested org(s).
 /// If not a Permission error is returned.
-pub async fn query_aggregated_flows(
+pub async fn query_aggregated_flow_tables(
     user: &NetDebugUser,
     org_id: Option<OrganizationId>,
     time_range: TimeRangeQueryParams,
@@ -507,4 +510,63 @@ pub async fn query_aggregated_flows(
     }
 
     Ok(out)
+}
+
+pub async fn get_aggregated_flow_view(
+    user: &NetDebugUser,
+    org_id: Option<OrganizationId>,
+    time_range: TimeRangeQueryParams,
+    client: &Client,
+) -> Result<Vec<AggregatedFlowRow>, RemoteDBClientError> {
+    user.check_org_allowed_or_fail(org_id)?;
+    let next_bucket_time = get_next_bucket_time(client).await?;
+
+    let agg_rows_fut = query_aggregated_flow_tables(
+        user,
+        org_id,
+        TimeRangeQueryParams {
+            start: time_range.start,
+            end: Some(next_bucket_time),
+        },
+        client,
+    );
+    let from_raw_fut = query_and_aggregate_flows(
+        client,
+        TimeRangeQueryParams {
+            start: Some(next_bucket_time),
+            end: time_range.end,
+        },
+        chrono::Duration::minutes(AGGREGATION_BUCKET_SIZE_MINUTES),
+    );
+    let (agg_rows, from_raw) = futures::join!(agg_rows_fut, from_raw_fut);
+    let mut agg_rows = agg_rows?;
+
+    for bucket in from_raw? {
+        for by_category in bucket.aggregate.into_values() {
+            agg_rows.push(AggregatedFlowRow {
+                bucket_start: bucket.bucket_start,
+                bucket_size: bucket.bucket_size,
+                category: AggregatedFlowCategory::Total,
+                aggregate: by_category.total,
+            });
+            for (app_name, entry) in by_category.by_app.into_iter() {
+                agg_rows.push(AggregatedFlowRow {
+                    bucket_start: bucket.bucket_start,
+                    bucket_size: bucket.bucket_size,
+                    category: AggregatedFlowCategory::ByApp(app_name),
+                    aggregate: entry,
+                });
+            }
+            for (dns_dst_domain, entry) in by_category.by_dns_dest_domain.into_iter() {
+                agg_rows.push(AggregatedFlowRow {
+                    bucket_start: bucket.bucket_start,
+                    bucket_size: bucket.bucket_size,
+                    category: AggregatedFlowCategory::ByDnsDestDomain(dns_dst_domain),
+                    aggregate: entry,
+                });
+            }
+        }
+    }
+
+    Ok(agg_rows)
 }
