@@ -255,11 +255,13 @@ pub async fn flow_queries(
 /// This function does not do any permission checks all will always query all
 /// flows from all devices/orgs
 pub async fn query_and_aggregate_flows(
-    client: Arc<Client>,
+    client: &Client,
     time_range: TimeRangeQueryParams,
     aggregate_bucket_size: chrono::Duration,
 ) -> Result<Vec<AggregatedBucket>, RemoteDBClientError> {
-    let mut time_range_where = time_range.to_sql_where();
+    // We need to query for the `time` column here. start_tracking_time and last_packet_time
+    // are created/derived from the client/device but `time` is server-side
+    let mut time_range_where = time_range.to_sql_where_with_keys("time", "time");
     if !time_range_where.is_empty() {
         time_range_where.insert_str(0, "WHERE ");
     }
@@ -276,7 +278,7 @@ pub async fn query_and_aggregate_flows(
     let mut aggregator = BucketAggregator::new(aggregate_bucket_size);
     let copy_out_fut = client.copy_out(&query);
     let superuser = NetDebugUser::make_internal_superuser();
-    let device_list_fut = DeviceInfo::get_devices(&superuser, None, client.clone());
+    let device_list_fut = DeviceInfo::get_devices(&superuser, None, client);
     let (device_list, copy_out) = futures::join!(device_list_fut, copy_out_fut);
 
     let mut device_to_org = HashMap::new();

@@ -80,7 +80,7 @@ impl DeviceInfo {
     pub async fn get_devices(
         user: &NetDebugUser,
         org_id: Option<i64>,
-        client: Arc<Client>,
+        client: &Client,
     ) -> Result<Vec<DeviceInfo>, RemoteDBClientError> {
         user.check_org_allowed_or_fail(org_id)?;
         // NOTE: we don't need to worry about input validation as much here as
@@ -216,7 +216,7 @@ impl DeviceDetails {
         org_id: Option<i64>,
         client: Arc<Client>,
     ) -> Result<Vec<PublicDeviceDetails>, RemoteDBClientError> {
-        let device_infos = DeviceInfo::get_devices(user, org_id, client.clone()).await?;
+        let device_infos = DeviceInfo::get_devices(user, org_id, &client).await?;
         user.check_org_allowed_or_fail(org_id)?;
         // OK to use unescaped formatting here b/c it's just an int
         let org_qualifier = if let Some(org_id) = org_id {

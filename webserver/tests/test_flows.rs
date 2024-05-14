@@ -287,7 +287,7 @@ async fn test_query_aggregate_flows() {
     let fix = FlowTestFixture::new().await;
 
     let aggregates = query_and_aggregate_flows(
-        fix.db_client.clone(),
+        &fix.db_client,
         TimeRangeQueryParams::default(),
         chrono::Duration::minutes(60),
     )
