@@ -125,13 +125,6 @@ struct SearchCmd {
     pub sqlite_filenames: Vec<String>,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
-struct MyRecord {
-    remote_ip: String,
-    remote_hostname: String,
-    paths: HashSet<String>,
-}
-
 #[derive(Default, Clone, Eq, PartialEq, Debug)]
 pub struct PathEntry {
     // TTL / distance from source
@@ -363,11 +356,17 @@ fn process_connection(graph: &mut TheGraph, entry: &ConnectionMeasurements) {
             .collect_vec();
         // For each element in the path, find the predecessor and successor IPs.
         let mut prev_ip = None;
+
+        // the auto-fix for this causes broken code, so just disable the lint
+        #[allow(clippy::assigning_clones)]
         for elem in &mut new_vec {
             elem.pred_ip = prev_ip;
             prev_ip = elem.ip.clone();
         }
         let mut succ_ip = None;
+
+        // the auto-fix for this causes broken code, so just disable the lint
+        #[allow(clippy::assigning_clones)]
         for elem in new_vec.iter_mut().rev() {
             elem.successor_ip = succ_ip;
             succ_ip = elem.ip.clone();

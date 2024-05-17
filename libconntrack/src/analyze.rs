@@ -37,7 +37,7 @@ pub fn analyze(probe_report_summary: &ProbeReportSummary) -> Vec<AnalysisInsight
     for (ttl, probe_reports) in &nats {
         insights.push(AnalysisInsights::HasNat { ttl: *ttl });
         if best_nat.len() < probe_reports.len() {
-            best_nat = probe_reports.clone();
+            best_nat.clone_from(probe_reports);
         }
     }
     // just focus on the TTL with the most nat replies

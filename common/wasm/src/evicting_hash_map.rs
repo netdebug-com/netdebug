@@ -61,29 +61,29 @@ where
 
     /// Returns the value corresponding to the key in the map.
     /// If value is found, it is moved to the most-recent position of the LRU
-    pub fn get_mut<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut V>
+    pub fn get_mut<Q>(&mut self, k: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
-        Q: Eq + Hash,
+        Q: Eq + Hash + ?Sized,
     {
         self.map.get_refresh(k)
     }
 
     /// Returns the value corresponding to the key in the map.
-    pub fn get_mut_no_lru<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut V>
+    pub fn get_mut_no_lru<Q>(&mut self, k: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
-        Q: Eq + Hash,
+        Q: Eq + Hash + ?Sized,
     {
         self.map.get_mut(k)
     }
 
     /// Returns the value corresponding to the key in the map. *WITHOUT* updating the
     /// LRU.
-    pub fn get_no_lru<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    pub fn get_no_lru<Q>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Eq + Hash,
+        Q: Eq + Hash + ?Sized,
     {
         self.map.get(k)
     }
@@ -94,10 +94,10 @@ where
 
     /// Remove the value corresponding to the key. If value was in the map,
     /// it will be returned.
-    pub fn remove<Q: ?Sized>(&mut self, k: &Q) -> Option<V>
+    pub fn remove<Q>(&mut self, k: &Q) -> Option<V>
     where
         K: Borrow<Q>,
-        Q: Eq + Hash,
+        Q: Eq + Hash + ?Sized,
     {
         self.map.remove(k)
     }
