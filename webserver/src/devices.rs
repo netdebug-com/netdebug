@@ -162,7 +162,7 @@ impl DeviceDetails {
         .filter(|r| r.category == AggregatedFlowCategory::Total && r.aggregate.device_uuid == uuid)
         .collect_vec();
         let mut device_details =
-            DeviceDetails::agg_rows_to_device_details(&[device.clone()], &agg_rows);
+            DeviceDetails::agg_rows_to_device_details(&[device.clone()], &agg_rows, true);
         match device_details.len() {
             // case: no flows recored in desktop_connections
             0 => Ok(Some(PublicDeviceDetails {
@@ -184,6 +184,7 @@ impl DeviceDetails {
     fn agg_rows_to_device_details(
         device_infos: &[DeviceInfo],
         rows: &[AggregatedFlowRow],
+        should_include_no_flows: bool,
     ) -> Vec<PublicDeviceDetails> {
         // 1st, build a map from uuid to DeviceInfo
         let mut uuid2device_details: HashMap<Uuid, PublicDeviceDetails> =
@@ -207,6 +208,16 @@ impl DeviceDetails {
             let uuid = row.aggregate.device_uuid;
             if let Some(device_details) = uuid2device_details.get_mut(&uuid) {
                 device_details.num_flows_stored += row.aggregate.num_flows as u64;
+                let ts = row.bucket_start;
+                device_details.oldest_flow_time = Some(std::cmp::min(
+                    device_details.oldest_flow_time.unwrap_or(ts),
+                    ts,
+                ));
+                device_details.newest_flow_time = Some(std::cmp::min(
+                    device_details.newest_flow_time.unwrap_or(ts),
+                    ts,
+                ));
+
                 add_loss_cnt_helper(
                     &mut device_details.num_flows_with_recv_loss,
                     row.aggregate.num_flows_with_rx_loss,
@@ -222,7 +233,10 @@ impl DeviceDetails {
                 );
             }
         }
-        uuid2device_details.into_values().collect_vec()
+        uuid2device_details
+            .into_values()
+            .filter(|dev| should_include_no_flows || dev.num_flows_stored > 0)
+            .collect_vec()
     }
 
     /// Query DB and return a list of complex details about all devices
@@ -244,6 +258,7 @@ impl DeviceDetails {
         Ok(DeviceDetails::agg_rows_to_device_details(
             &device_infos,
             &agg_flows,
+            false, // don't show devices with no stored flows
         ))
     }
 }
