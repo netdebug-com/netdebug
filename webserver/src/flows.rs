@@ -14,7 +14,10 @@ use tokio_postgres::{
 use uuid::Uuid;
 
 use crate::{
-    db_utils::{make_where_clause, CopyOutQueryHelper, TimeRangeQueryParams},
+    db_utils::{
+        make_where_clause, AggregatedFlowCategoryQueryParams, CopyOutQueryHelper,
+        TimeRangeQueryParams,
+    },
     devices::DeviceInfo,
     flow_aggregation::{
         AggregatedBucket, AggregatedConnectionMeasurement, BucketAggregator,
@@ -440,6 +443,7 @@ pub async fn query_aggregated_flow_tables(
     user: &NetDebugUser,
     org_id: Option<OrganizationId>,
     time_range: TimeRangeQueryParams,
+    categories_to_query: AggregatedFlowCategoryQueryParams,
     client: &Client,
 ) -> Result<Vec<AggregatedFlowRow>, RemoteDBClientError> {
     user.check_org_allowed_or_fail(org_id)?;
@@ -453,21 +457,42 @@ pub async fn query_aggregated_flow_tables(
         time_range.to_sql_where_with_keys("bucket_start_time", "bucket_start_time");
     let where_clause = make_where_clause(&[&org_id_term, &time_range_term]);
 
-    let query_total = format!(
-        "SELECT {} FROM aggregated_connections_total {}",
-        AGGREGATED_CONNS_COMMON_COLUMNS.join(", "),
-        where_clause
-    );
-    let query_by_app = format!(
-        "SELECT {}, application FROM aggregated_connections_by_application {}",
-        AGGREGATED_CONNS_COMMON_COLUMNS.join(", "),
-        where_clause
-    );
-    let query_by_dest = format!(
-        "SELECT {}, dns_dest_domain FROM aggregated_connections_by_dest {}",
-        AGGREGATED_CONNS_COMMON_COLUMNS.join(", "),
-        where_clause
-    );
+    // This is a bit of a hack. We need to query up to three aggregated tables
+    // and we want to do this in parallel / pipelined. So we need to await all three
+    // futures in parallel. `futures::join!()` will do this for us, but we need to
+    // enumerate the futures. Mucking around with explicit Future types is an annoying
+    // fight with the compiler. So I cheat by using a fake query that will return 0 rows
+    // if we don't want to query a particular table.
+    let empty_query = "SELECT WHERE false".to_string();
+    let query_total = if categories_to_query.query_total {
+        format!(
+            "SELECT {} FROM aggregated_connections_total {}",
+            AGGREGATED_CONNS_COMMON_COLUMNS.join(", "),
+            where_clause
+        )
+    } else {
+        empty_query.clone()
+    };
+
+    let query_by_app = if categories_to_query.query_by_app {
+        format!(
+            "SELECT {}, application FROM aggregated_connections_by_application {}",
+            AGGREGATED_CONNS_COMMON_COLUMNS.join(", "),
+            where_clause
+        )
+    } else {
+        empty_query.clone()
+    };
+
+    let query_by_dest = if categories_to_query.query_by_dns_dest_domain {
+        format!(
+            "SELECT {}, dns_dest_domain FROM aggregated_connections_by_dest {}",
+            AGGREGATED_CONNS_COMMON_COLUMNS.join(", "),
+            where_clause
+        )
+    } else {
+        empty_query
+    };
 
     let (total_rows, by_app_rows, by_dest_rows) = futures::join!(
         client.query(&query_total, &[]),
@@ -518,6 +543,7 @@ pub async fn get_aggregated_flow_view(
     user: &NetDebugUser,
     org_id: Option<OrganizationId>,
     time_range: TimeRangeQueryParams,
+    categories_to_query: AggregatedFlowCategoryQueryParams,
     client: &Client,
 ) -> Result<Vec<AggregatedFlowRow>, RemoteDBClientError> {
     user.check_org_allowed_or_fail(org_id)?;
@@ -530,6 +556,7 @@ pub async fn get_aggregated_flow_view(
             start: time_range.start,
             end: Some(next_bucket_time),
         },
+        categories_to_query,
         client,
     );
     let from_raw_fut = query_and_aggregate_flows(
@@ -550,27 +577,33 @@ pub async fn get_aggregated_flow_view(
                     continue;
                 }
             }
-            agg_rows.push(AggregatedFlowRow {
-                bucket_start: bucket.bucket_start,
-                bucket_size: bucket.bucket_size,
-                category: AggregatedFlowCategory::Total,
-                aggregate: by_category.total,
-            });
-            for (app_name, entry) in by_category.by_app.into_iter() {
+            if categories_to_query.query_total {
                 agg_rows.push(AggregatedFlowRow {
                     bucket_start: bucket.bucket_start,
                     bucket_size: bucket.bucket_size,
-                    category: AggregatedFlowCategory::ByApp(app_name),
-                    aggregate: entry,
+                    category: AggregatedFlowCategory::Total,
+                    aggregate: by_category.total,
                 });
             }
-            for (dns_dst_domain, entry) in by_category.by_dns_dest_domain.into_iter() {
-                agg_rows.push(AggregatedFlowRow {
-                    bucket_start: bucket.bucket_start,
-                    bucket_size: bucket.bucket_size,
-                    category: AggregatedFlowCategory::ByDnsDestDomain(dns_dst_domain),
-                    aggregate: entry,
-                });
+            if categories_to_query.query_by_app {
+                for (app_name, entry) in by_category.by_app.into_iter() {
+                    agg_rows.push(AggregatedFlowRow {
+                        bucket_start: bucket.bucket_start,
+                        bucket_size: bucket.bucket_size,
+                        category: AggregatedFlowCategory::ByApp(app_name),
+                        aggregate: entry,
+                    });
+                }
+            }
+            if categories_to_query.query_by_dns_dest_domain {
+                for (dns_dst_domain, entry) in by_category.by_dns_dest_domain.into_iter() {
+                    agg_rows.push(AggregatedFlowRow {
+                        bucket_start: bucket.bucket_start,
+                        bucket_size: bucket.bucket_size,
+                        category: AggregatedFlowCategory::ByDnsDestDomain(dns_dst_domain),
+                        aggregate: entry,
+                    });
+                }
             }
         }
     }

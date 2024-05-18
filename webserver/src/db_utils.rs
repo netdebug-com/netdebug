@@ -104,6 +104,23 @@ impl CopyOutQueryHelper {
     }
 }
 
+#[derive(Default, Debug, Eq, PartialEq, Hash, Clone, Copy)]
+pub struct AggregatedFlowCategoryQueryParams {
+    pub query_total: bool,
+    pub query_by_app: bool,
+    pub query_by_dns_dest_domain: bool,
+}
+
+impl AggregatedFlowCategoryQueryParams {
+    pub fn all() -> Self {
+        Self {
+            query_total: true,
+            query_by_app: true,
+            query_by_dns_dest_domain: true,
+        }
+    }
+}
+
 /// Take a list of terms for a SQL `WHERE` clause,
 /// `AND` the terms together. If the result is non empty,
 /// prepend `WHERE`.

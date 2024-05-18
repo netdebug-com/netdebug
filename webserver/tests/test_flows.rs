@@ -16,7 +16,7 @@ use db_test_utils::{add_fake_connection_logs_for_flow_query_test, get_alice_dev1
 use itertools::Itertools;
 use libconntrack_wasm::ConnectionMeasurements;
 use libwebserver::{
-    db_utils::TimeRangeQueryParams,
+    db_utils::{AggregatedFlowCategoryQueryParams, TimeRangeQueryParams},
     flow_aggregation::{
         AggregateByCategory, AggregatedBucket, AggregatedConnectionMeasurement,
         AGGREGATION_BUCKET_SIZE_MINUTES,
@@ -465,6 +465,7 @@ async fn test_write_aggregated_flows_read_aggregated_flows() {
         &NetDebugUser::make_internal_superuser(),
         None,
         TimeRangeQueryParams::default(),
+        AggregatedFlowCategoryQueryParams::all(),
         &db_client,
     )
     .await
@@ -564,6 +565,7 @@ async fn test_write_aggregated_flows_read_aggregated_flows() {
         &NetDebugUser::make_internal_superuser(),
         Some(2),
         TimeRangeQueryParams::default(),
+        AggregatedFlowCategoryQueryParams::all(),
         &db_client,
     )
     .await
@@ -575,6 +577,7 @@ async fn test_write_aggregated_flows_read_aggregated_flows() {
         &NetDebugUser::make_internal_superuser(),
         Some(7),
         TimeRangeQueryParams::default(),
+        AggregatedFlowCategoryQueryParams::all(),
         &db_client,
     )
     .await
@@ -589,6 +592,7 @@ async fn test_write_aggregated_flows_read_aggregated_flows() {
             start: Some(t0),
             end: Some(t1),
         },
+        AggregatedFlowCategoryQueryParams::all(),
         &db_client,
     )
     .await
@@ -603,6 +607,7 @@ async fn test_write_aggregated_flows_read_aggregated_flows() {
             start: Some(t1),
             end: None,
         },
+        AggregatedFlowCategoryQueryParams::all(),
         &db_client,
     )
     .await
@@ -617,11 +622,105 @@ async fn test_write_aggregated_flows_read_aggregated_flows() {
             start: Some(t0),
             end: Some(t1),
         },
+        AggregatedFlowCategoryQueryParams::all(),
         &db_client,
     )
     .await
     .unwrap();
     assert_eq!(agg_flow_rows.len(), 3);
+
+    //
+    // ==== test category filters ====
+    //
+
+    // Test category filter -- total
+    let agg_flow_rows = query_aggregated_flow_tables(
+        &NetDebugUser::make_internal_superuser(),
+        None,
+        TimeRangeQueryParams::default(),
+        AggregatedFlowCategoryQueryParams {
+            query_total: true,
+            query_by_app: false,
+            query_by_dns_dest_domain: false,
+        },
+        &db_client,
+    )
+    .await
+    .unwrap();
+    for row in agg_flow_rows {
+        assert!(
+            matches!(row.category, AggregatedFlowCategory::Total),
+            "Unexpected category: {:?}",
+            row.category
+        );
+    }
+
+    // Test category filter -- by app
+    let agg_flow_rows = query_aggregated_flow_tables(
+        &NetDebugUser::make_internal_superuser(),
+        None,
+        TimeRangeQueryParams::default(),
+        AggregatedFlowCategoryQueryParams {
+            query_total: false,
+            query_by_app: true,
+            query_by_dns_dest_domain: false,
+        },
+        &db_client,
+    )
+    .await
+    .unwrap();
+    for row in agg_flow_rows {
+        assert!(
+            matches!(row.category, AggregatedFlowCategory::ByApp(..)),
+            "Unexpected category: {:?}",
+            row.category
+        );
+    }
+
+    // Test category filter -- by dns dest
+    let agg_flow_rows = query_aggregated_flow_tables(
+        &NetDebugUser::make_internal_superuser(),
+        None,
+        TimeRangeQueryParams::default(),
+        AggregatedFlowCategoryQueryParams {
+            query_total: false,
+            query_by_app: false,
+            query_by_dns_dest_domain: true,
+        },
+        &db_client,
+    )
+    .await
+    .unwrap();
+    for row in agg_flow_rows {
+        assert!(
+            matches!(row.category, AggregatedFlowCategory::ByDnsDestDomain(..)),
+            "Unexpected category: {:?}",
+            row.category
+        );
+    }
+
+    // Test category filter -- multiple
+    let agg_flow_rows = query_aggregated_flow_tables(
+        &NetDebugUser::make_internal_superuser(),
+        None,
+        TimeRangeQueryParams::default(),
+        AggregatedFlowCategoryQueryParams {
+            query_total: false,
+            query_by_app: true,
+            query_by_dns_dest_domain: true,
+        },
+        &db_client,
+    )
+    .await
+    .unwrap();
+    for row in agg_flow_rows {
+        assert!(
+            matches!(row.category, AggregatedFlowCategory::ByApp(..))
+                || matches!(row.category, AggregatedFlowCategory::ByDnsDestDomain(..)),
+            "Unexpected category: {:?}",
+            row.category
+        );
+    }
 }
 
 struct FlowAggregationTestFixture {
@@ -930,6 +1029,7 @@ async fn test_aggregation_logic() {
         &NetDebugUser::make_internal_superuser(),
         None,
         TimeRangeQueryParams::default(),
+        AggregatedFlowCategoryQueryParams::all(),
         &agg_fix.db_client,
     )
     .await
@@ -967,6 +1067,7 @@ async fn test_get_aggregated_flow_view() {
             start: None,
             end: Some(next_bucket_time),
         },
+        AggregatedFlowCategoryQueryParams::all(),
         &agg_fix.db_client,
     )
     .await
@@ -993,6 +1094,7 @@ async fn test_get_aggregated_flow_view() {
             start: None,
             end: Some(next_bucket_time),
         },
+        AggregatedFlowCategoryQueryParams::all(),
         &agg_fix.db_client,
     )
     .await
@@ -1022,6 +1124,7 @@ async fn test_get_aggregated_flow_view() {
             start: None,
             end: None,
         },
+        AggregatedFlowCategoryQueryParams::all(),
         &agg_fix.db_client,
     )
     .await
@@ -1055,6 +1158,7 @@ async fn test_get_aggregated_flow_view() {
             start: None,
             end: Some(agg_fix.bucket3_time),
         },
+        AggregatedFlowCategoryQueryParams::all(),
         &agg_fix.db_client,
     )
     .await
@@ -1071,6 +1175,7 @@ async fn test_get_aggregated_flow_view() {
             start: Some(agg_fix.bucket2_time),
             end: Some(agg_fix.bucket3_time),
         },
+        AggregatedFlowCategoryQueryParams::all(),
         &agg_fix.db_client,
     )
     .await
@@ -1093,6 +1198,7 @@ async fn test_get_aggregated_flow_view() {
             start: Some(agg_fix.bucket3_time),
             end: Some(next_bucket_time),
         },
+        AggregatedFlowCategoryQueryParams::all(),
         &agg_fix.db_client,
     )
     .await
@@ -1104,4 +1210,95 @@ async fn test_get_aggregated_flow_view() {
         .unique()
         .collect_vec();
     assert_eq!(times, vec![agg_fix.bucket3_time]);
+}
+
+#[tokio::test]
+async fn test_get_aggregated_flow_view_category_filter() {
+    let agg_fix = FlowAggregationTestFixture::new().await;
+    let next_bucket_time =
+        agg_fix.bucket3_time + chrono::Duration::minutes(AGGREGATION_BUCKET_SIZE_MINUTES);
+
+    // sanity check
+    assert_eq!(
+        get_next_bucket_time(&agg_fix.db_client).await.unwrap(),
+        agg_fix.bucket3_time
+    );
+
+    // total filter
+    let agg_flow_rows = get_aggregated_flow_view(
+        &NetDebugUser::make_internal_superuser(),
+        None,
+        // there is a raw, unaggregated flow after next_bucket_time
+        TimeRangeQueryParams {
+            start: None,
+            end: Some(next_bucket_time),
+        },
+        AggregatedFlowCategoryQueryParams {
+            query_total: true,
+            query_by_app: false,
+            query_by_dns_dest_domain: false,
+        },
+        &agg_fix.db_client,
+    )
+    .await
+    .unwrap();
+    for row in agg_flow_rows {
+        assert!(
+            matches!(row.category, AggregatedFlowCategory::Total),
+            "Unexpected category: {:?}",
+            row.category
+        );
+    }
+
+    // by app filter
+    let agg_flow_rows = get_aggregated_flow_view(
+        &NetDebugUser::make_internal_superuser(),
+        None,
+        // there is a raw, unaggregated flow after next_bucket_time
+        TimeRangeQueryParams {
+            start: None,
+            end: Some(next_bucket_time),
+        },
+        AggregatedFlowCategoryQueryParams {
+            query_total: false,
+            query_by_app: true,
+            query_by_dns_dest_domain: false,
+        },
+        &agg_fix.db_client,
+    )
+    .await
+    .unwrap();
+    for row in agg_flow_rows {
+        assert!(
+            matches!(row.category, AggregatedFlowCategory::ByApp(..)),
+            "Unexpected category: {:?}",
+            row.category
+        );
+    }
+
+    // by dns dest domain filter
+    let agg_flow_rows = get_aggregated_flow_view(
+        &NetDebugUser::make_internal_superuser(),
+        None,
+        // there is a raw, unaggregated flow after next_bucket_time
+        TimeRangeQueryParams {
+            start: None,
+            end: Some(next_bucket_time),
+        },
+        AggregatedFlowCategoryQueryParams {
+            query_total: false,
+            query_by_app: false,
+            query_by_dns_dest_domain: true,
+        },
+        &agg_fix.db_client,
+    )
+    .await
+    .unwrap();
+    for row in agg_flow_rows {
+        assert!(
+            matches!(row.category, AggregatedFlowCategory::ByDnsDestDomain(..)),
+            "Unexpected category: {:?}",
+            row.category
+        );
+    }
 }
