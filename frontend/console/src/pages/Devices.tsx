@@ -2,6 +2,7 @@ import { PublicDeviceDetails } from "../common";
 
 import {
   dataGridDefaultSxProp,
+  formatValue,
   numberSorter,
   percentStringSorter,
   sortCmpWithNull,
@@ -39,6 +40,10 @@ export const devicesLoader = async () => {
   );
 };
 
+const numericValueFormatter = (
+  params: GridValueFormatterParams<number | null>,
+) => formatValue(params.value, true);
+
 // FYI: https://mui.com/x/api/data-grid/grid-col-def/ for documentation of this madness
 const columns: GridColDef[] = [
   {
@@ -61,19 +66,28 @@ const columns: GridColDef[] = [
     field: "num_flows_stored",
     headerName: "Flows Stored",
     flex: 10,
+    align: "right",
+    headerAlign: "right",
     sortComparator: numberSorter,
+    valueFormatter: numericValueFormatter,
   },
   {
     field: "num_flows_with_send_loss",
     headerName: "Tx Flows w/Loss",
     flex: 10,
+    align: "right",
+    headerAlign: "right",
     sortComparator: numberSorter,
+    valueFormatter: numericValueFormatter,
   },
   {
     field: "num_flows_with_recv_loss",
     headerName: "Rx Flows w/Loss",
     flex: 10,
+    align: "right",
+    headerAlign: "right",
     sortComparator: numberSorter,
+    valueFormatter: numericValueFormatter,
   },
   {
     field: "percent_flows_with_loss",
@@ -92,6 +106,8 @@ const columns: GridColDef[] = [
       }
     },
     flex: 10,
+    align: "right",
+    headerAlign: "right",
     sortComparator: percentStringSorter,
   },
   {
@@ -100,6 +116,8 @@ const columns: GridColDef[] = [
     valueFormatter: (params: GridValueFormatterParams<string>) =>
       new Date(params.value).toLocaleString(),
     flex: 15,
+    align: "right",
+    headerAlign: "right",
   },
   {
     field: "newest_flow_time",
@@ -108,6 +126,8 @@ const columns: GridColDef[] = [
     valueFormatter: (params: GridValueFormatterParams<string>) =>
       new Date(params.value).toLocaleString(),
     flex: 15,
+    align: "right",
+    headerAlign: "right",
   },
   {
     field: "uuid",
