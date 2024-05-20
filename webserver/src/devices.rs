@@ -8,7 +8,7 @@ use tokio_postgres::{Client, Row};
 use uuid::Uuid;
 
 use crate::{
-    db_utils::TimeRangeQueryParams,
+    db_utils::{AggregatedFlowCategoryQueryParams, TimeRangeQueryParams},
     flows::{get_aggregated_flow_view, AggregatedFlowCategory, AggregatedFlowRow},
     remotedb_client::{RemoteDBClientError, DEVICE_TABLE_NAME},
     users::NetDebugUser,
@@ -155,6 +155,10 @@ impl DeviceDetails {
             user,
             Some(device.organization_id),
             TimeRangeQueryParams::default(),
+            AggregatedFlowCategoryQueryParams {
+                query_total: true,
+                ..Default::default()
+            },
             &client,
         )
         .await?
@@ -251,9 +255,17 @@ impl DeviceDetails {
 
         // TODO: Ideally, we only want to query for `Total` aggregation and not by_app
         // and by_dest_dns_domain.
-        let agg_flows =
-            get_aggregated_flow_view(user, org_id, TimeRangeQueryParams::default(), &client)
-                .await?;
+        let agg_flows = get_aggregated_flow_view(
+            user,
+            org_id,
+            TimeRangeQueryParams::default(),
+            AggregatedFlowCategoryQueryParams {
+                query_total: true,
+                ..Default::default()
+            },
+            &client,
+        )
+        .await?;
         // OK to use unescaped formatting here b/c it's just an int
         Ok(DeviceDetails::agg_rows_to_device_details(
             &device_infos,
