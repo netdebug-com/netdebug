@@ -146,7 +146,7 @@ impl ProcessTracker {
                     );
                 }
                 UpdatePidMapping { pid2process } => {
-                    self.pid2app_name_cache = pid2process.clone();
+                    self.pid2app_name_cache.clone_from(pid2process);
                 }
             }
             debug!("Got msg: {:?} :: {:?}", msg.get_name(), start.elapsed());
@@ -288,7 +288,7 @@ impl ProcessTracker {
         new_udp_cache: &ProcessTrackerUdpCache,
     ) {
         // last, move new cache into place
-        self.tcp_cache = new_tcp_cache.clone();
+        self.tcp_cache.clone_from(new_tcp_cache);
         // union the process pid data with the process name data
         for entry in self.tcp_cache.values_mut() {
             entry.associated_apps = HashMap::from_iter(
@@ -298,7 +298,7 @@ impl ProcessTracker {
                     .map(|p| (*p, self.pid2app_name_cache.get(p).cloned())),
             );
         }
-        self.udp_cache = new_udp_cache.clone();
+        self.udp_cache.clone_from(new_udp_cache);
         self.process_queued_lookups();
     }
 

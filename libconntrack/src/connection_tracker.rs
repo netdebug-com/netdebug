@@ -1117,7 +1117,7 @@ impl<'a> ConnectionTracker<'a> {
                 .difference(&self.local_addrs)
                 .cloned()
                 .collect_vec();
-            self.local_addrs = new_local_addrs.clone();
+            self.local_addrs.clone_from(&new_local_addrs);
             // ignore return value
             let _ = self.prober_helper.tx().try_send(PerfMsgCheck::new(
                 ProbeMessage::UpdateLocalAddrs {

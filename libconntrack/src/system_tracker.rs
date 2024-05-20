@@ -1099,8 +1099,7 @@ mod test {
         assert_ne!(ping_state.local_mac, BROADCAST_MAC_ADDR);
         assert!(mock_connection_tracker
             .update_listeners
-            .get(&ping_state.key)
-            .is_some());
+            .contains_key(&ping_state.key));
         println!("Sent with local_mac {:X?}", ping_state.local_mac);
         let current_probe = ping_state.current_probe.as_ref().unwrap();
         assert_eq!(current_probe.seqno, 0);
@@ -1123,8 +1122,7 @@ mod test {
         assert_ne!(ping_state.local_mac, BROADCAST_MAC_ADDR);
         assert!(mock_connection_tracker
             .update_listeners
-            .get(&ping_state.key)
-            .is_some());
+            .contains_key(&ping_state.key));
         println!("Sent with local_mac {:X?}", ping_state.local_mac);
         let current_probe = ping_state.current_probe.as_ref().unwrap();
         assert_eq!(current_probe.seqno, 0);
