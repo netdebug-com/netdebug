@@ -696,6 +696,12 @@ impl RemoteDBClient {
                 .await?;
         }
         client.batch_execute(&sql_instructions).await?;
+        client
+            .execute(
+                "INSERT INTO aggregated_connections_lock (next_bucket_start_time) VALUES ($1)",
+                &[&DateTime::UNIX_EPOCH],
+            )
+            .await?;
         // do some basic testing to make sure it's loaded properly
         for table in ["desktop_counters", "desktop_logs"] {
             let rows = client

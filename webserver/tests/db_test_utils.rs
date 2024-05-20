@@ -247,9 +247,12 @@ pub async fn add_fake_connection_logs(db_client: &Client) -> Result<(), tokio_po
             &format!("{}.{}.{}.{}", org_id, org_id, org_id, org_id),
             "128.8.128.38",
         );
+        m1.tx_stats_since_prev_export = m1.tx_stats.clone();
+        m1.rx_stats_since_prev_export = m1.rx_stats.clone();
         let m2 = m1.clone();
         // The mock by default sets lost_bytes= 1500; make this flow 'good' by marking it zero
         m1.tx_stats.lost_bytes = None;
+        m1.tx_stats_since_prev_export = m1.tx_stats.clone();
         m1.key.local_l4_port = 6667; // and give it a different source port
         for m in &[m1, m2] {
             RemoteDBClient::handle_store_connection_measurement(

@@ -44,7 +44,7 @@ cut_mac_os_desktop_release() {
     # delete the old name if it's there
     rm -f frontend/electron/extra-resources/desktop
     # delete old DMGs and ZIPs
-    rm -f frontend/electron/out
+    rm -rf frontend/electron/out
     # Now copy the universal binary into frontend/electron
     cp $UNIVERSAL_DESKTOP_OUTDIR/netdebug-desktop frontend/electron/extra-resources/
 

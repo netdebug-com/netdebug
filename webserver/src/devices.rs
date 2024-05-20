@@ -2,12 +2,15 @@ use std::{collections::HashMap, sync::Arc};
 
 use chrono::{DateTime, Utc};
 use gui_types::{OrganizationId, PublicDeviceDetails, PublicDeviceInfo};
+use itertools::Itertools;
 use log::warn;
 use tokio_postgres::{Client, Row};
 use uuid::Uuid;
 
 use crate::{
-    remotedb_client::{RemoteDBClientError, CONNECTIONS_TABLE_NAME, DEVICE_TABLE_NAME},
+    db_utils::TimeRangeQueryParams,
+    flows::{get_aggregated_flow_view, AggregatedFlowCategory, AggregatedFlowRow},
+    remotedb_client::{RemoteDBClientError, DEVICE_TABLE_NAME},
     users::NetDebugUser,
 };
 
@@ -123,13 +126,15 @@ pub struct DeviceDetails {
     // no state for now
 }
 
-/// The shared parts of the DeviceDetails query, e.g., that
-/// the [`DeviceDetails::rows_to_device_infos()`] expects
-const DEVICE_DETAILS_PARTIAL_QUERY: &str = "SELECT 
-            COUNT(*), MIN(time), MAX(time), 
-            SUM(CASE WHEN tx_loss > 0 THEN 1 ELSE 0 END), 
-            SUM(CASE WHEN rx_loss > 0 THEN 1 ELSE 0 END) ,
-            device_uuid";
+fn add_loss_cnt_helper(old_value: &mut Option<u64>, add_loss: i64) {
+    let loss = old_value.unwrap_or_default() + add_loss as u64;
+    if loss == 0 {
+        old_value.take();
+    } else {
+        old_value.replace(loss);
+    };
+}
+
 impl DeviceDetails {
     /// Pull the PublicDeviceDetails struct from the remote database, if the user is allowed to see it
     /// TODO: currently implemented over multiple SQL queries... monitor this to see if it becomes
@@ -145,16 +150,19 @@ impl DeviceDetails {
             return Ok(None); // device either missing or this user is not allowed to see it
         }
         let device = device_info.unwrap();
-        let db_statement = client
-            .prepare(&format!(
-                "{} from {} WHERE device_uuid=$1 GROUP BY device_uuid",
-                DEVICE_DETAILS_PARTIAL_QUERY, CONNECTIONS_TABLE_NAME
-            ))
-            .await?;
-        // Do NOT call .query_one() here as if there are no flows in desktop_connections, then zero rows will return
-        let rows = client.query(&db_statement, &[&uuid]).await?;
+        // TODO: currently, `get_aggregated_flow_view()` only filters by org_id, not device
+        let agg_rows = get_aggregated_flow_view(
+            user,
+            Some(device.organization_id),
+            TimeRangeQueryParams::default(),
+            &client,
+        )
+        .await?
+        .into_iter()
+        .filter(|r| r.category == AggregatedFlowCategory::Total && r.aggregate.device_uuid == uuid)
+        .collect_vec();
         let mut device_details =
-            DeviceDetails::rows_to_device_details(&[device.clone()], &rows).await;
+            DeviceDetails::agg_rows_to_device_details(&[device.clone()], &agg_rows);
         match device_details.len() {
             // case: no flows recored in desktop_connections
             0 => Ok(Some(PublicDeviceDetails {
@@ -173,40 +181,48 @@ impl DeviceDetails {
         }
     }
 
-    /// Join the data from DeviceInfo's and rows from the Details query into a single unified PublicDeviceDetails struct
-    async fn rows_to_device_details(
+    fn agg_rows_to_device_details(
         device_infos: &[DeviceInfo],
-        rows: &[Row],
+        rows: &[AggregatedFlowRow],
     ) -> Vec<PublicDeviceDetails> {
         // 1st, build a map from uuid to DeviceInfo
-        let uuid2info: HashMap<Uuid, &DeviceInfo> =
-            HashMap::from_iter(device_infos.iter().map(|d| (d.uuid, d)));
-        rows.iter()
-            .filter_map(|row| {
-                // we could in theory do a join at the DB level rather than two queries at the rust level
-                // but since we already need the data from the first query and I'm a little concerned about
-                // the performance of the query once we hit scale anyway, let's leave it as it is...
-                let uuid = row.get::<_, Uuid>(5); // extract the device_uuid
-                if let Some(device_info) = uuid2info.get(&uuid) {
-                    let public_device_info: PublicDeviceInfo = (*device_info).clone().into();
-                    Some(PublicDeviceDetails {
-                        // convert all of the i64's to u64 to hide Postgres's inability to count that high
-                        num_flows_stored: row.get::<_, i64>(0) as u64,
-                        oldest_flow_time: row.get::<_, Option<DateTime<Utc>>>(1),
-                        newest_flow_time: row.get::<_, Option<DateTime<Utc>>>(2),
-                        num_flows_with_send_loss: row.get::<_, Option<i64>>(3).map(|v| v as u64),
-                        num_flows_with_recv_loss: row.get::<_, Option<i64>>(4).map(|v| v as u64),
-                        device_info: public_device_info,
-                    })
-                } else {
-                    warn!(
-                        "Device {} in Table desktop_connections but not in Table 'devices'",
-                        uuid
-                    );
-                    None
-                }
-            })
-            .collect::<Vec<PublicDeviceDetails>>()
+        let mut uuid2device_details: HashMap<Uuid, PublicDeviceDetails> =
+            HashMap::from_iter(device_infos.iter().map(|d| {
+                (
+                    d.uuid,
+                    PublicDeviceDetails {
+                        device_info: d.clone().into(),
+                        num_flows_stored: 0,
+                        num_flows_with_send_loss: None,
+                        num_flows_with_recv_loss: None,
+                        oldest_flow_time: None,
+                        newest_flow_time: None,
+                    },
+                )
+            }));
+        for row in rows
+            .iter()
+            .filter(|r| r.category == AggregatedFlowCategory::Total)
+        {
+            let uuid = row.aggregate.device_uuid;
+            if let Some(device_details) = uuid2device_details.get_mut(&uuid) {
+                device_details.num_flows_stored += row.aggregate.num_flows as u64;
+                add_loss_cnt_helper(
+                    &mut device_details.num_flows_with_recv_loss,
+                    row.aggregate.num_flows_with_rx_loss,
+                );
+                add_loss_cnt_helper(
+                    &mut device_details.num_flows_with_send_loss,
+                    row.aggregate.num_flows_with_tx_loss,
+                );
+            } else {
+                warn!(
+                    "Device {} in aggregated flow view but not in Table 'devices'",
+                    uuid
+                );
+            }
+        }
+        uuid2device_details.into_values().collect_vec()
     }
 
     /// Query DB and return a list of complex details about all devices
@@ -218,23 +234,16 @@ impl DeviceDetails {
     ) -> Result<Vec<PublicDeviceDetails>, RemoteDBClientError> {
         let device_infos = DeviceInfo::get_devices(user, org_id, &client).await?;
         user.check_org_allowed_or_fail(org_id)?;
+
+        // TODO: Ideally, we only want to query for `Total` aggregation and not by_app
+        // and by_dest_dns_domain.
+        let agg_flows =
+            get_aggregated_flow_view(user, org_id, TimeRangeQueryParams::default(), &client)
+                .await?;
         // OK to use unescaped formatting here b/c it's just an int
-        let org_qualifier = if let Some(org_id) = org_id {
-            format!("WHERE organization = {}", org_id)
-        } else {
-            "".to_string()
-        };
-        // TODO: monitor the perf of this JOIN and see if we need to put the 'org_id' directly
-        // into the desktop_connections schema
-        let db_statement = client
-            .prepare(&format!(
-                "{} from {} 
-                {} -- WHERE clause, if org_id isn't None
-                GROUP BY device_uuid",
-                DEVICE_DETAILS_PARTIAL_QUERY, CONNECTIONS_TABLE_NAME, org_qualifier
-            ))
-            .await?;
-        let rows = client.query(&db_statement, &[]).await?;
-        Ok(DeviceDetails::rows_to_device_details(&device_infos, &rows).await)
+        Ok(DeviceDetails::agg_rows_to_device_details(
+            &device_infos,
+            &agg_flows,
+        ))
     }
 }

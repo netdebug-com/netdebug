@@ -512,6 +512,8 @@ pub async fn query_aggregated_flow_tables(
     Ok(out)
 }
 
+// TODO: add option to only query for one or some of the aggegration
+// categories instead of all of them
 pub async fn get_aggregated_flow_view(
     user: &NetDebugUser,
     org_id: Option<OrganizationId>,
@@ -543,6 +545,11 @@ pub async fn get_aggregated_flow_view(
 
     for bucket in from_raw? {
         for by_category in bucket.aggregate.into_values() {
+            if let Some(org_id) = org_id {
+                if by_category.organization_id != org_id {
+                    continue;
+                }
+            }
             agg_rows.push(AggregatedFlowRow {
                 bucket_start: bucket.bucket_start,
                 bucket_size: bucket.bucket_size,
